@@ -71,8 +71,8 @@ class SubstantialMemoryConductor:
             workflow_run = await self.workflows.get()
             try:
                 await workflow_run.replay(self)
-            except Interrupt:
-                print("Interrupted")
+            except Interrupt as interrupt:
+                print(f"Interrupted {interrupt.hint}")
                 asyncio.create_task(
                     self.schedule_later(self.workflows, workflow_run, 3)
                 )

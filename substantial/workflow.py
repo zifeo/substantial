@@ -2,10 +2,11 @@
 # compact_on
 # compensate
 
-from typing import Any, Callable, Iterator, Optional
+import asyncio
+from typing import Any, Callable, Iterator, Optional, Union
 from uuid import uuid4
 
-from substantial.types import Interrupt, Log, LogKind, Empty
+from substantial.types import AppError, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
 
 
 class WorkflowRun:
@@ -70,21 +71,35 @@ class Context:
             if event.kind == kind:
                 return event
 
-    async def save(self, callable: Callable) -> Any:
+    async def save(
+        self,
+        callable: Callable,
+        *,
+        timeout: Union[int, None] = None,
+        retry_strategy: Union[RetryStrategy, None] = None
+    ) -> Any:
+        """ Force idempotency on `callable` """
         val = self.unroll(LogKind.Save)
         if val is Empty:
-            val = await callable()
+            activity = Activity(callable, timeout, retry_strategy)
+            val = await activity.exec()
             self.source(LogKind.Save, val)
             return val
         else:
             self.source(LogKind.Meta, f"reused {val.data}")
             return val.data
+    
+    async def sleep(duration_sec: int) -> Any:
+        if duration_sec <= 0:
+            raise AppError(f"Invalid timeout value: {duration_sec}")
+        await asyncio.sleep(duration_sec)
 
     def register(self, event_name: str, callback: Any):
         self.source(LogKind.Meta, f"registering... {event_name}")
         self.events[event_name] = callback
 
     async def wait(self, condition: Callable[[], bool]):
+        """ Wait for `condition()` to be True """
         self.source(LogKind.Meta, "waiting...")
         event = self.unroll(LogKind.EventIn)
         if event is not Empty:
@@ -98,9 +113,10 @@ class Context:
                     self.source(LogKind.EventOut, (event.data[0], ret))
 
         if not condition():
-            raise Interrupt()
+            raise Interrupt("wait => not condition")
 
     async def event(self, event_name: str):
+        """ Register a new event that can be triggered from outside the workflow """
         proxy = {}
         self.register(event_name, lambda x: proxy.update(val=x))
         await self.wait(lambda: "val" in proxy)

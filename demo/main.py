@@ -5,7 +5,7 @@ import uvloop
 
 from workflows import example_workflow
 
-async def worker():
+async def example_worker():
     substantial = SubstantialMemoryConductor()
     substantial.register(example_workflow)
 
@@ -17,7 +17,7 @@ async def worker():
 
     await asyncio.sleep(1)
 
-    print(await substantial.send(handle, "n", 3))
+    print(await substantial.send(handle, "do_print", "'sent from app'"))
 
     await asyncio.sleep(6)
 
@@ -27,4 +27,4 @@ async def worker():
 
 
 with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
-    runner.run(worker())
+    runner.run(example_worker())

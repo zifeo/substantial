@@ -3,7 +3,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Callable, Union
 
 
 class LogKind(str, Enum):
@@ -29,17 +29,67 @@ class Event:
     future: asyncio.Future
     at: datetime = datetime.now()
 
-
-@dataclass
-class State:
-    is_cancelled: bool
-
-    def cancel(self):
-        self.is_cancelled = True
-
-
 class Interrupt(BaseException):
+    hint = ""
+    def __init__(self, hint: Union[str, None] = None) -> None:
+        self.hint = hint or ""
+
+
+class AppError(BaseException):
     pass
 
+@dataclass
+class RetryStrategy:
+    max_retries: int
+    initial_backoff_interval: Union[int, None]
+    max_backoff_interval: Union[int, None]
+
+    def __post_init__(self):
+        if self.max_retries < 1:
+            raise AppError("max_retries < 1")
+        low = self.initial_backoff_interval
+        high = self.max_backoff_interval
+        if low is not None and high is not None:
+            if low >= high:
+                raise AppError("initial_backoff_interval > max_backoff_interval")
+            if low < 0:
+                raise AppError("initial_backoff_interval < 0")
+
+    def linear(self, retries_left: int) -> int:
+        """ Scaled timeout in seconds """
+        if retries_left <= 0:
+            raise Exception("retries_left <= 0")
+        dt = self.max_backoff_interval - self.initial_backoff_interval
+        return int((retries_left * dt) / self.max_retries)
+
+@dataclass
+class Activity:
+    fn: Callable
+    timeout: Union[int, None]
+    retry_strategy: Union[RetryStrategy, None]
+
+    async def exec(self) -> Any:
+        strategy = self.retry_strategy
+        if strategy is None:
+            strategy = RetryStrategy(
+                max_retries=3,
+                initial_backoff_interval=0,
+                max_backoff_interval=10
+            )
+        errors = []
+        retries_left = strategy.max_retries
+
+        while True:
+            try:
+                retries_left -= 1
+                if retries_left < 0:
+                    raise AppError(errors)
+                ret = await asyncio.wait_for(self.fn(), self.timeout)
+                return ret
+            except Exception as e:
+                errors.append(e)
+                timeout = strategy.linear(retries_left)
+                print(f"Exception encountered, retries => {retries_left}, backoff {timeout}: {str(e)}")
+                await asyncio.sleep(timeout)
 
 Empty: Any = object()
