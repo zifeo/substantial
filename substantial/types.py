@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import math
 from typing import Any, Callable, Union
 
 
@@ -51,9 +52,13 @@ class RetryStrategy:
         high = self.max_backoff_interval
         if low is not None and high is not None:
             if low >= high:
-                raise AppError("initial_backoff_interval > max_backoff_interval")
+                raise AppError("initial_backoff_interval >= max_backoff_interval")
             if low < 0:
                 raise AppError("initial_backoff_interval < 0")
+        elif low is not None and high is None:
+            self.max_backoff_interval = low + 10
+        elif low is None and high is not None:
+            self.initial_backoff_interval = math.max(0, self.max_backoff_interval - 10)
 
     def linear(self, retries_left: int) -> int:
         """ Scaled timeout in seconds """
