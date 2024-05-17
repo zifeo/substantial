@@ -78,7 +78,7 @@ class Context:
         timeout: Union[int, None] = None,
         retry_strategy: Union[RetryStrategy, None] = None
     ) -> Any:
-        """ Force idempotency on `callable` """
+        """ Force idempotency on `callable` and add `Activity` like behavior """
         val = self.unroll(LogKind.Save)
         if val is Empty:
             activity = Activity(callable, timeout, retry_strategy)

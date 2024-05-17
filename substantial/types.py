@@ -64,7 +64,7 @@ class RetryStrategy:
 
 @dataclass
 class Activity:
-    fn: Callable
+    fn: Callable[[], Any]
     timeout: Union[int, None]
     retry_strategy: Union[RetryStrategy, None]
 
@@ -79,12 +79,9 @@ class Activity:
         errors = []
         retries_left = strategy.max_retries
 
-        while True:
+        while retries_left > 0:
             try:
-                retries_left -= 1
-                if retries_left < 0:
-                    raise AppError(errors)
-                print(f"Retries => {retries_left}")
+                print(f"Retries => {retries_left}, exec timeout {self.timeout}")
                 fut = self.fn()
                 ret = await asyncio.wait_for(fut, self.timeout)
                 return ret
@@ -92,8 +89,12 @@ class Activity:
                 if isinstance(e, TimeoutError):
                     print("Timeout")
                 errors.append(e)
-                backoff_s = strategy.linear(retries_left)
-                print(f"backoff {backoff_s}s: {str(e)}")
-                await asyncio.sleep(backoff_s)
+                backoff = strategy.linear(retries_left)
+                print(f"backoff {backoff}s: {str(e)}")
+                await asyncio.sleep(backoff)
+            finally:
+                retries_left -= 1
+        raise AppError(errors)
+
 
 Empty: Any = object()
