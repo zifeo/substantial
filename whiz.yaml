@@ -1,0 +1,10 @@
+# demo:
+#   watch: [ "demo/**/*.py", "substantial/**/*.py" ]
+#   command: |
+#     poetry shell
+#     python3 demo/main.py
+#   depends_on: setup
+
+setup:
+  workdir: "."
+  command: "poetry install"
