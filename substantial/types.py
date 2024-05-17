@@ -60,7 +60,7 @@ class RetryStrategy:
         if retries_left <= 0:
             raise Exception("retries_left <= 0")
         dt = self.max_backoff_interval - self.initial_backoff_interval
-        return int((retries_left * dt) / self.max_retries)
+        return int(((self.max_retries - retries_left) * dt) / self.max_retries)
 
 @dataclass
 class Activity:
@@ -84,12 +84,16 @@ class Activity:
                 retries_left -= 1
                 if retries_left < 0:
                     raise AppError(errors)
-                ret = await asyncio.wait_for(self.fn(), self.timeout)
+                print(f"Retries => {retries_left}")
+                fut = self.fn()
+                ret = await asyncio.wait_for(fut, self.timeout)
                 return ret
             except Exception as e:
+                if isinstance(e, TimeoutError):
+                    print("Timeout")
                 errors.append(e)
-                timeout = strategy.linear(retries_left)
-                print(f"Exception encountered, retries => {retries_left}, backoff {timeout}: {str(e)}")
-                await asyncio.sleep(timeout)
+                backoff_s = strategy.linear(retries_left)
+                print(f"backoff {backoff_s}s: {str(e)}")
+                await asyncio.sleep(backoff_s)
 
 Empty: Any = object()
