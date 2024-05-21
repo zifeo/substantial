@@ -1,8 +1,12 @@
 # Equiv. server + worker
 import asyncio
+import logging
+import random
+import time
 from substantial.conductor import SubstantialMemoryConductor
 import uvloop
 
+from substantial.task_queue import MultiTaskQueue
 from workflows import example_workflow
 
 async def example_worker():
@@ -27,4 +31,16 @@ async def example_worker():
 
 
 with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
-    runner.run(example_worker())
+    def f():
+        print(time.ctime())
+        time.sleep(random.random())
+        return "Hello"
+    async def run():
+        async with MultiTaskQueue(2) as send:
+            logging.info("Sending")
+
+            await asyncio.gather(*[send(f) for _ in range(20)])
+
+            logging.info("Sent")
+    runner.run(run())
+    # runner.run(example_worker())

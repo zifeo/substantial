@@ -33,6 +33,7 @@ class WorkflowRun:
         return f"{self.workflow.id}-{self.run_id}"
 
     async def replay(self, backend):
+        print("-----------------replay----------")
         logs = backend.get_logs(self.handle)
         durable_logs = (e for e in logs if e.kind != LogKind.Meta)
 
@@ -84,7 +85,8 @@ class Context:
             activity = Activity(callable, timeout, retry_strategy)
             val = await activity.exec()
             self.source(LogKind.Save, val)
-            return val
+            # return val
+            raise Interrupt("Must replay")
         else:
             self.source(LogKind.Meta, f"reused {val.data}")
             return val.data
