@@ -27,15 +27,14 @@ class Recorder:
         return self.logs[handle]
 
     def persist(self, handle: str, log: Log):
-        with open(f"{handle}.log", "a") as file:
-            line = json.dumps(asdict(log), default=str)
-            file.write(f"{line}\n")
+        with open(f"{handle}", "a") as file:
+            file.write(f"{log.to_json()}\n")
 
     def recover_from_file(self, handle: str):
         with open(handle, "r") as file:
             while line := file.readline():
                 log = Log.from_json(line.rstrip())
-                self.record(f"{handle}.log", log)
+                self.record(f"{handle}", log)
 
 
 class SubstantialMemoryConductor:
@@ -47,6 +46,7 @@ class SubstantialMemoryConductor:
         self.workflows = asyncio.Queue()
         self.runs = Recorder()
         # Example
+        # TODO: explore why Log.Meta introduces incosistencies when not persisted
         # self.runs.recover_from_file("simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0")
 
     def register(self, workflow: Workflow):
