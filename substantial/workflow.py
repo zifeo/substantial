@@ -27,6 +27,7 @@ class WorkflowRun:
         self.workflow = workflow
         self.args = args
         self.kwargs = kwargs
+        self.replayed = False
 
     @property
     def handle(self):
@@ -34,6 +35,11 @@ class WorkflowRun:
 
     async def replay(self, backend):
         print("-----------------replay----------")
+        # Example
+        # TODO: explore why Log.Meta introduces incosistencies when not persisted
+        if not self.replayed:
+            backend.runs.recover_from_file("example", self.handle)
+
         logs = backend.get_durable_logs(self.handle)
         durable_logs = (e for e in logs if e.kind != LogKind.Meta)
 
@@ -41,6 +47,7 @@ class WorkflowRun:
         ctx.source(LogKind.Meta, f"replaying with {len(logs)}...")
         try:
             ret = await self.workflow.f(ctx, *self.args, **self.kwargs)
+            self.replayed = True
         except Interrupt:
             ctx.source(LogKind.Meta, "waiting for condition...")
             raise

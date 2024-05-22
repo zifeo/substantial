@@ -1,6 +1,5 @@
 import asyncio
-from dataclasses import asdict, dataclass
-import json
+import os
 from typing import Dict, List
 
 from substantial.types import Empty, Event, Interrupt, Log, LogKind
@@ -27,14 +26,22 @@ class Recorder:
         return self.logs[handle]
 
     def persist(self, handle: str, log: Log):
-        with open(f"{handle}", "a") as file:
+        with open(handle, "a") as file:
             file.write(f"{log.to_json()}\n")
 
-    def recover_from_file(self, handle: str):
-        with open(handle, "r") as file:
-            while line := file.readline():
-                log = Log.from_json(line.rstrip())
-                self.record(f"{handle}", log)
+    def recover_from_file(self, filename: str, handle: str):
+        if os.path.exists(filename):
+            if len(self.logs) > 0:
+                raise Exception("Invalid state: cannot recover from non empty logs")
+            self.logs = dict()
+            with open(filename, "r") as file:
+                count = 0
+                print(f"[!] Loading logs from {filename} for {handle}")
+                while line := file.readline():
+                    log = Log.from_json(line.rstrip())
+                    self.record(handle, log)
+                    count += 1
+                print(f"Read {count} lines")
 
 
 class SubstantialMemoryConductor:
@@ -45,9 +52,6 @@ class SubstantialMemoryConductor:
         self.events = asyncio.Queue()
         self.workflows = asyncio.Queue()
         self.runs = Recorder()
-        # Example
-        # TODO: explore why Log.Meta introduces incosistencies when not persisted
-        # self.runs.recover_from_file("simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0")
 
     def register(self, workflow: Workflow):
         self.known_workflows[workflow.id] = workflow
