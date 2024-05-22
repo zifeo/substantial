@@ -1,8 +1,9 @@
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from enum import Enum
+import json
 import math
 from typing import Any, Callable, Union
 
@@ -21,6 +22,28 @@ class Log:
     kind: LogKind
     data: Union[Any, None]
     at: datetime = datetime.now()
+
+    def from_dict(value: any) -> 'Log':
+        ftypes = {f.name: f.type for f in fields(Log)}
+        attrs = {}
+        for f in value:
+            fval = value[f]
+            ftype = ftypes[f]
+            if ftype is datetime:
+                attrs[f] = datetime.strptime(fval, "%Y-%m-%d %H:%M:%S.%f")
+            else:
+                attrs[f] = fval
+        return Log(**attrs)
+    
+    def from_json(value: str) -> 'Log':
+        d = json.loads(value)
+        return Log.from_dict(d)
+
+    def to_json(self):
+        d = asdict(self)
+        d["at"] = d["at"].strftime("%Y-%m-%d %H:%M:%S.%f")
+        return json.dumps(d)
+
 
 
 @dataclass
@@ -85,11 +108,11 @@ class Activity:
 
         while retries_left > 0:
             try:
-                print(f"Retries => {retries_left}, exec timeout {self.timeout}")
                 fut = self.fn()
                 ret = await asyncio.wait_for(fut, self.timeout)
                 return ret
             except Exception as e:
+                print(f"Retries => {retries_left}, exec timeout {self.timeout}")
                 if isinstance(e, TimeoutError):
                     print("Timeout")
                 errors.append(e)
@@ -98,7 +121,8 @@ class Activity:
                 await asyncio.sleep(backoff)
             finally:
                 retries_left -= 1
-        raise AppError(errors)
+        # raise Interrupt # replay
+        raise AppError(e)
 
 
 Empty: Any = object()

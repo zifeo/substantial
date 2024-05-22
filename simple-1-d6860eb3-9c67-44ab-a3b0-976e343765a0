@@ -1,0 +1,9 @@
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "save", "data": "A", "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "save", "data": "B A", "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "sleep", "data": null, "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "save", "data": "C B A", "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "event_in", "data": ["do_print", ["'sent from app'"]], "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "sleep", "data": null, "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "event_in", "data": ["cancel", []], "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "sleep", "data": null, "at": "2024-05-23 00:11:09.858777"}
+{"handle": "simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0", "kind": "save", "data": "'sent from app' D C B A", "at": "2024-05-23 00:11:09.858777"}

@@ -34,7 +34,7 @@ class WorkflowRun:
 
     async def replay(self, backend):
         print("-----------------replay----------")
-        logs = backend.get_logs(self.handle)
+        logs = backend.get_durable_logs(self.handle)
         durable_logs = (e for e in logs if e.kind != LogKind.Meta)
 
         ctx = Context(self.handle, backend.log, durable_logs)
@@ -54,14 +54,14 @@ class WorkflowRun:
 
 
 class Context:
-    def __init__(self, handle, log_event, logs: Iterator[Log]):
+    def __init__(self, handle, backend_event_logger, logs: Iterator[Log]):
         self.handle = handle
-        self.log_event = log_event
+        self.backend_event_logger = backend_event_logger
         self.logs = logs
         self.events = {}
 
-    def source(self, kind, data):
-        self.log_event(Log(self.handle, kind, data))
+    def source(self, kind: LogKind, data: any):
+        self.backend_event_logger(Log(self.handle, kind, data))
 
     def unroll(self, kind: str):
         while True:

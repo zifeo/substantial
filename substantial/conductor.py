@@ -1,6 +1,41 @@
 import asyncio
+from dataclasses import asdict, dataclass
+import json
+from typing import Dict, List
 
 from substantial.types import Empty, Event, Interrupt, Log, LogKind
+from substantial.workflow import WorkflowRun, Workflow
+
+class Recorder:
+    logs: Dict[str, List[Log]] = dict()
+
+    def record(self, handle: str, log: Log):
+        if handle not in self.logs:
+            self.logs[handle] = []
+        self.logs[handle].append(log)
+
+        action_kinds = [LogKind.Save, LogKind.Sleep]
+        event_kinds = [LogKind.EventIn, LogKind.EventIn]
+        if log.kind in action_kinds or log.kind in event_kinds:
+            self.persist(handle, log)
+
+        print(f"{log.kind} received but not persisted")
+
+    def get_recorded_runs(self, handle: str) -> List[Log]:
+        if handle not in self.logs:
+            self.logs[handle] = []
+        return self.logs[handle]
+
+    def persist(self, handle: str, log: Log):
+        with open(f"{handle}.log", "a") as file:
+            line = json.dumps(asdict(log), default=str)
+            file.write(f"{line}\n")
+
+    def recover_from_file(self, handle: str):
+        with open(handle, "r") as file:
+            while line := file.readline():
+                log = Log.from_json(line.rstrip())
+                self.record(f"{handle}.log", log)
 
 
 class SubstantialMemoryConductor:
@@ -10,39 +45,38 @@ class SubstantialMemoryConductor:
         # mulithreaded safe queues
         self.events = asyncio.Queue()
         self.workflows = asyncio.Queue()
-        self.runs = dict()
+        self.runs = Recorder()
+        # Example
+        # self.runs.recover_from_file("simple-1-d6860eb3-9c67-44ab-a3b0-976e343765a0")
 
-    def register(self, workflow):
+    def register(self, workflow: Workflow):
         self.known_workflows[workflow.id] = workflow
 
-    async def start(self, workflow_run):
+    async def start(self, workflow_run: WorkflowRun):
         """ Put `workflow_run` into the workflow queue and return the `handle` """
         await self.workflows.put(workflow_run)
         return workflow_run.handle
 
-    async def send(self, handle, event_name, *args):
+    async def send(self, handle: str, event_name: str, *args):
         ret = asyncio.Future()
-        if handle not in self.runs:
-            self.runs[handle] = []
-        self.runs[handle].append(Log(handle, LogKind.EventIn, (event_name, args)))
+        self.runs.record(handle, Log(handle, LogKind.EventIn, (event_name, args)))
         await self.events.put(Event(handle, event_name, args, ret))
         return ret
 
-    def get_logs(self, handle):
-        if handle not in self.runs:
-            self.runs[handle] = []
-        return self.runs[handle]
+    def get_durable_logs(self, handle: str):
+        return self.runs.get_recorded_runs(handle)
 
     def log(self, log: Log):
         dt = log.at.strftime("%Y-%m-%d %H:%M:%S.%f")
         print(f"{dt} [{log.handle}] {log.kind} {log.data}")
-        self.runs[log.handle].append(log)
+        self.runs.record(log.handle, log)
 
     async def schedule_later(self, queue, task, secs):
         await asyncio.sleep(secs)
         await queue.put(task)
 
     async def run(self):
+        # TODO: use task_queue?
         e = asyncio.create_task(self.run_events())
         w = asyncio.create_task(self.run_workflows())
         return await asyncio.gather(e, w)
@@ -50,7 +84,7 @@ class SubstantialMemoryConductor:
     async def run_events(self):
         while True:
             event = await self.events.get()
-            logs = self.get_logs(event.handle)
+            logs = self.get_durable_logs(event.handle)
 
             res = Empty
             for log in logs[::-1]:

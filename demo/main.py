@@ -1,12 +1,8 @@
 # Equiv. server + worker
 import asyncio
-import logging
-import random
-import time
 from substantial.conductor import SubstantialMemoryConductor
 import uvloop
 
-from substantial.task_queue import MultiTaskQueue
 from workflows import example_workflow
 
 async def example_worker():

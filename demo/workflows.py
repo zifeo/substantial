@@ -56,8 +56,8 @@ async def step_1():
 
 
 async def step_2(b):
-    if random.random() > (1 / 3):
-        await asyncio.sleep(1 + random.random() * 4)
+    # if random.random() > (1 / 3):
+    #     await asyncio.sleep(1 + random.random() * 4)
     return f"B {b}"
 
 
