@@ -9,6 +9,7 @@ from typing import Any, Callable, Union
 
 class LogKind(str, Enum):
     Save = "save"
+    Sleep = "sleep"
     EventIn = "event_in"
     EventOut = "event_out"
     Meta = "meta"
@@ -18,7 +19,7 @@ class LogKind(str, Enum):
 class Log:
     handle: str
     kind: LogKind
-    data: Any
+    data: Union[Any, None]
     at: datetime = datetime.now()
 
 
@@ -74,13 +75,11 @@ class Activity:
     retry_strategy: Union[RetryStrategy, None]
 
     async def exec(self) -> Any:
-        strategy = self.retry_strategy
-        if strategy is None:
-            strategy = RetryStrategy(
-                max_retries=3,
-                initial_backoff_interval=0,
-                max_backoff_interval=10
-            )
+        strategy = self.retry_strategy or RetryStrategy(
+            max_retries=3,
+            initial_backoff_interval=0,
+            max_backoff_interval=10
+        )
         errors = []
         retries_left = strategy.max_retries
 

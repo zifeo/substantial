@@ -85,16 +85,17 @@ class Context:
             activity = Activity(callable, timeout, retry_strategy)
             val = await activity.exec()
             self.source(LogKind.Save, val)
-            # return val
-            raise Interrupt("Must replay")
+            # raise Interrupt("Must replay")
+            return val
         else:
             self.source(LogKind.Meta, f"reused {val.data}")
             return val.data
     
-    async def sleep(duration_sec: int) -> Any:
+    async def sleep(self, duration_sec: int) -> Any:
         if duration_sec <= 0:
             raise AppError(f"Invalid timeout value: {duration_sec}")
         await asyncio.sleep(duration_sec)
+        self.source(LogKind.Sleep, None)
 
     def register(self, event_name: str, callback: Any):
         self.source(LogKind.Meta, f"registering... {event_name}")

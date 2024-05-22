@@ -1,4 +1,5 @@
 import queue
+from typing import Union
 from uuid import uuid4
 import logging
 
@@ -57,8 +58,8 @@ class MultiTaskQueue:
         self.receiver = asyncio.create_task(self.receive())
         return self.send
 
-    async def send(self, f):
-        id = uuid4()
+    async def send(self, f, id: Union[str, None] = None):
+        id = id or uuid4()
         self.fs[id] = asyncio.Future()
         await self.send_queue.coro_put([id, f])
         return await self.fs[id]

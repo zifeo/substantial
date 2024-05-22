@@ -18,8 +18,12 @@ async def example_workflow(c: Context, name, n):
 
     r2 = await c.save(
         lambda: step_2(r1),
+        timeout=1,
+        retry_strategy=retry_strategy
     )
     print(r2)
+
+    await c.sleep(1)
 
     r3 = await c.save(lambda: step_3(r2))
     print(r3)
@@ -52,9 +56,8 @@ async def step_1():
 
 
 async def step_2(b):
-    # if random.random() > 0.8:
-    #     raise Exception(f"Should fail")
-    # await asyncio.sleep(1 + random.random() * 4) # <= blocking thread!
+    if random.random() > (1 / 3):
+        await asyncio.sleep(1 + random.random() * 4)
     return f"B {b}"
 
 
