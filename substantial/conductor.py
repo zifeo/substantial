@@ -7,22 +7,35 @@ from substantial.workflow import WorkflowRun, Workflow
 
 class Recorder:
     logs: Dict[str, List[Log]] = dict()
+    events: Dict[str, List[Log]] = dict()
 
     def record(self, handle: str, log: Log):
-        if handle not in self.logs:
-            self.logs[handle] = []
-        self.logs[handle].append(log)
-
         action_kinds = [LogKind.Save]
         event_kinds = [LogKind.EventIn, LogKind.EventIn]
-        if log.kind in action_kinds or log.kind in event_kinds:
+        
+        if log.kind in action_kinds:
+            if handle not in self.logs:
+                self.logs[handle] = []
+            self.logs[handle].append(log)
+        elif log.kind in event_kinds:
+            if handle not in self.events:
+                self.events[handle] = []
+            self.events[handle].append(log)
+
+        if log.kind in (action_kinds + event_kinds):
             self.persist(handle, log)
+
         print(f"{log.kind} received but not persisted")
 
     def get_recorded_runs(self, handle: str) -> List[Log]:
         if handle not in self.logs:
             self.logs[handle] = []
         return self.logs[handle]
+
+    def get_recorded_events(self, handle: str) -> List[Log]:
+        if handle not in self.events:
+            self.events[handle] = []
+        return self.events[handle]
 
     def persist(self, handle: str, log: Log):
         with open(f"logs/{handle}", "a") as file:
@@ -73,8 +86,11 @@ class SubstantialMemoryConductor:
         await self.events.put(Event(handle, event_name, args, ret))
         return ret
 
-    def get_durable_logs(self, handle: str):
+    def get_run_logs(self, handle: str):
         return self.runs.get_recorded_runs(handle)
+
+    def get_event_logs(self, handle: str):
+        return self.runs.get_recorded_events(handle)
 
     def log(self, log: Log):
         dt = log.at.strftime("%Y-%m-%d %H:%M:%S.%f")
@@ -94,7 +110,7 @@ class SubstantialMemoryConductor:
     async def run_events(self):
         while True:
             event = await self.events.get()
-            logs = self.get_durable_logs(event.handle)
+            logs = self.get_event_logs(event.handle)
 
             res = Empty
             for log in logs[::-1]:
@@ -103,7 +119,7 @@ class SubstantialMemoryConductor:
                     break
 
             if res is Empty:
-                asyncio.create_task(self.schedule_later(self.events, event, 3))
+                asyncio.create_task(self.schedule_later(self.events, event, 2))
             else:
                 event.future.set_result(event.data)
                 event.future.done()

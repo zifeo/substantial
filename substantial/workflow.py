@@ -3,7 +3,7 @@
 # compensate
 
 import asyncio
-from typing import Any, Callable, Iterator, Optional, Union
+from typing import Any, Callable, Iterator, List, Optional, Union
 from uuid import uuid4
 
 from substantial.types import AppError, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
@@ -40,11 +40,11 @@ class WorkflowRun:
         # if not self.replayed:
         #     backend.runs.recover_from_file("logs/example", self.handle)
 
-        logs = backend.get_durable_logs(self.handle)
-        durable_logs = (e for e in logs if e.kind != LogKind.Meta)
+        run_logs = backend.get_run_logs(self.handle)
+        events_logs = backend.get_event_logs(self.handle)
 
-        ctx = Context(self.handle, backend.log, durable_logs)
-        ctx.source(LogKind.Meta, f"replaying with {len(logs)}...")
+        ctx = Context(self.handle, backend.log, run_logs, events_logs)
+        ctx.source(LogKind.Meta, f"replaying ...")
         try:
             ret = await self.workflow.f(ctx, *self.args, **self.kwargs)
             self.replayed = True
@@ -61,24 +61,34 @@ class WorkflowRun:
 
 
 class Context:
-    def __init__(self, handle, backend_event_logger, logs: Iterator[Log]):
+    def __init__(
+        self,
+        handle: str,
+        backend_event_logger, # TODO: memory for now, should be typed with an interface later
+        run_logs: List[Log],
+        event_logs: List[Log],
+    ):
         self.handle = handle
         self.backend_event_logger = backend_event_logger
-        self.logs = logs
+        self.run_logs = iter(run_logs)
+        self.event_logs = iter(event_logs)
         self.events = {}
         self.cancelled = False
 
     def source(self, kind: LogKind, data: any):
         self.backend_event_logger(Log(self.handle, kind, data))
 
-    def unroll(self, kind: LogKind):
+    def unroll_to_latest(self, kind: LogKind):
+        # TODO: use map instead?
+        # we are lacking the information save name <=> result for debugging
         while True:
-            event = next(self.logs, Empty)
+            if kind == LogKind.EventIn or kind == LogKind.EventOut:
+                event = next(self.event_logs, Empty)
+            else:
+                event = next(self.run_logs, Empty)
             if event is Empty:
                 return Empty
 
-            if event.kind == kind:
-                return event
 
     async def save(
         self,
@@ -88,7 +98,7 @@ class Context:
         retry_strategy: Union[RetryStrategy, None] = None
     ) -> Any:
         """ Force idempotency on `callable` and add `Activity` like behavior """
-        val = self.unroll(LogKind.Save)
+        val = self.unroll_to_latest(LogKind.Save)
         if val is Empty:
             activity = Activity(callable, timeout, retry_strategy)
             val = await activity.exec(self)
@@ -112,12 +122,12 @@ class Context:
     async def wait(self, condition: Callable[[], bool]):
         """ Wait for `condition()` to be True """
         self.source(LogKind.Meta, "waiting...")
-        event = self.unroll(LogKind.EventIn)
+        event = self.unroll_to_latest(LogKind.EventIn)
         if event is not Empty:
             callback = self.events.get(event.data[0])
             if callback is not None:
                 ret = callback(*event.data[1])
-                res = self.unroll(LogKind.EventOut)
+                res = self.unroll_to_latest(LogKind.EventOut)
                 if res is not Empty:
                     self.source(LogKind.Meta, f"reused {event.data[1]}")
                 else:
