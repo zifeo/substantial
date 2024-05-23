@@ -29,7 +29,6 @@ async def example_workflow(c: Context, name, n):
     print(r3)
 
     n = await c.event("do_print")
-
     s = State(is_cancelled=False)
 
     c.register("cancel", s.update)
@@ -37,6 +36,7 @@ async def example_workflow(c: Context, name, n):
     await c.wait(lambda: s.is_cancelled)
 
     if s.is_cancelled:
+        # c.cancel_run()
         r4 = await c.save(lambda: step_4(r3, n))
 
     return r4

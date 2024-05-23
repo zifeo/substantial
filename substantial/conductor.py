@@ -13,11 +13,10 @@ class Recorder:
             self.logs[handle] = []
         self.logs[handle].append(log)
 
-        action_kinds = [LogKind.Save, LogKind.Sleep]
+        action_kinds = [LogKind.Save]
         event_kinds = [LogKind.EventIn, LogKind.EventIn]
         if log.kind in action_kinds or log.kind in event_kinds:
             self.persist(handle, log)
-
         print(f"{log.kind} received but not persisted")
 
     def get_recorded_runs(self, handle: str) -> List[Log]:
@@ -26,7 +25,7 @@ class Recorder:
         return self.logs[handle]
 
     def persist(self, handle: str, log: Log):
-        with open(handle, "a") as file:
+        with open(f"logs/{handle}", "a") as file:
             file.write(f"{log.to_json()}\n")
 
     def recover_from_file(self, filename: str, handle: str):

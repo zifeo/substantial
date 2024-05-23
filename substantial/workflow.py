@@ -37,8 +37,8 @@ class WorkflowRun:
         print("-----------------replay----------")
         # Example
         # TODO: explore why Log.Meta introduces incosistencies when not persisted
-        if not self.replayed:
-            backend.runs.recover_from_file("example", self.handle)
+        # if not self.replayed:
+        #     backend.runs.recover_from_file("logs/example", self.handle)
 
         logs = backend.get_durable_logs(self.handle)
         durable_logs = (e for e in logs if e.kind != LogKind.Meta)
@@ -66,11 +66,12 @@ class Context:
         self.backend_event_logger = backend_event_logger
         self.logs = logs
         self.events = {}
+        self.cancelled = False
 
     def source(self, kind: LogKind, data: any):
         self.backend_event_logger(Log(self.handle, kind, data))
 
-    def unroll(self, kind: str):
+    def unroll(self, kind: LogKind):
         while True:
             event = next(self.logs, Empty)
             if event is Empty:
@@ -90,7 +91,7 @@ class Context:
         val = self.unroll(LogKind.Save)
         if val is Empty:
             activity = Activity(callable, timeout, retry_strategy)
-            val = await activity.exec()
+            val = await activity.exec(self)
             self.source(LogKind.Save, val)
             # raise Interrupt("Must replay")
             return val
@@ -131,6 +132,10 @@ class Context:
         self.register(event_name, lambda x: proxy.update(val=x))
         await self.wait(lambda: "val" in proxy)
         return proxy["val"]
+
+    def cancel_run(self):
+        """ Cancel following activities after the call """
+        self.cancelled = True
 
 
 class Workflow:

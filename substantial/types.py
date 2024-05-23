@@ -59,6 +59,8 @@ class Interrupt(BaseException):
     def __init__(self, hint: Union[str, None] = None) -> None:
         self.hint = hint or ""
 
+class CancelWorkflow(BaseException):
+    pass
 
 class AppError(BaseException):
     pass
@@ -97,7 +99,7 @@ class Activity:
     timeout: Union[int, None]
     retry_strategy: Union[RetryStrategy, None]
 
-    async def exec(self) -> Any:
+    async def exec(self, ctx) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3,
             initial_backoff_interval=0,
@@ -108,13 +110,19 @@ class Activity:
 
         while retries_left > 0:
             try:
+                if ctx.cancelled:
+                    raise CancelWorkflow
                 fut = self.fn()
                 ret = await asyncio.wait_for(fut, self.timeout)
                 return ret
             except Exception as e:
+                if isinstance(e, CancelWorkflow):
+                    raise e
+
                 print(f"Retries => {retries_left}, exec timeout {self.timeout}")
                 if isinstance(e, TimeoutError):
                     print("Timeout")
+
                 errors.append(e)
                 backoff = strategy.linear(retries_left)
                 print(f"backoff {backoff}s: {str(e)}")

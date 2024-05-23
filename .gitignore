@@ -1,3 +1,6 @@
+logs/*
+!logs/example
+
 .DS_Store
 **/.terraform
 **/.terraform/*
