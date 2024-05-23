@@ -33,12 +33,19 @@ class Recorder:
         if os.path.exists(filename):
             if len(self.logs) > 0:
                 raise Exception("Invalid state: cannot recover from non empty logs")
+
+            force_override = True
             self.logs = dict()
+
             with open(filename, "r") as file:
                 count = 0
                 print(f"[!] Loading logs from {filename} for {handle}")
                 while line := file.readline():
                     log = Log.from_json(line.rstrip())
+                    if not force_override and log.handle != handle:
+                        raise Exception(f"Workflow id is not the same as the one from '{filename}':\n\t'{log.handle}' != '{handle}'")
+                    else:
+                        log.handle = handle
                     self.record(handle, log)
                     count += 1
                 print(f"Read {count} lines")

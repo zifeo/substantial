@@ -30,7 +30,7 @@ class WorkflowRun:
         self.replayed = False
 
     @property
-    def handle(self):
+    def handle(self) -> str:
         return f"{self.workflow.id}-{self.run_id}"
 
     async def replay(self, backend):
