@@ -62,8 +62,17 @@ class Recorder:
                     count += 1
                 print(f"Read {count} lines")
 
+class Backend:
+    def get_run_logs(self, handle: str) -> List[Log]:
+        raise Exception("Not implemented")
 
-class SubstantialMemoryConductor:
+    def get_event_logs(self, handle: str) -> List[Log]:
+        raise Exception("Not implemented")
+    
+    def load_file(self, filename: str, handle: str):
+        raise Exception("Not implemented")
+
+class SubstantialMemoryConductor(Backend):
     def __init__(self):
         # num workers
         self.known_workflows = {}
@@ -92,6 +101,9 @@ class SubstantialMemoryConductor:
     def get_event_logs(self, handle: str):
         return self.runs.get_recorded_events(handle)
 
+    def load_file(self, filename: str, handle: str):
+        self.runs.recover_from_file(filename, handle)
+
     def log(self, log: Log):
         dt = log.at.strftime("%Y-%m-%d %H:%M:%S.%f")
         print(f"{dt} [{log.handle}] {log.kind} {log.data}")
@@ -108,12 +120,14 @@ class SubstantialMemoryConductor:
         return await asyncio.gather(e, w)
 
     async def run_events(self):
+        """ Event loop """
         while True:
-            event = await self.events.get()
-            logs = self.get_event_logs(event.handle)
+            # Note: if empty, this will block and wait otherwise process the latest
+            event: Event = await self.events.get()
+            event_logs = self.get_event_logs(event.handle)
 
             res = Empty
-            for log in logs[::-1]:
+            for log in event_logs[::-1]:
                 if log.kind == LogKind.EventOut and log.data[0] == event.name:
                     res = log.data[1]
                     break

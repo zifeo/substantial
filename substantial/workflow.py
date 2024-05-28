@@ -3,9 +3,11 @@
 # compensate
 
 import asyncio
-from typing import Any, Callable, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Optional, Union
 from uuid import uuid4
 
+if TYPE_CHECKING:
+    from substantial.conductor import Backend
 from substantial.types import AppError, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
 
 
@@ -33,12 +35,12 @@ class WorkflowRun:
     def handle(self) -> str:
         return f"{self.workflow.id}-{self.run_id}"
 
-    async def replay(self, backend):
+    async def replay(self, backend: 'Backend'):
         print("-----------------replay----------")
         # Example
         # TODO: explore why Log.Meta introduces incosistencies when not persisted
         # if not self.replayed:
-        #     backend.runs.recover_from_file("logs/example", self.handle)
+        #     backend.load_file("logs/example", self.handle)
 
         run_logs = backend.get_run_logs(self.handle)
         events_logs = backend.get_event_logs(self.handle)
