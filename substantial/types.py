@@ -45,7 +45,6 @@ class Log:
         return json.dumps(d)
 
 
-
 @dataclass
 class Event:
     handle: str

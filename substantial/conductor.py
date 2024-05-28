@@ -11,8 +11,8 @@ class Recorder:
 
     def record(self, handle: str, log: Log):
         action_kinds = [LogKind.Save]
-        event_kinds = [LogKind.EventIn, LogKind.EventIn]
-        
+        event_kinds = [LogKind.EventIn, LogKind.EventOut]
+
         if log.kind in action_kinds:
             if handle not in self.logs:
                 self.logs[handle] = []
@@ -24,8 +24,8 @@ class Recorder:
 
         if log.kind in (action_kinds + event_kinds):
             self.persist(handle, log)
-
-        print(f"{log.kind} received but not persisted")
+        else:
+            print(f"{log.kind} received but not persisted")
 
     def get_recorded_runs(self, handle: str) -> List[Log]:
         if handle not in self.logs:

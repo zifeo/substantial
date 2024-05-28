@@ -13,6 +13,5 @@ async def step_1(v):
 async def step_2(v):
     return f"B {v}"
 
-
 async def step_3(v):
     return f"C {v}"

@@ -81,16 +81,16 @@ class Context:
         self.backend_event_logger(Log(self.handle, kind, data))
 
     def unroll_to_latest(self, kind: LogKind):
-        # TODO: use map instead?
-        # we are lacking the information save name <=> result for debugging
+        """ unshift, popfront: discard old events till kind is found """
+        event = Empty
+        logs = self.run_logs
+        if kind == LogKind.EventIn or kind == LogKind.EventOut:
+            logs = self.event_logs
         while True:
-            if kind == LogKind.EventIn or kind == LogKind.EventOut:
-                event = next(self.event_logs, Empty)
-            else:
-                event = next(self.run_logs, Empty)
-            if event is Empty:
-                return Empty
-
+            event = next(logs, Empty)
+            if event is Empty or event.kind == kind:
+                break
+        return event
 
     async def save(
         self,

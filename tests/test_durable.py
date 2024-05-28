@@ -34,10 +34,7 @@ class TestDurable(unittest.TestCase):
         if output.returncode == 0:
             self.assertIn("LogKind.Save C B A", stdout)
         else:
-            print("Issue encountered")
-            print(stderr)
-        
-
+            self.fail(stderr)
 
 if __name__ == '__main__':
     unittest.main()
