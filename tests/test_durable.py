@@ -1,13 +1,7 @@
-import asyncio
 import subprocess
 import unittest
-import uvloop
-import os
 
-from tests.workflows.simple import simple_workflow
-
-from demo.workflows import example_workflow
-from substantial.conductor import Recorder, SubstantialMemoryConductor
+from substantial.conductor import Recorder
 from substantial.types import Log, LogKind
 
 class TestDurable(unittest.TestCase):
@@ -26,7 +20,7 @@ class TestDurable(unittest.TestCase):
     
     def test_simple_workflow(self) -> None:
         output = subprocess.run(
-            [ "bash", "tests/workflows/run.sh" ],
+            [ "bash", "tests/workflows/simple/run.sh" ],
             capture_output=True
         )
         stdout = output.stdout.decode("utf-8")
@@ -35,6 +29,19 @@ class TestDurable(unittest.TestCase):
             self.assertIn("LogKind.Save C B A", stdout)
         else:
             self.fail(stderr)
+
+    def test_workflow_with_events(self) -> None:
+        output = subprocess.run(
+            [ "bash", "tests/workflows/event/run.sh" ],
+            capture_output=True
+        )
+        stdout = output.stdout.decode("utf-8")
+        stderr = output.stdout.decode("utf-8")
+        if output.returncode == 0:
+            self.assertIn("LogKind.Save Hello World B A", stdout)
+        else:
+            self.fail(stderr)
+
 
 if __name__ == '__main__':
     unittest.main()
