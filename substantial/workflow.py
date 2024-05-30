@@ -114,8 +114,12 @@ class Context:
     async def sleep(self, duration_sec: int) -> Any:
         if duration_sec <= 0:
             raise AppError(f"Invalid timeout value: {duration_sec}")
-        await asyncio.sleep(duration_sec)
-        self.source(LogKind.Sleep, None)
+        val = self.unroll_to_latest(LogKind.Sleep)
+        if val is Empty:
+            await asyncio.sleep(duration_sec)
+            self.source(LogKind.Sleep, None)
+        else:
+            self.source(LogKind.Meta, f"{duration_sec}s sleep already executed")
 
     def register(self, event_name: str, callback: Any):
         self.source(LogKind.Meta, f"registering... {event_name}")

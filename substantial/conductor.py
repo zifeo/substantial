@@ -10,7 +10,7 @@ class Recorder:
     events: Dict[str, List[Log]] = dict()
 
     def record(self, handle: str, log: Log):
-        action_kinds = [LogKind.Save]
+        action_kinds = [LogKind.Save, LogKind.Sleep]
         event_kinds = [LogKind.EventIn, LogKind.EventOut]
 
         if log.kind in action_kinds:

@@ -3,7 +3,7 @@ import asyncio
 from substantial.conductor import SubstantialMemoryConductor
 import uvloop
 
-from tests.workflows.event.workflow import example_workflow
+from tests.sync.workflows.event.workflow import example_workflow
 
 async def example_worker():
     substantial = SubstantialMemoryConductor()

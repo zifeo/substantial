@@ -23,7 +23,7 @@ async def example_workflow(c: Context, name, n):
     )
     print(r2)
 
-    await c.sleep(1)
+    await c.sleep(2)
 
     r3 = await c.save(lambda: step_3(r2))
     print(r3)

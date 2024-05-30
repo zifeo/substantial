@@ -17,6 +17,7 @@ aioprocessing = "2.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
+pytest-asyncio = "^0.23.7"
 
 [build-system]
 requires = ["poetry-core"]
