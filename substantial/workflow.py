@@ -80,7 +80,7 @@ class Context:
     def source(self, kind: LogKind, data: any):
         self.backend_event_logger(Log(self.handle, kind, data))
 
-    def unroll_to_latest(self, kind: LogKind):
+    def unqueue_up_to(self, kind: LogKind):
         """ unshift, popfront: discard old events till kind is found """
         event = Empty
         logs = self.run_logs
@@ -100,7 +100,7 @@ class Context:
         retry_strategy: Union[RetryStrategy, None] = None
     ) -> Any:
         """ Force idempotency on `callable` and add `Activity` like behavior """
-        val = self.unroll_to_latest(LogKind.Save)
+        val = self.unqueue_up_to(LogKind.Save)
         if val is Empty:
             activity = Activity(callable, timeout, retry_strategy)
             val = await activity.exec(self)
@@ -114,7 +114,7 @@ class Context:
     async def sleep(self, duration_sec: int) -> Any:
         if duration_sec <= 0:
             raise AppError(f"Invalid timeout value: {duration_sec}")
-        val = self.unroll_to_latest(LogKind.Sleep)
+        val = self.unqueue_up_to(LogKind.Sleep)
         if val is Empty:
             await asyncio.sleep(duration_sec)
             self.source(LogKind.Sleep, None)
@@ -128,12 +128,12 @@ class Context:
     async def wait(self, condition: Callable[[], bool]):
         """ Wait for `condition()` to be True """
         self.source(LogKind.Meta, "waiting...")
-        event = self.unroll_to_latest(LogKind.EventIn)
+        event = self.unqueue_up_to(LogKind.EventIn)
         if event is not Empty:
             callback = self.events.get(event.data[0])
             if callback is not None:
                 ret = callback(*event.data[1])
-                res = self.unroll_to_latest(LogKind.EventOut)
+                res = self.unqueue_up_to(LogKind.EventOut)
                 if res is not Empty:
                     self.source(LogKind.Meta, f"reused {event.data[1]}")
                 else:

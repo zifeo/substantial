@@ -20,7 +20,7 @@ class TestDurable(unittest.TestCase):
     
     def test_simple_workflow(self) -> None:
         output = subprocess.run(
-            [ "bash", "tests/sync/workflows/simple/run.sh" ],
+            [ "bash", "tests/basic/workflows/simple/run.sh" ],
             capture_output=True
         )
         stdout = output.stdout.decode("utf-8")
@@ -32,7 +32,7 @@ class TestDurable(unittest.TestCase):
 
     def test_workflow_with_events(self) -> None:
         output = subprocess.run(
-            [ "bash", "tests/sync/workflows/event/run.sh" ],
+            [ "bash", "tests/basic/workflows/event/run.sh" ],
             capture_output=True
         )
         stdout = output.stdout.decode("utf-8")
