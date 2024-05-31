@@ -3,25 +3,21 @@
 import asyncio
 
 import pytest
-import uvloop
 
-from tests.complex.utils import execute_workflow
+from tests.complex.utils import LogFilter, WorkflowTest
 from tests.complex.workflows.simple import simple_workflow
 
-from unittest import TestCase
-
-@pytest.mark.asyncio(scope="class")
-class TestInOneEventLoopPerClass():
-    async def test_test(self):
+@pytest.mark.asyncio(scope="class") # ensure one main loop per class
+class TestInOneEventLoopPerClass(WorkflowTest):
+    async def test_test(t):
         await asyncio.sleep(0.2)
         assert True
 
-    async def test_simple(self):
-        timeout = 3
-        handle, recorder = await execute_workflow(simple_workflow, timeout)
-        # TODO: wrap this in an utility
-        # TODO: measure delta time (useful for sleeps and replayed sleeps)
-        # runs
-        assert [log.data for log in recorder.logs[handle]] == ['A', 'B A', 'C B A']
-        # events
-        assert len(recorder.events[handle]) == 0
+    async def test_simple(t):
+        s = t.step().timeout(3)
+        s = await s.exec_workflow(simple_workflow, "simple", 1)
+        (
+            s
+            .logs_data_equal(LogFilter.runs, ['A', 'B A', 'C B A'])
+            .logs_data_equal(LogFilter.event, [])
+        )

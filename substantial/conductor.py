@@ -142,9 +142,10 @@ class SubstantialMemoryConductor(Backend):
 
     async def run_workflows(self):
         while True:
-            workflow_run = await self.workflows.get()
+            workflow_run: WorkflowRun = await self.workflows.get()
             try:
-                await workflow_run.replay(self)
+                ret = await workflow_run.replay(self)
+                return ret
             except Interrupt as interrupt:
                 print(f"Interrupted {interrupt.hint}")
                 asyncio.create_task(

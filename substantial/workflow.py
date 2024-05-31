@@ -36,7 +36,7 @@ class WorkflowRun:
         return f"{self.workflow.id}-{self.run_id}"
 
     async def replay(self, backend: 'Backend'):
-        print("-----------------replay----------")
+        print("----------------- replay -----------------")
         # Example
         # TODO: explore why Log.Meta introduces incosistencies when not persisted
         # if not self.replayed:
