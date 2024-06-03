@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from enum import Enum
+import inspect
 import json
 import math
 from typing import Any, Callable, Union
@@ -111,9 +112,10 @@ class Activity:
             try:
                 if ctx.cancelled:
                     raise CancelWorkflow
-                fut = self.fn()
-                ret = await asyncio.wait_for(fut, self.timeout)
-                return ret
+                val = self.fn()
+                if inspect.iscoroutine(val):
+                    return await asyncio.wait_for(val, self.timeout)
+                return val
             except Exception as e:
                 if isinstance(e, CancelWorkflow):
                     raise e
