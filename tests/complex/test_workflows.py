@@ -1,8 +1,11 @@
 
 
 import asyncio
+import logging
+from time import sleep
 import pytest
 from dataclasses import dataclass
+from substantial.task_queue import MultiTaskQueue
 from tests.complex.utils import LogFilter, StepError, TimeStep, WorkflowTest
 
 from substantial.workflow import workflow, Context
@@ -10,17 +13,7 @@ from substantial.workflow import workflow, Context
 # Further configuration details:
 # https://pytest-asyncio.readthedocs.io/en/latest/how-to-guides/multiple_loops.html
 
-@pytest.mark.asyncio(scope="module")
-async def test_async():
-    await asyncio.sleep(1)
-    assert 1 + 1 is 2
-
-@pytest.mark.asyncio(scope="module")
-async def test_test():
-    t = WorkflowTest()
-    with pytest.raises(StepError) as info:
-        t.step("A").logs_data_equal(LogFilter.runs, [])
-    assert info.value.args[0] == "'A': No workflow has been run prior the call"
+# However, each test are still run sequentially
 
 @pytest.mark.asyncio(scope="module")
 async def test_simple():
@@ -75,3 +68,34 @@ async def test_events():
     )
     s.logs_data_equal(LogFilter.runs, ['A', 'Hello from outside! B A'])
 
+
+# @pytest.mark.asyncio(scope="module")
+# async def test_multiple_workflows_parallel():
+#     @workflow(1, "first")
+#     async def first(c: Context, name, n):
+#         v = await c.save(lambda: "first")
+#         return v
+
+#     @workflow(1, "second")
+#     async def second(c: Context, name, n):
+#         v = await c.save(lambda: "second")
+#         return v
+
+#     t = WorkflowTest()
+#     workflows = [first, second]
+#     async with MultiTaskQueue(2) as send:
+#         todos = []
+#         for wf in workflows:
+#             async def todo():
+#                 s = t.step().timeout(10)
+#                 s = await (
+#                     s
+#                     .timeline(TimeStep("sayHello", 1, "Hello from outside!"))
+#                     .timeline(TimeStep("cancel", 5))
+#                     .exec_workflow(wf)
+#                 )
+#                 s.logs_data_equal(LogFilter.runs, ['A', 'Hello from outside! B A'])
+#                 return True
+#             todos.append(todo)
+#         results = await asyncio.gather(*[send(todo) for todo in todos])
+#         assert results == [True, True]

@@ -21,4 +21,4 @@ async-test:
   workdir: "."
   command: |
     source .venv/bin/activate
-    pytest tests/complex/test.py
+    pytest tests/complex/test_*

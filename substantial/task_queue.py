@@ -34,7 +34,7 @@ def process_worker(send_queue, receive_queue, i):
 
 
 class MultiTaskQueue:
-    """ TL;DR process functions accross workers, not work with corotines? """
+    """ TL;DR process functions accross workers """
 
     def __init__(self, num_workers=2):
         self.num_workers = num_workers
@@ -62,6 +62,7 @@ class MultiTaskQueue:
     async def send(self, f, id: Union[str, None] = None):
         id = id or uuid4()
         self.fs[id] = asyncio.Future()
+        # FIXME: what if f is async?
         await self.send_queue.coro_put([id, f])
         return await self.fs[id]
 
