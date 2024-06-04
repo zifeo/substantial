@@ -5,6 +5,7 @@ import pytest
 from substantial.task_queue import MultiTaskQueue
 
 import time
+import dill
 
 from tests.complex.utils import LogFilter, StepError, WorkflowTest
 
@@ -54,35 +55,24 @@ async def test_parallel_static_calls():
     assert results == [1, 2, 3]
 
     diff = end_time - start_time
-    expected = duration * qcount
-    assert diff - expected < 1
+    assert diff - 6 < 1
 
 
 
+@pytest.mark.asyncio(scope="module")
+async def test_parallel_dynamic_calls():
+    count = 3
+    todos = [dill.dumps(lambda: sleep_and_id(i)) for i in range(count)]
 
-# FIXME: Same as above but dynamically generated tasks, not working, it stucks indefinitely
-# if tested separately we get
-# Can't pickle local object 'main.<locals>.<listcomp>.<lambda>'
-#   File "/usr/lib/python3.11/multiprocessing/reduction.py", line 51, in dumps
-#     cls(buf, protocol).dump(obj)
-# AttributeError: Can't pickle local object 'main.<locals>.<listcomp>.<lambda>'
+    start_time = time.time()
+    async with MultiTaskQueue(2) as send:
+        results = await asyncio.gather(*[send(todo) for todo in todos])
 
-# @pytest.mark.asyncio(scope="module")
-# async def test_parallel_dynamic_calls():
-#     count = 3
-#     todos = [lambda: sleep_and_id(i) for i in range(count)]
+    assert results == [1, 2, 3]
 
-#     start_time = time.time()
-#     async with MultiTaskQueue(2) as send:
-#         results = await asyncio.gather(*[send(todo) for todo in todos])
-
-#     assert results == [1, 2, 3]
-
-#     end_time = time.time()
-#     diff = end_time - start_time
-#     assert diff < (duration * len(todos))
-
-
+    end_time = time.time()
+    diff = end_time - start_time
+    assert diff - 6 < 1
 
 
 

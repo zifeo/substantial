@@ -9,6 +9,7 @@ setup:
   workdir: "."
   command: |
     source .venv/bin/activate
+    poetry lock
     poetry install
 
 sync-test:

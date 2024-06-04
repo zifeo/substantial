@@ -7,7 +7,7 @@ import asyncio
 import aioprocessing
 
 import logging.handlers
-
+import dill
 
 std_log_handler = logging.StreamHandler()
 std_log_handler.setFormatter(logging.Formatter(fmt=" %(name)s :: %(message)s"))
@@ -28,6 +28,8 @@ def process_worker(send_queue, receive_queue, i):
     while True:
         id, f = send_queue.get()
         logger.info("Processing")
+        if type(f) is bytes: # serialized
+            f = dill.loads(f)
         res = f()
         receive_queue.put([id, res])
         send_queue.task_done()
@@ -62,7 +64,6 @@ class MultiTaskQueue:
     async def send(self, f, id: Union[str, None] = None):
         id = id or uuid4()
         self.fs[id] = asyncio.Future()
-        # FIXME: what if f is async?
         await self.send_queue.coro_put([id, f])
         return await self.fs[id]
 

@@ -6,8 +6,12 @@ from substantial.types import Empty, Event, Interrupt, Log, LogKind
 from substantial.workflow import WorkflowRun, Workflow
 
 class Recorder:
-    logs: Dict[str, List[Log]] = dict()
-    events: Dict[str, List[Log]] = dict()
+    logs: Dict[str, List[Log]]
+    events: Dict[str, List[Log]]
+
+    def __init__(self) -> None:
+        self.logs = dict()
+        self.events = dict()
 
     def record(self, handle: str, log: Log):
         action_kinds = [LogKind.Save, LogKind.Sleep]
