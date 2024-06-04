@@ -28,12 +28,4 @@ async def example_worker():
 
 
 with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
-    # async def parallel():
-    #     async with MultiTaskQueue(1) as send:
-    #         await asyncio.gather(*[
-    #             send(example_worker()),
-    #             send(example_worker())
-    #         ])
-
-    # runner.run(parallel())
     runner.run(example_worker())

@@ -6,7 +6,7 @@ from time import sleep
 import pytest
 from dataclasses import dataclass
 from substantial.task_queue import MultiTaskQueue
-from tests.complex.utils import LogFilter, StepError, TimeStep, WorkflowTest
+from tests.complex.utils import LogFilter, StepError, TimeStep, WorkflowTest, make_sync
 
 from substantial.workflow import workflow, Context
 
@@ -69,6 +69,7 @@ async def test_events():
     s.logs_data_equal(LogFilter.runs, ['A', 'Hello from outside! B A'])
 
 
+# FIXME: still blocking
 # @pytest.mark.asyncio(scope="module")
 # async def test_multiple_workflows_parallel():
 #     @workflow(1, "first")
@@ -81,21 +82,17 @@ async def test_events():
 #         v = await c.save(lambda: "second")
 #         return v
 
-#     t = WorkflowTest()
-#     workflows = [first, second]
+#     def exec(wf):
+#         # curryfy is necessary as dill will freeze
+#         # the arg to latest seen if we iter through `arg in [first, second]` for example
+#         async def test():
+#             t = WorkflowTest()
+#             s = t.step().timeout(10)
+#             s = await s.exec_workflow(wf)
+#             assert len(s.recorder.logs) == 1
+#         return test
+
+#     todos = [exec(first), exec(second)]
+#     # todos = [exec(first)]
 #     async with MultiTaskQueue(2) as send:
-#         todos = []
-#         for wf in workflows:
-#             async def todo():
-#                 s = t.step().timeout(10)
-#                 s = await (
-#                     s
-#                     .timeline(TimeStep("sayHello", 1, "Hello from outside!"))
-#                     .timeline(TimeStep("cancel", 5))
-#                     .exec_workflow(wf)
-#                 )
-#                 s.logs_data_equal(LogFilter.runs, ['A', 'Hello from outside! B A'])
-#                 return True
-#             todos.append(todo)
-#         results = await asyncio.gather(*[send(todo) for todo in todos])
-#         assert results == [True, True]
+#         _rets = await asyncio.gather(*[send(make_sync(todo)) for todo in todos])

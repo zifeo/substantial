@@ -1,12 +1,13 @@
-# Equiv. server + worker
 import asyncio
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import Enum
 from typing import List, Union
 
+import uvloop
+
 from substantial.conductor import Recorder, SubstantialMemoryConductor
 from substantial.types import Log
-from substantial.workflow import Workflow, WorkflowRun
+from substantial.workflow import Workflow
 
 class LogFilter(str, Enum):
     event = "event"
@@ -106,9 +107,18 @@ class WorkflowTest:
 
         return self
 
-
     # async def replay(self, count: int):
     #     pass
     # Not sure about the feasability since 
     # replay is hidden inside the backend's workflow queue and is is not reachable from outside
     # though it can be simulated with events
+
+
+def make_sync(fn: any) -> any:
+    # Naive impl may run it from a running event loop
+    # return asyncio.run(fn())
+    def syncified():
+        with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
+            ret = runner.run(fn())
+        return ret
+    return syncified

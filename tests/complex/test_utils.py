@@ -5,9 +5,8 @@ import pytest
 from substantial.task_queue import MultiTaskQueue
 
 import time
-import dill
 
-from tests.complex.utils import LogFilter, StepError, WorkflowTest
+from tests.complex.utils import LogFilter, StepError, WorkflowTest, make_sync
 
 @pytest.mark.asyncio(scope="module")
 async def test_async():
@@ -58,6 +57,7 @@ async def test_parallel_static_calls():
 @pytest.mark.asyncio(scope="module")
 async def test_parallel_dynamic_calls():
     # This will only work out of the box with aioprocessing[dill]
+    # Otherwise manually dump(here) and load(when running f) with dill
     todos = [lambda: sleep_and_id(i + 1) for i in range(3)]
 
     start_time = time.time()
@@ -76,10 +76,7 @@ async def d():
 
 @pytest.mark.asyncio(scope="module")
 async def test_parallel_static_async_hack():
-    def hack_sync():
-        return asyncio.run(d())
-
-    todos = [hack_sync, hack_sync, hack_sync]
+    todos = [make_sync(d), make_sync(d), make_sync(d)]
     start_time = time.time()
     async with MultiTaskQueue(2) as send:
         results = await asyncio.gather(*[send(todo) for todo in todos])

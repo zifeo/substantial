@@ -22,4 +22,4 @@ async-test:
   workdir: "."
   command: |
     source .venv/bin/activate
-    pytest tests/complex/test_*
+    pytest tests/complex/test_* -o log_cli=true
