@@ -1,9 +1,12 @@
 import asyncio
+import json
 import os
 from typing import Dict, List
 
 from substantial.types import Empty, Event, Interrupt, Log, LogKind
 from substantial.workflow import WorkflowRun, Workflow
+from pydantic import RootModel
+from pydantic.tools import parse_obj_as
 
 class Recorder:
     logs: Dict[str, List[Log]]
@@ -43,7 +46,7 @@ class Recorder:
 
     def persist(self, handle: str, log: Log):
         with open(f"logs/{handle}", "a") as file:
-            file.write(f"{log.to_json()}\n")
+            file.write(f"{RootModel[Log](log).model_dump_json()}\n")
 
     def recover_from_file(self, filename: str, handle: str):
         if os.path.exists(filename):
@@ -57,7 +60,7 @@ class Recorder:
                 count = 0
                 print(f"[!] Loading logs from {filename} for {handle}")
                 while line := file.readline():
-                    log = Log.from_json(line.rstrip())
+                    log = parse_obj_as(Log, json.loads(line.rstrip()))
                     if not force_override and log.handle != handle:
                         raise Exception(f"Workflow id is not the same as the one from '{filename}':\n\t'{log.handle}' != '{handle}'")
                     else:

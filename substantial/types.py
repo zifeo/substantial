@@ -1,13 +1,14 @@
 
 import asyncio
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import inspect
-import json
 import math
-from typing import Any, Callable, Union
+from typing import Any, Callable, Optional, Union
 
+from pydantic import dataclasses
+import dataclasses
 
 class LogKind(str, Enum):
     Save = "save"
@@ -16,35 +17,12 @@ class LogKind(str, Enum):
     EventOut = "event_out"
     Meta = "meta"
 
-
 @dataclass
 class Log:
     handle: str
     kind: LogKind
     data: Union[Any, None]
-    at: datetime = datetime.now()
-
-    def from_dict(value: any) -> 'Log':
-        ftypes = {f.name: f.type for f in fields(Log)}
-        attrs = {}
-        for f in value:
-            fval = value[f]
-            ftype = ftypes[f]
-            if ftype is datetime:
-                attrs[f] = datetime.strptime(fval, "%Y-%m-%d %H:%M:%S.%f")
-            else:
-                attrs[f] = fval
-        return Log(**attrs)
-    
-    def from_json(value: str) -> 'Log':
-        d = json.loads(value)
-        return Log.from_dict(d)
-
-    def to_json(self):
-        d = asdict(self)
-        d["at"] = d["at"].strftime("%Y-%m-%d %H:%M:%S.%f")
-        return json.dumps(d)
-
+    at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
 
 @dataclass
 class Event:
@@ -52,7 +30,7 @@ class Event:
     name: str
     data: Any
     future: asyncio.Future
-    at: datetime = datetime.now()
+    at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
 
 class Interrupt(BaseException):
     hint = ""

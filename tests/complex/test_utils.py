@@ -35,7 +35,7 @@ def b():
 def c():
     return sleep_and_id(3)
 
-@pytest.mark.asyncio(scope="module")
+@pytest.mark.asyncio(scope="function")
 async def test_parallel_static_calls():
     todos = [a, b, c]
     qcount = 2
@@ -54,7 +54,7 @@ async def test_parallel_static_calls():
 
 
 
-@pytest.mark.asyncio(scope="module")
+@pytest.mark.asyncio(scope="function")
 async def test_parallel_dynamic_calls():
     # This will only work out of the box with aioprocessing[dill]
     # Otherwise manually dump(here) and load(when running f) with dill
@@ -74,7 +74,7 @@ async def test_parallel_dynamic_calls():
 async def d():
     return sleep_and_id(3)
 
-@pytest.mark.asyncio(scope="module")
+@pytest.mark.asyncio(scope="function")
 async def test_parallel_static_async_hack():
     todos = [make_sync(d), make_sync(d), make_sync(d)]
     start_time = time.time()
@@ -89,7 +89,7 @@ async def test_parallel_static_async_hack():
 
 # Coroutine cannot be pickled by dill eithers
 
-# @pytest.mark.asyncio(scope="module")
+# @pytest.mark.asyncio(scope="function")
 # async def test_parallel_static_async_native():
 #     todos = [d, d, d]
 #     start_time = time.time()

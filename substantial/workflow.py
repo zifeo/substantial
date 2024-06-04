@@ -37,10 +37,9 @@ class WorkflowRun:
 
     async def replay(self, backend: 'Backend'):
         print("----------------- replay -----------------")
-        # Example
-        # TODO: explore why Log.Meta introduces incosistencies when not persisted
         # if not self.replayed:
         #     backend.load_file("logs/example", self.handle)
+        #     self.replayed = True
 
         run_logs = backend.get_run_logs(self.handle)
         events_logs = backend.get_event_logs(self.handle)

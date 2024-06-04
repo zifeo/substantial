@@ -15,7 +15,7 @@ from substantial.workflow import workflow, Context
 
 # However, each test are still run sequentially
 
-@pytest.mark.asyncio(scope="module")
+@pytest.mark.asyncio(scope="function")
 async def test_simple():
     @workflow("simple")
     async def simple_workflow(c: Context, name, n):
@@ -37,7 +37,7 @@ async def test_simple():
         .logs_data_equal(LogFilter.event, [])
     )
 
-@pytest.mark.asyncio(scope="module")
+@pytest.mark.asyncio(scope="function")
 async def test_events():
     @dataclass
     class State:
@@ -70,7 +70,7 @@ async def test_events():
 
 
 # FIXME: still blocking
-# @pytest.mark.asyncio(scope="module")
+# @pytest.mark.asyncio(scope="function")
 # async def test_multiple_workflows_parallel():
 #     @workflow(1, "first")
 #     async def first(c: Context, name, n):
