@@ -13,8 +13,8 @@ packages = [
 python = "^3.11"
 asyncio = "^3.4.3"
 uvloop = "^0.19.0"
-aioprocessing = "2.0.1"
-dill = "0.3.8"
+aioprocessing = { version = "2.0.1", extras = ["dill"] }
+# dill = "0.3.8"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

@@ -36,10 +36,6 @@ def b():
 def c():
     return sleep_and_id(3)
 
-async def d():
-    return sleep_and_id(3)
-
-
 @pytest.mark.asyncio(scope="module")
 async def test_parallel_static_calls():
     todos = [a, b, c]
@@ -55,47 +51,56 @@ async def test_parallel_static_calls():
     assert results == [1, 2, 3]
 
     diff = end_time - start_time
-    assert diff - 6 < 1
+    assert diff < 6.2
 
 
 
 @pytest.mark.asyncio(scope="module")
 async def test_parallel_dynamic_calls():
-    count = 3
-    todos = [dill.dumps(lambda: sleep_and_id(i)) for i in range(count)]
+    # This will only work out of the box with aioprocessing[dill]
+    todos = [lambda: sleep_and_id(i + 1) for i in range(3)]
 
     start_time = time.time()
     async with MultiTaskQueue(2) as send:
         results = await asyncio.gather(*[send(todo) for todo in todos])
 
-    assert results == [1, 2, 3]
+    # arg is frozen right when it's latest(i) + 1 
+    assert results == [3, 3, 3]
 
     end_time = time.time()
     diff = end_time - start_time
-    assert diff - 6 < 1
+    assert diff < 6.2
 
+async def d():
+    return sleep_and_id(3)
 
+@pytest.mark.asyncio(scope="module")
+async def test_parallel_static_async_hack():
+    def hack_sync():
+        return asyncio.run(d())
 
-# FIXME: Same as above but using pre-defined coroutines, it stucks indefinitely
-# if tested separately we get
-#     obj = _ForkingPickler.dumps(obj)
-#           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-#   File "/usr/lib/python3.11/multiprocessing/reduction.py", line 51, in dumps
-#     cls(buf, protocol).dump(obj)
-# TypeError: cannot pickle 'coroutine' object
+    todos = [hack_sync, hack_sync, hack_sync]
+    start_time = time.time()
+    async with MultiTaskQueue(2) as send:
+        results = await asyncio.gather(*[send(todo) for todo in todos])
+    end_time = time.time()
+
+    assert results == [3, 3, 3]
+
+    diff = end_time - start_time
+    assert diff < 6.2
+
+# Coroutine cannot be pickled by dill eithers
 
 # @pytest.mark.asyncio(scope="module")
-# async def test_parallel_static_async():
+# async def test_parallel_static_async_native():
 #     todos = [d, d, d]
-#     qcount = 2
 #     start_time = time.time()
-#     async with MultiTaskQueue(qcount) as send:
+#     async with MultiTaskQueue(2) as send:
 #         results = await asyncio.gather(*[send(todo) for todo in todos])
 #     end_time = time.time()
 
-#     assert results == [4, 4, 4]
+#     assert results == [3, 3, 3]
 
 #     diff = end_time - start_time
-#     expected = duration * qcount # should be 6 seconds
-#     margin = 1
-#     assert diff - expected < margin 
+#     assert diff < 6.2 

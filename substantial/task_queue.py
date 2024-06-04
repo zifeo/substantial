@@ -7,7 +7,6 @@ import asyncio
 import aioprocessing
 
 import logging.handlers
-import dill
 
 std_log_handler = logging.StreamHandler()
 std_log_handler.setFormatter(logging.Formatter(fmt=" %(name)s :: %(message)s"))
@@ -28,8 +27,6 @@ def process_worker(send_queue, receive_queue, i):
     while True:
         id, f = send_queue.get()
         logger.info("Processing")
-        if type(f) is bytes: # serialized
-            f = dill.loads(f)
         res = f()
         receive_queue.put([id, res])
         send_queue.task_done()
