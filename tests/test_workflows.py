@@ -1,5 +1,6 @@
 
 
+import asyncio
 import pytest
 from dataclasses import dataclass
 from substantial.task_queue import MultithreadedQueue
@@ -68,30 +69,33 @@ async def test_events():
     s.logs_data_equal(LogFilter.runs, ['A', 'Hello from outside! B A'])
 
 
-# FIXME: still blocking
-# @pytest.mark.asyncio(scope="function")
-# async def test_multiple_workflows_parallel():
-#     @workflow("first")
-#     async def first(c: Context, name, n):
-#         v = await c.save(lambda: "first")
-#         return v
+@pytest.mark.asyncio(scope="function")
+async def test_multiple_workflows_parallel():
+    @workflow("first")
+    async def first(c: Context, name):
+        v = await c.save(lambda: "first")
+        return v
 
-#     @workflow("second")
-#     async def second(c: Context, name, n):
-#         v = await c.save(lambda: "second")
-#         return v
+    @workflow("second")
+    async def second(c: Context, name):
+        v = await c.save(lambda: "second")
+        return v
 
-#     def exec(wf):
-#         # curryfy is necessary as dill will freeze
-#         # the arg to latest seen if we iter through `arg in [first, second]` for example
-#         async def test():
-#             t = WorkflowTest()
-#             s = t.step().timeout(10)
-#             s = await s.exec_workflow(wf)
-#             assert len(s.recorder.logs) == 1
-#         return test
+    @workflow("third")
+    async def third(c: Context, name):
+        v = await c.save(lambda: "third")
+        return v
 
-#     todos = [exec(first), exec(second)]
-#     # todos = [exec(first)]
-#     async with MultithreadedQueue(2) as send:
-#         _rets = await asyncio.gather(*[send(make_sync(todo)) for todo in todos])
+    def exec(wf):
+        # curryfy is necessary as dill will freeze
+        # the arg to latest seen if we iter through `arg in [first, second]` for example
+        async def test():
+            t = WorkflowTest()
+            s = t.step().timeout(10)
+            s = await s.exec_workflow(wf)
+            assert len(s.recorder.logs) == 1
+        return test
+
+    todos = [make_sync(exec(wf)) for wf in [first, second, third]]
+    async with MultithreadedQueue(2) as send:
+        _rets = await asyncio.gather(*[send(todo) for todo in todos])

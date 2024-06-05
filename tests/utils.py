@@ -24,11 +24,15 @@ class StepError(Exception):
         super().__init__(f"'{step}': {message}")
 
 class WorkflowTest:
-    timeout_secs = 120
+    timeout_secs: int
     name: str
-    handle: str | None = None
-    recorder: Recorder | None = None
-    event_timeline: List[TimeStep] = []
+    handle: str | None
+    recorder: Recorder | None
+    event_timeline: List[TimeStep]
+
+    def __init__(self) -> None:
+        self.timeout_secs = []
+        self.event_timeline = []
 
     def error(self, message: str):
         return StepError(self.name, message)
