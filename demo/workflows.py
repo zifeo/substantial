@@ -11,7 +11,7 @@ retry_strategy = RetryStrategy(
 )
 
 # Workflow: orchestrate activities deterministically
-@workflow(1, "simple")
+@workflow("simple")
 async def example_workflow(c: Context, name, n):
     r1 = await c.save(lambda: step_1())
     print(r1)

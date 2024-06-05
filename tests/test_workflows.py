@@ -1,12 +1,9 @@
 
 
-import asyncio
-import logging
-from time import sleep
 import pytest
 from dataclasses import dataclass
 from substantial.task_queue import MultithreadedQueue
-from tests.complex.utils import LogFilter, StepError, TimeStep, WorkflowTest, make_sync
+from tests.utils import LogFilter, TimeStep, WorkflowTest, make_sync
 
 from substantial.workflow import workflow, Context
 
@@ -17,8 +14,8 @@ from substantial.workflow import workflow, Context
 
 @pytest.mark.asyncio(scope="function")
 async def test_simple():
-    @workflow("simple")
-    async def simple_workflow(c: Context, name, n):
+    @workflow("simple-test")
+    async def simple_workflow(c: Context, name):
         async def async_op(v):
             return f"C {v}"
         r1 = await c.save(lambda: "A")
@@ -47,8 +44,8 @@ async def test_events():
         def update(self, *_):
             self.is_cancelled = True
 
-    @workflow(1, "events")
-    async def event_workflow(c: Context, name, n):
+    @workflow("event-test")
+    async def event_workflow(c: Context, name):
         r1 = await c.save(lambda: "A")
         payload = await c.event("sayHello")
 
@@ -74,12 +71,12 @@ async def test_events():
 # FIXME: still blocking
 # @pytest.mark.asyncio(scope="function")
 # async def test_multiple_workflows_parallel():
-#     @workflow(1, "first")
+#     @workflow("first")
 #     async def first(c: Context, name, n):
 #         v = await c.save(lambda: "first")
 #         return v
 
-#     @workflow(1, "second")
+#     @workflow("second")
 #     async def second(c: Context, name, n):
 #         v = await c.save(lambda: "second")
 #         return v

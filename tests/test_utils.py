@@ -6,7 +6,7 @@ from substantial.task_queue import MultithreadedQueue
 
 import time
 
-from tests.complex.utils import LogFilter, StepError, WorkflowTest, make_sync
+from tests.utils import LogFilter, StepError, WorkflowTest, make_sync
 
 @pytest.mark.asyncio(scope="module")
 async def test_async():
@@ -86,18 +86,3 @@ async def test_parallel_static_async_hack():
 
     diff = end_time - start_time
     assert diff < 6.2
-
-# Coroutine cannot be pickled by dill eithers
-
-# @pytest.mark.asyncio(scope="function")
-# async def test_parallel_static_async_native():
-#     todos = [d, d, d]
-#     start_time = time.time()
-#     async with MultithreadedQueue(2) as send:
-#         results = await asyncio.gather(*[send(todo) for todo in todos])
-#     end_time = time.time()
-
-#     assert results == [3, 3, 3]
-
-#     diff = end_time - start_time
-#     assert diff < 6.2 
