@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from substantial.task_queue import MultiTaskQueue
+from substantial.task_queue import MultithreadedQueue
 
 import time
 
@@ -43,7 +43,7 @@ async def test_parallel_static_calls():
     # ai---af,ci-----cf--------> 
     # bi-----bf---------------->
     start_time = time.time()
-    async with MultiTaskQueue(qcount) as send:
+    async with MultithreadedQueue(qcount) as send:
         results = await asyncio.gather(*[send(todo) for todo in todos])
     end_time = time.time()
 
@@ -61,7 +61,7 @@ async def test_parallel_dynamic_calls():
     todos = [lambda: sleep_and_id(i + 1) for i in range(3)]
 
     start_time = time.time()
-    async with MultiTaskQueue(2) as send:
+    async with MultithreadedQueue(2) as send:
         results = await asyncio.gather(*[send(todo) for todo in todos])
 
     # arg is frozen right when it's latest(i) + 1 
@@ -78,7 +78,7 @@ async def d():
 async def test_parallel_static_async_hack():
     todos = [make_sync(d), make_sync(d), make_sync(d)]
     start_time = time.time()
-    async with MultiTaskQueue(2) as send:
+    async with MultithreadedQueue(2) as send:
         results = await asyncio.gather(*[send(todo) for todo in todos])
     end_time = time.time()
 
@@ -93,7 +93,7 @@ async def test_parallel_static_async_hack():
 # async def test_parallel_static_async_native():
 #     todos = [d, d, d]
 #     start_time = time.time()
-#     async with MultiTaskQueue(2) as send:
+#     async with MultithreadedQueue(2) as send:
 #         results = await asyncio.gather(*[send(todo) for todo in todos])
 #     end_time = time.time()
 

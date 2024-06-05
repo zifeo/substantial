@@ -5,7 +5,7 @@ import logging
 from time import sleep
 import pytest
 from dataclasses import dataclass
-from substantial.task_queue import MultiTaskQueue
+from substantial.task_queue import MultithreadedQueue
 from tests.complex.utils import LogFilter, StepError, TimeStep, WorkflowTest, make_sync
 
 from substantial.workflow import workflow, Context
@@ -19,9 +19,11 @@ from substantial.workflow import workflow, Context
 async def test_simple():
     @workflow("simple")
     async def simple_workflow(c: Context, name, n):
+        async def async_op(v):
+            return f"C {v}"
         r1 = await c.save(lambda: "A")
-        r2 = await c.save(lambda: f"B {r1}")
-        r3 = await c.save(lambda: f"C {r2}")
+        r2 = await c.save(lambda: (lambda: f"B {r1}")())
+        r3 = await c.save(lambda: async_op(r2))
         return r3
 
     t = WorkflowTest()
@@ -94,5 +96,5 @@ async def test_events():
 
 #     todos = [exec(first), exec(second)]
 #     # todos = [exec(first)]
-#     async with MultiTaskQueue(2) as send:
+#     async with MultithreadedQueue(2) as send:
 #         _rets = await asyncio.gather(*[send(make_sync(todo)) for todo in todos])

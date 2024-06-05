@@ -32,7 +32,7 @@ def process_worker(send_queue, receive_queue, i):
         send_queue.task_done()
 
 
-class MultiTaskQueue:
+class MultithreadedQueue:
     """ TL;DR process functions accross workers """
 
     def __init__(self, num_workers=2):
@@ -42,6 +42,8 @@ class MultiTaskQueue:
     async def __aenter__(self):
         assert not self.active
         self.active = True
+
+        # wait_on
 
         self.send_queue = aioprocessing.AioJoinableQueue()
         self.receive_queue = aioprocessing.AioJoinableQueue()

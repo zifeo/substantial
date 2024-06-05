@@ -33,14 +33,19 @@ class Event:
     at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
 
 class Interrupt(BaseException):
-    hint = ""
+    hint: str
     def __init__(self, hint: Union[str, None] = None) -> None:
         self.hint = hint or ""
 
 class CancelWorkflow(BaseException):
-    pass
+    hint: str
+    def __init__(self, hint: Union[str, None] = None) -> None:
+        self.hint = hint or ""
 
 class AppError(BaseException):
+    pass
+
+class ProgramError(BaseException):
     pass
 
 @dataclass
@@ -73,11 +78,11 @@ class RetryStrategy:
 
 @dataclass
 class Activity:
-    fn: Callable[[], Any]
+    lambda_fn: Callable[[], Any]
     timeout: Union[int, None]
     retry_strategy: Union[RetryStrategy, None]
 
-    async def exec(self, ctx) -> Any:
+    async def exec(self) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3,
             initial_backoff_interval=0,
@@ -88,27 +93,25 @@ class Activity:
 
         while retries_left > 0:
             try:
-                if ctx.cancelled:
-                    raise CancelWorkflow
-                val = self.fn()
-                if inspect.iscoroutine(val):
-                    return await asyncio.wait_for(val, self.timeout)
-                return val
+                op = self.lambda_fn()
+                if inspect.iscoroutine(op):
+                    return await asyncio.wait_for(op, self.timeout)
+                elif not inspect.isfunction(op):
+                    return op
+                else:
+                    raise ProgramError(f"Expected value or coroutine object, got {type(op)} instead")
             except Exception as e:
-                if isinstance(e, CancelWorkflow):
-                    raise e
-
                 print(f"Retries => {retries_left}, exec timeout {self.timeout}")
-                if isinstance(e, TimeoutError):
-                    print("Timeout")
+                # if isinstance(e, TimeoutError):
+                #     print("Timeout")
 
-                errors.append(e)
-                backoff = strategy.linear(retries_left)
-                print(f"backoff {backoff}s: {str(e)}")
-                await asyncio.sleep(backoff)
+                if not isinstance(e, ProgramError):
+                    errors.append(e)
+                    backoff = strategy.linear(retries_left)
+                    print(f"backoff {backoff}s: {str(e)}")
+                    await asyncio.sleep(backoff)
             finally:
                 retries_left -= 1
-        # raise Interrupt # replay
         raise AppError(e)
 
 

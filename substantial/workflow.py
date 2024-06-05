@@ -8,7 +8,7 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from substantial.conductor import Backend
-from substantial.types import AppError, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
+from substantial.types import AppError, CancelWorkflow, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
 
 
 class WorkflowRun:
@@ -74,7 +74,6 @@ class Context:
         self.run_logs = iter(run_logs)
         self.event_logs = iter(event_logs)
         self.events = {}
-        self.cancelled = False
 
     def source(self, kind: LogKind, data: any):
         self.backend_event_logger(Log(self.handle, kind, data))
@@ -102,9 +101,8 @@ class Context:
         val = self.unqueue_up_to(LogKind.Save)
         if val is Empty:
             activity = Activity(callable, timeout, retry_strategy)
-            val = await activity.exec(self)
+            val = await activity.exec()
             self.source(LogKind.Save, val)
-            # raise Interrupt("Must replay")
             return val
         else:
             self.source(LogKind.Meta, f"reused {val.data}")
@@ -149,8 +147,8 @@ class Context:
         return proxy["val"]
 
     def cancel_run(self):
-        """ Cancel following activities after the call """
-        self.cancelled = True
+        """ Interrupt after the call """
+        raise CancelWorkflow(self.handle)
 
 
 class Workflow:
