@@ -51,6 +51,11 @@ class WorkflowTest:
         self.event_timeline.append(time_step)
         return self
 
+    def get_logs(self, filter: LogFilter):
+        if filter.name == LogFilter.runs:
+            return self.recorder.get_recorded_runs(self.handle)
+        return self.recorder.get_recorded_events(self.handle)        
+        
     def logs_data_equal(
         self,
         filter: LogFilter,
@@ -60,12 +65,12 @@ class WorkflowTest:
         if self.recorder is None or self.handle is None:
             raise self.error("No workflow has been run prior the call")
         
-        if filter.name == LogFilter.runs:
-            res = self.recorder.get_recorded_runs(self.handle)
-        else:
-            res = self.recorder.get_recorded_events(self.handle)
+        res = self.get_logs(filter)
+
         if len(res) == 0 and len(other) == 0:
             return self
+        if len(other) == 0:
+            raise Exception(f"Cannot compare empty logs to logs of size {len(res)}")
         if isinstance(res[0], Log):
             res = [log.data for log in res]
         if isinstance(other[0], Log):

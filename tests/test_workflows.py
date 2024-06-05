@@ -1,6 +1,7 @@
 
 
 import asyncio
+import time
 import pytest
 from dataclasses import dataclass
 from substantial.task_queue import MultithreadedQueue
@@ -78,7 +79,9 @@ async def test_multiple_workflows_parallel():
 
     @workflow("second")
     async def second(c: Context, name):
-        v = await c.save(lambda: "second")
+        v = await c.save(lambda: "second 1")
+        v = await c.save(lambda: f"{v} 2")
+        v = await c.save(lambda: f"{v} 3")
         return v
 
     @workflow("third")
@@ -86,16 +89,27 @@ async def test_multiple_workflows_parallel():
         v = await c.save(lambda: "third")
         return v
 
+    t = WorkflowTest()
     def exec(wf):
         # curryfy is necessary as dill will freeze
         # the arg to latest seen if we iter through `arg in [first, second]` for example
         async def test():
-            t = WorkflowTest()
-            s = t.step().timeout(10)
+            s = t.step().timeout(3)
             s = await s.exec_workflow(wf)
-            assert len(s.recorder.logs) == 1
+            return len(s.get_logs(LogFilter.runs))
         return test
 
     todos = [make_sync(exec(wf)) for wf in [first, second, third]]
+    start_time = time.time()
     async with MultithreadedQueue(2) as send:
-        _rets = await asyncio.gather(*[send(todo) for todo in todos])
+        log_sizes = await asyncio.gather(*[send(todo) for todo in todos])
+    end_time = time.time()
+
+    duration = end_time - start_time
+    assert log_sizes == [1, 3, 1]
+    # 0s      3s       6s
+    # 1i --- 1f,3i --- 3f --->
+    # 2i --- 2f --------->
+    assert duration < 6.2
+ 
+
