@@ -23,7 +23,7 @@ class LogKind(str, Enum):
 @dataclass
 class EventData:
     event_name: str
-    args: List[Any]
+    args: Optional[List[Any]]
 
 @dataclass
 class Log:
