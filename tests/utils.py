@@ -26,9 +26,9 @@ class StepError(Exception):
 class WorkflowTest:
     timeout_secs: int
     name: str
-    handle: str | None
-    recorder: Recorder | None
     event_timeline: List[TimeStep]
+    handle: Union[str, None] = None
+    recorder: Union[Recorder, None] = None
 
     def __init__(self) -> None:
         self.timeout_secs = []
@@ -64,7 +64,7 @@ class WorkflowTest:
         res = []
         if self.recorder is None or self.handle is None:
             raise self.error("No workflow has been run prior the call")
-        
+
         res = self.get_logs(filter)
 
         if len(res) == 0 and len(other) == 0:

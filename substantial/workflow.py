@@ -3,12 +3,12 @@
 # compensate
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 from uuid import uuid4
 
 if TYPE_CHECKING:
     from substantial.conductor import Backend
-from substantial.types import AppError, CancelWorkflow, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
+from substantial.types import AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
 
 
 class WorkflowRun:
@@ -38,7 +38,7 @@ class WorkflowRun:
     async def replay(self, backend: 'Backend'):
         print("----------------- replay -----------------")
         # if not self.replayed:
-        #     backend.load_file("logs/example", self.handle)
+        #     backend.load_file("logs/example.json", self.handle)
         #     self.replayed = True
 
         run_logs = backend.get_run_logs(self.handle)
@@ -127,14 +127,15 @@ class Context:
         self.source(LogKind.Meta, "waiting...")
         event = self.__unqueue_up_to(LogKind.EventIn)
         if event is not Empty:
-            callback = self.events.get(event.data[0])
+            data: EventData = event.data
+            callback = self.events.get(data.event_name)
             if callback is not None:
-                ret = callback(*event.data[1])
+                ret = callback(*tuple(data.args))
                 res = self.__unqueue_up_to(LogKind.EventOut)
                 if res is not Empty:
-                    self.source(LogKind.Meta, f"reused {event.data[1]}")
+                    self.source(LogKind.Meta, f"reused {data.args}")
                 else:
-                    self.source(LogKind.EventOut, (event.data[0], ret))
+                    self.source(LogKind.EventOut, EventData(data.event_name, ret))
 
         if not condition():
             raise Interrupt("wait => not condition")

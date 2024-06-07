@@ -3,7 +3,7 @@ import json
 import os
 from typing import Dict, List
 
-from substantial.types import CancelWorkflow, Empty, Event, Interrupt, Log, LogKind
+from substantial.types import CancelWorkflow, Empty, Event, EventData, Interrupt, Log, LogKind
 from substantial.workflow import WorkflowRun, Workflow
 from pydantic import RootModel
 from pydantic.tools import parse_obj_as
@@ -60,7 +60,8 @@ class Recorder:
                 count = 0
                 print(f"[!] Loading logs from {filename} for {handle}")
                 while line := file.readline():
-                    log = parse_obj_as(Log, json.loads(line.rstrip()))
+                    log: Log = parse_obj_as(Log, json.loads(line.rstrip()))
+                    log.normalize_data()
                     if not force_override and log.handle != handle:
                         raise Exception(f"Workflow id is not the same as the one from '{filename}':\n\t'{log.handle}' != '{handle}'")
                     else:
@@ -98,8 +99,9 @@ class SubstantialMemoryConductor(Backend):
 
     async def send(self, handle: str, event_name: str, *args):
         ret = asyncio.Future()
-        self.runs.record(handle, Log(handle, LogKind.EventIn, (event_name, args)))
-        await self.events.put(Event(handle, event_name, args, ret))
+        data = EventData(event_name, args)
+        self.runs.record(handle, Log(handle, LogKind.EventIn, data))
+        await self.events.put(Event(handle, event_name, data, ret))
         return ret
 
     def get_run_logs(self, handle: str):
@@ -135,9 +137,11 @@ class SubstantialMemoryConductor(Backend):
 
             res = Empty
             for log in event_logs[::-1]:
-                if log.kind == LogKind.EventOut and log.data[0] == event.name:
-                    res = log.data[1]
-                    break
+                if log.kind == LogKind.EventOut:
+                    data: EventData = log.data
+                    if data.event_name == event.name:
+                        res = data.args
+                        break
 
             if res is Empty:
                 asyncio.create_task(self.schedule_later(self.events, event, 2))

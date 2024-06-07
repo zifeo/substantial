@@ -1,14 +1,17 @@
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
 import inspect
 import math
-from typing import Any, Callable, Optional, Union
 
-from pydantic import dataclasses
+from datetime import datetime
+from enum import Enum
+from typing import Any, Callable, List, Optional, Union
+# from pydantic.dataclasses import dataclass # does not work with futures out of the box
+from dataclasses import dataclass
 import dataclasses
+
+from pydantic import BaseModel
+
 
 class LogKind(str, Enum):
     Save = "save"
@@ -18,11 +21,19 @@ class LogKind(str, Enum):
     Meta = "meta"
 
 @dataclass
+class EventData:
+    event_name: str
+    args: List[Any]
+
+@dataclass
 class Log:
     handle: str
     kind: LogKind
     data: Union[Any, None]
     at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
+    def normalize_data(self):
+        if isinstance(self.data, dict) and "event_name" in self.data and "args" in self.data:
+            self.data = EventData(self.data["event_name"], self.data["args"])
 
 @dataclass
 class Event:

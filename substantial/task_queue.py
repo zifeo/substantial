@@ -33,7 +33,7 @@ def process_worker(send_queue, receive_queue, i):
 
 
 class MultithreadedQueue:
-    """ TL;DR process functions accross workers """
+    """ Process functions accross different threads """
 
     def __init__(self, num_workers=2):
         self.num_workers = num_workers
