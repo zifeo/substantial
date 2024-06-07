@@ -99,7 +99,7 @@ class SubstantialMemoryConductor(Backend):
 
     async def send(self, handle: str, event_name: str, *args):
         ret = asyncio.Future()
-        data = EventData(event_name, args)
+        data = EventData(event_name, list(args))
         self.runs.record(handle, Log(handle, LogKind.EventIn, data))
         await self.events.put(Event(handle, event_name, data, ret))
         return ret

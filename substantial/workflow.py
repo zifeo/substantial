@@ -38,7 +38,7 @@ class WorkflowRun:
     async def replay(self, backend: 'Backend'):
         print("----------------- replay -----------------")
         # if not self.replayed:
-        #     backend.load_file("logs/example.json", self.handle)
+        #     backend.load_file("logs/example", self.handle)
         #     self.replayed = True
 
         run_logs = backend.get_run_logs(self.handle)

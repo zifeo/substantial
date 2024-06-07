@@ -1,5 +1,5 @@
 logs/*
-!logs/example.json
+!logs/example
 
 .DS_Store
 **/.terraform
