@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import json
 import os
 from typing import Dict, List
@@ -80,6 +81,18 @@ class Backend:
     
     def load_file(self, filename: str, handle: str):
         raise Exception("Not implemented")
+
+    def send(self, handle: str, event_name: str, *args):
+        raise Exception("Not implemented")
+
+@dataclass
+class HandleSignaler:
+    """ Simple wrapper for backend.send(handle, event, *args) """
+    handle: str
+    backend: Backend
+    async def send(self, event_name, *args):
+        return await self.backend.send(self.handle, event_name, *args)
+
 
 class SubstantialMemoryConductor(Backend):
     def __init__(self):

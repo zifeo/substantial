@@ -3,9 +3,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Union
 
+import pytest
 import uvloop
 
-from substantial.conductor import Recorder, SubstantialMemoryConductor
+from substantial.conductor import HandleSignaler, Recorder, SubstantialMemoryConductor
 from substantial.types import Log
 from substantial.workflow import Workflow
 
@@ -96,12 +97,13 @@ class WorkflowTest:
 
         workflow_run = workflow()
         handle = workflow_run.handle
+        signaler = HandleSignaler(handle, substantial)
 
         async def go():
             await substantial.start(workflow_run)
             for ev in self.event_timeline:
                 await asyncio.sleep(ev.delta_time)
-                await substantial.send(handle, ev.event_name, ev.payload)
+                await signaler.send(ev.event_name, ev.payload)
             await backend_exec
 
         try:
@@ -131,3 +133,6 @@ def make_sync(fn: any) -> any:
             ret = runner.run(fn())
         return ret
     return syncified
+
+
+asyncio_fun = pytest.mark.asyncio(scope="function")

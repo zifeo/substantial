@@ -1,6 +1,4 @@
-import asyncio
 from dataclasses import dataclass
-import random
 from substantial.types import RetryStrategy
 from substantial.workflow import workflow, Context
 
@@ -32,10 +30,7 @@ async def example_workflow(c: Context, name):
 
     c.register("cancel", s.update)
 
-    await c.wait(lambda: s.is_cancelled)
-
-    if s.is_cancelled:
-        # c.cancel_run()
+    if await c.wait(lambda: s.is_cancelled):
         r4 = await c.save(lambda: step_4(r3, n))
 
     return r4

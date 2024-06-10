@@ -5,7 +5,7 @@ import time
 import pytest
 from dataclasses import dataclass
 from substantial.task_queue import MultithreadedQueue
-from tests.utils import LogFilter, TimeStep, WorkflowTest, make_sync
+from tests.utils import LogFilter, TimeStep, WorkflowTest, make_sync, asyncio_fun
 
 from substantial.workflow import workflow, Context
 
@@ -14,7 +14,7 @@ from substantial.workflow import workflow, Context
 
 # However, each test are still run sequentially
 
-@pytest.mark.asyncio(scope="function")
+@asyncio_fun
 async def test_simple():
     @workflow("simple-test")
     async def simple_workflow(c: Context, name):
@@ -38,7 +38,7 @@ async def test_simple():
         .logs_data_equal(LogFilter.event, [])
     )
 
-@pytest.mark.asyncio(scope="function")
+@asyncio_fun
 async def test_events():
     @dataclass
     class State:
@@ -53,9 +53,7 @@ async def test_events():
 
         s = State(False)
         c.register("cancel", s.update)
-        await c.wait(lambda: s.is_cancelled)
-
-        if s.is_cancelled:
+        if await c.wait(lambda: s.is_cancelled):
             r3 = await c.save(lambda: f"{payload} B {r1}")
         return r3
 
@@ -70,7 +68,7 @@ async def test_events():
     s.logs_data_equal(LogFilter.runs, ['A', 'Hello from outside! B A'])
 
 
-@pytest.mark.asyncio(scope="function")
+@asyncio_fun
 async def test_multiple_workflows_parallel():
     @workflow()
     async def first(c: Context, name):

@@ -10,9 +10,6 @@ from typing import Any, Callable, List, Optional, Union
 from dataclasses import dataclass
 import dataclasses
 
-from pydantic import BaseModel
-
-
 class LogKind(str, Enum):
     Save = "save"
     Sleep = "sleep"

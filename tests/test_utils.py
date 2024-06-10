@@ -6,14 +6,14 @@ from substantial.task_queue import MultithreadedQueue
 
 import time
 
-from tests.utils import LogFilter, StepError, WorkflowTest, make_sync
+from tests.utils import LogFilter, StepError, WorkflowTest, make_sync, asyncio_fun
 
-@pytest.mark.asyncio(scope="module")
+@make_sync
 async def test_async():
     await asyncio.sleep(1)
     assert 1 + 1 is 2
 
-@pytest.mark.asyncio(scope="module")
+@make_sync
 async def test_test():
     t = WorkflowTest()
     with pytest.raises(StepError) as info:
@@ -35,7 +35,7 @@ def b():
 def c():
     return sleep_and_id(3)
 
-@pytest.mark.asyncio(scope="function")
+@asyncio_fun
 async def test_parallel_static_calls():
     todos = [a, b, c]
     qcount = 2
@@ -54,7 +54,7 @@ async def test_parallel_static_calls():
 
 
 
-@pytest.mark.asyncio(scope="function")
+@asyncio_fun
 async def test_parallel_dynamic_calls():
     # This will only work out of the box with aioprocessing[dill]
     # Otherwise manually dump(here) and load(when running f) with dill
@@ -74,7 +74,7 @@ async def test_parallel_dynamic_calls():
 async def d():
     return sleep_and_id(3)
 
-@pytest.mark.asyncio(scope="function")
+@asyncio_fun
 async def test_parallel_static_async_hack():
     todos = [make_sync(d), make_sync(d), make_sync(d)]
     start_time = time.time()

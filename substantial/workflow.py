@@ -133,8 +133,10 @@ class Context:
                 else:
                     self.source(LogKind.EventOut, EventData(data.event_name, ret))
 
-        if not condition():
+        result = condition()
+        if not result:
             raise Interrupt("wait => not condition")
+        return result
 
     async def event(self, event_name: str):
         """ Register a new event that can be triggered from outside the workflow """
