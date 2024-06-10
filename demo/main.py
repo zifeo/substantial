@@ -8,6 +8,8 @@ async def same_thread_example():
     substantial = SubstantialMemoryConductor()
     substantial.register(example_workflow)
 
+    # Note: `create_task` makes sure substantial.run executes async
+    # all await calls that happens after will run in parallel to this task
     execution = asyncio.create_task(substantial.run())
 
     workflow_run = example_workflow()

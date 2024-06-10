@@ -43,8 +43,6 @@ class MultithreadedQueue:
         assert not self.active
         self.active = True
 
-        # wait_on
-
         self.send_queue = aioprocessing.AioJoinableQueue()
         self.receive_queue = aioprocessing.AioJoinableQueue()
         self.fs = {}

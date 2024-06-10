@@ -5,6 +5,7 @@
 import asyncio
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 from uuid import uuid4
+from datetime import timedelta
 
 if TYPE_CHECKING:
     from substantial.conductor import Backend
@@ -90,13 +91,14 @@ class Context:
         self,
         callable: Callable,
         *,
-        timeout: Union[int, None] = None,
+        timeout: Union[timedelta, None] = None,
         retry_strategy: Union[RetryStrategy, None] = None
     ) -> Any:
         """ Force idempotency on `callable` and add `ValueEval` like behavior """
         val = self.__unqueue_up_to(LogKind.Save)
         if val is Empty:
-            value_eval = ValueEval(callable, timeout, retry_strategy)
+            timeout_secs = timeout.total_seconds() if timeout is not None else None
+            value_eval = ValueEval(callable, timeout_secs, retry_strategy)
             val = await value_eval.exec()
             self.source(LogKind.Save, val)
             return val
@@ -104,21 +106,22 @@ class Context:
             self.source(LogKind.Meta, f"reused {val.data}")
             return val.data
     
-    async def sleep(self, duration_sec: int) -> Any:
-        if duration_sec <= 0:
-            raise AppError(f"Invalid timeout value: {duration_sec}")
+    async def sleep(self, duration: timedelta) -> Any:
+        seconds = duration.total_seconds()
+        if seconds <= 0:
+            raise AppError(f"Invalid timeout value: {seconds}")
         val = self.__unqueue_up_to(LogKind.Sleep)
         if val is Empty:
-            await asyncio.sleep(duration_sec)
+            await asyncio.sleep(seconds)
             self.source(LogKind.Sleep, None)
         else:
-            self.source(LogKind.Meta, f"{duration_sec}s sleep already executed")
+            self.source(LogKind.Meta, f"{seconds}s sleep already executed")
 
     def register(self, event_name: str, callback: Any):
         self.source(LogKind.Meta, f"registering... {event_name}")
         self.events[event_name] = callback
 
-    async def wait(self, condition: Callable[[], bool]):
+    async def wait_on(self, condition: Callable[[], bool]):
         """ Wait for `condition()` to be True """
         self.source(LogKind.Meta, "waiting...")
         event = self.__unqueue_up_to(LogKind.EventIn)
@@ -142,7 +145,7 @@ class Context:
         """ Register a new event that can be triggered from outside the workflow """
         proxy = {}
         self.register(event_name, lambda x: proxy.update(val=x))
-        await self.wait(lambda: "val" in proxy)
+        await self.wait_on(lambda: "val" in proxy)
         return proxy["val"]
 
     def cancel_run(self):

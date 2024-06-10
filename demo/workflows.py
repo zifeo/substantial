@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import timedelta
 from substantial.types import RetryStrategy
 from substantial.workflow import workflow, Context
 
@@ -15,12 +16,12 @@ async def example_workflow(c: Context, name):
 
     r2 = await c.save(
         lambda: step_2(r1),
-        timeout=1,
+        timeout=timedelta(seconds=1),
         retry_strategy=retry_strategy
     )
     print(r2)
 
-    await c.sleep(2)
+    await c.sleep(timedelta(seconds=2))
 
     r3 = await c.save(lambda: step_3(r2))
     print(r3)
@@ -30,7 +31,7 @@ async def example_workflow(c: Context, name):
 
     c.register("cancel", s.update)
 
-    if await c.wait(lambda: s.is_cancelled):
+    if await c.wait_on(lambda: s.is_cancelled):
         r4 = await c.save(lambda: step_4(r3, n))
 
     return r4

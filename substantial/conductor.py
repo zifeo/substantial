@@ -142,6 +142,11 @@ class SubstantialMemoryConductor(Backend):
         w = asyncio.create_task(self.run_workflows())
         return await asyncio.gather(e, w)
 
+    async def run_as_task(self):
+        # FIXME: x = backend.run_as_task() has the same effect as x = self.run()
+        # vs a direct call at the place where it is used
+        return asyncio.create_task(self.run())
+
     async def run_events(self):
         """ Event loop """
         while True:

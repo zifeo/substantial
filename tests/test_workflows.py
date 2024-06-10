@@ -1,6 +1,7 @@
 
 
 import asyncio
+from datetime import timedelta
 import time
 import pytest
 from dataclasses import dataclass
@@ -53,7 +54,7 @@ async def test_events():
 
         s = State(False)
         c.register("cancel", s.update)
-        if await c.wait(lambda: s.is_cancelled):
+        if await c.wait_on(lambda: s.is_cancelled):
             r3 = await c.save(lambda: f"{payload} B {r1}")
         return r3
 
@@ -79,6 +80,7 @@ async def test_multiple_workflows_parallel():
     async def second(c: Context, name):
         v = await c.save(lambda: "second 1")
         v = await c.save(lambda: f"{v} 2")
+        await c.sleep(timedelta(seconds=1))
         v = await c.save(lambda: f"{v} 3")
         return v
 
@@ -104,7 +106,7 @@ async def test_multiple_workflows_parallel():
     end_time = time.time()
 
     duration = end_time - start_time
-    assert log_sizes == [1, 3, 1]
+    assert log_sizes == [1, 4, 1]
     # 0s      3s       6s
     # 1i --- 1f,3i --- 3f --->
     # 2i --- 2f --------->
