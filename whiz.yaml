@@ -12,12 +12,6 @@ setup:
     poetry lock
     poetry install
 
-sync-test:
-  workdir: "."
-  command: |
-    source .venv/bin/activate
-    python3 tests/basic/test.py
-
 async-test:
   workdir: "."
   command: |

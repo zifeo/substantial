@@ -88,7 +88,7 @@ class RetryStrategy:
         return int(((self.max_retries - retries_left) * dt) / self.max_retries)
 
 @dataclass
-class Activity:
+class ValueEval:
     lambda_fn: Callable[[], Any]
     timeout: Union[int, None]
     retry_strategy: Union[RetryStrategy, None]

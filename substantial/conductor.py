@@ -53,6 +53,7 @@ class Recorder:
             if len(self.logs) > 0:
                 raise Exception("Invalid state: cannot recover from non empty logs")
 
+            # ignore handle field by default
             force_override = True
             self.logs = dict()
 

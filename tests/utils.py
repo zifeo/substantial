@@ -94,7 +94,7 @@ class WorkflowTest:
         substantial.register(workflow)
         backend_exec = asyncio.create_task(substantial.run())
 
-        workflow_run = workflow("<default>")
+        workflow_run = workflow()
         handle = workflow_run.handle
 
         async def go():

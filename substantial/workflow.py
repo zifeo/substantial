@@ -8,7 +8,7 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from substantial.conductor import Backend
-from substantial.types import AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, Activity, Empty, RetryStrategy
+from substantial.types import AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, ValueEval, Empty, RetryStrategy
 
 
 class WorkflowRun:
@@ -22,13 +22,9 @@ class WorkflowRun:
         self,
         workflow: "Workflow",
         run_id,
-        args,
-        kwargs,
     ):
         self.run_id = run_id
         self.workflow = workflow
-        self.args = args
-        self.kwargs = kwargs
         self.replayed = False
 
     @property
@@ -47,7 +43,7 @@ class WorkflowRun:
         ctx = Context(self.handle, backend.log, run_logs, events_logs)
         ctx.source(LogKind.Meta, f"replaying ...")
         try:
-            ret = await self.workflow.f(ctx, *self.args, **self.kwargs)
+            ret = await self.workflow.f(ctx, self.workflow.id)
             self.replayed = True
         except Interrupt:
             ctx.source(LogKind.Meta, "waiting for condition...")
@@ -97,11 +93,11 @@ class Context:
         timeout: Union[int, None] = None,
         retry_strategy: Union[RetryStrategy, None] = None
     ) -> Any:
-        """ Force idempotency on `callable` and add `Activity` like behavior """
+        """ Force idempotency on `callable` and add `ValueEval` like behavior """
         val = self.__unqueue_up_to(LogKind.Save)
         if val is Empty:
-            activity = Activity(callable, timeout, retry_strategy)
-            val = await activity.exec()
+            value_eval = ValueEval(callable, timeout, retry_strategy)
+            val = await value_eval.exec()
             self.source(LogKind.Save, val)
             return val
         else:
@@ -168,13 +164,13 @@ class Workflow:
         self.id = workflow_name
         self.f = f
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self):
         run_id = uuid4()
-        return WorkflowRun(self, run_id, args, kwargs)
+        return WorkflowRun(self, run_id)
 
 
-def workflow(*args, **kwargs):
+def workflow(name: Union[str, None] = None):
     def wrapper(f):
-        return Workflow(f, *args, **kwargs)
+        return Workflow(f, name or f.__name__)
 
     return wrapper

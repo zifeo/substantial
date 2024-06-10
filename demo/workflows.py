@@ -10,9 +10,8 @@ retry_strategy = RetryStrategy(
     max_backoff_interval=10
 )
 
-# Workflow: orchestrate activities deterministically
-@workflow("simple")
-async def example_workflow(c: Context, name, n):
+@workflow()
+async def example_workflow(c: Context, name):
     r1 = await c.save(lambda: step_1())
     print(r1)
 

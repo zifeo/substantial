@@ -1,17 +1,16 @@
 # Equiv. server + worker
 import asyncio
 from substantial.conductor import SubstantialMemoryConductor
-import uvloop
 
 from workflows import example_workflow
 
-async def example_worker():
+async def same_thread_example():
     substantial = SubstantialMemoryConductor()
     substantial.register(example_workflow)
 
     execution = asyncio.create_task(substantial.run())
 
-    workflow_run = example_workflow("test", 1)
+    workflow_run = example_workflow()
 
     handle = await substantial.start(workflow_run)
 
@@ -27,5 +26,4 @@ async def example_worker():
     await execution
 
 
-with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
-    runner.run(example_worker())
+asyncio.run(same_thread_example())

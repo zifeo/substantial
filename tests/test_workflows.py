@@ -46,7 +46,7 @@ async def test_events():
         def update(self, *_):
             self.is_cancelled = True
 
-    @workflow("event-test")
+    @workflow()
     async def event_workflow(c: Context, name):
         r1 = await c.save(lambda: "A")
         payload = await c.event("sayHello")
@@ -72,19 +72,19 @@ async def test_events():
 
 @pytest.mark.asyncio(scope="function")
 async def test_multiple_workflows_parallel():
-    @workflow("first")
+    @workflow()
     async def first(c: Context, name):
         v = await c.save(lambda: "first")
         return v
 
-    @workflow("second")
+    @workflow()
     async def second(c: Context, name):
         v = await c.save(lambda: "second 1")
         v = await c.save(lambda: f"{v} 2")
         v = await c.save(lambda: f"{v} 3")
         return v
 
-    @workflow("third")
+    @workflow()
     async def third(c: Context, name):
         v = await c.save(lambda: "third")
         return v
