@@ -81,6 +81,6 @@ async def step_4(b, a):
     return f"{a} D {b}"
 
 def failing_op():
-    if random.random() <= 0.7:
+    if random.random() > 0.7:
         raise Exception("random failure")
     return "RESOLVED => SHOULD STOP"

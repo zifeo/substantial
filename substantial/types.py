@@ -37,8 +37,8 @@ class Log:
         if isinstance(self.data, dict):
             if "event_name" in self.data and "args" in self.data:
                 self.data = EventData(self.data["event_name"], self.data["args"])
-            elif "data" in self.data and "counter" in self.data:
-                self.data = SaveData(self.data["counter"])
+            elif "payload" in self.data and "counter" in self.data:
+                self.data = SaveData(self.data["payload"], self.data["counter"])
 
 @dataclass
 class Event:

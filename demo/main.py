@@ -2,17 +2,17 @@
 import asyncio
 from substantial.conductor import SubstantialMemoryConductor, HandleSignaler
 
-from workflows import example_workflow
+from workflows import example_simple
 
 async def same_thread_example():
     substantial = SubstantialMemoryConductor()
-    substantial.register(example_workflow)
+    substantial.register(example_simple)
 
     # Note: `create_task` makes sure substantial.run executes async
     # all await calls that happens after will run in parallel to this task
     execution = asyncio.create_task(substantial.run())
 
-    workflow_run = example_workflow()
+    workflow_run = example_simple()
 
     handle = await substantial.start(workflow_run)
 

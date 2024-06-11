@@ -1,9 +1,9 @@
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"save","data":"A","at":"2024-06-07T18:19:10.501517"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"save","data":"B A","at":"2024-06-07T18:19:10.503579"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"sleep","data":null,"at":"2024-06-07T18:19:12.505836"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"save","data":"C B A","at":"2024-06-07T18:19:12.506296"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"event_in","data":{"event_name":"do_print","args":["'sent from app'"]},"at":"2024-06-07T18:19:13.501890"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"event_out","data":{"event_name":"do_print","args":null},"at":"2024-06-07T18:19:15.507291"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"event_in","data":{"event_name":"cancel","args":[]},"at":"2024-06-07T18:19:18.503323"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"event_out","data":{"event_name":"cancel","args":null},"at":"2024-06-07T18:19:18.508331"}
-{"handle":"simple-4d82882a-3a43-459a-abc5-0e8d51c68595","kind":"save","data":"'sent from app' D C B A","at":"2024-06-07T18:19:18.508565"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"save","data":{"payload":"A","counter":-1},"at":"2024-06-12T01:50:10.128539"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"save","data":{"payload":"B A","counter":-1},"at":"2024-06-12T01:50:10.131446"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"sleep","data":null,"at":"2024-06-12T01:50:12.138587"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"save","data":{"payload":"C B A","counter":-1},"at":"2024-06-12T01:50:12.138897"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"event_in","data":{"event_name":"do_print","args":["'sent from app'"]},"at":"2024-06-12T01:50:13.130639"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"event_out","data":{"event_name":"do_print","args":null},"at":"2024-06-12T01:50:15.140101"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"event_in","data":{"event_name":"cancel","args":[]},"at":"2024-06-12T01:50:18.134764"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"event_out","data":{"event_name":"cancel","args":null},"at":"2024-06-12T01:50:18.142361"}
+{"handle":"example_simple-f3882f32-150f-4f0d-885d-da3fb357a0b0","kind":"save","data":{"payload":"'sent from app' D C B A","counter":-1},"at":"2024-06-12T01:50:18.142722"}
