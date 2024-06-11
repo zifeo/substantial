@@ -23,14 +23,22 @@ class EventData:
     args: Optional[List[Any]]
 
 @dataclass
+class SaveData:
+    payload: any
+    counter: int
+
+@dataclass
 class Log:
     handle: str
     kind: LogKind
     data: Union[Any, None]
     at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
     def normalize_data(self):
-        if isinstance(self.data, dict) and "event_name" in self.data and "args" in self.data:
-            self.data = EventData(self.data["event_name"], self.data["args"])
+        if isinstance(self.data, dict):
+            if "event_name" in self.data and "args" in self.data:
+                self.data = EventData(self.data["event_name"], self.data["args"])
+            elif "data" in self.data and "counter" in self.data:
+                self.data = SaveData(self.data["counter"])
 
 @dataclass
 class Event:
@@ -45,15 +53,17 @@ class Interrupt(BaseException):
     def __init__(self, hint: Union[str, None] = None) -> None:
         self.hint = hint or ""
 
+class RetryMode(BaseException):
+    hint: str
+    def __init__(self, hint: Union[str, None] = None) -> None:
+        self.hint = hint or ""
+
 class CancelWorkflow(BaseException):
     hint: str
     def __init__(self, hint: Union[str, None] = None) -> None:
         self.hint = hint or ""
 
 class AppError(BaseException):
-    pass
-
-class ProgramError(BaseException):
     pass
 
 @dataclass
@@ -75,7 +85,7 @@ class RetryStrategy:
         elif low is not None and high is None:
             self.max_backoff_interval = low + 10
         elif low is None and high is not None:
-            self.initial_backoff_interval = math.max(0, self.max_backoff_interval - 10)
+            self.initial_backoff_interval = max(0, self.max_backoff_interval - 10)
 
     def linear(self, retries_left: int) -> int:
         """ Scaled timeout in seconds """
@@ -90,37 +100,31 @@ class ValueEval:
     timeout: Union[int, None]
     retry_strategy: Union[RetryStrategy, None]
 
-    async def exec(self) -> Any:
+    async def exec(self, ctx, counter) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3,
             initial_backoff_interval=0,
             max_backoff_interval=10
         )
-        errors = []
-        retries_left = strategy.max_retries
 
-        while retries_left > 0:
-            try:
-                op = self.lambda_fn()
-                if inspect.iscoroutine(op):
-                    return await asyncio.wait_for(op, self.timeout)
-                elif not inspect.isfunction(op):
-                    return op
-                else:
-                    raise ProgramError(f"Expected value or coroutine object, got {type(op)} instead")
-            except Exception as e:
-                print(f"Retries => {retries_left}, exec timeout {self.timeout}")
-                # if isinstance(e, TimeoutError):
-                #     print("Timeout")
-
-                if not isinstance(e, ProgramError):
-                    errors.append(e)
-                    backoff = strategy.linear(retries_left)
-                    print(f"backoff {backoff}s: {str(e)}")
-                    await asyncio.sleep(backoff)
-            finally:
-                retries_left -= 1
-        raise AppError(e)
+        try:
+            op = self.lambda_fn()
+            if inspect.iscoroutine(op):
+                return await asyncio.wait_for(op, self.timeout)
+            elif not inspect.isfunction(op):
+                return op
+            else:
+                raise Exception(f"Expected value or coroutine object, got {type(op)} instead")
+        except Exception as e:
+            counter = counter or 1
+            retries_left = strategy.max_retries - counter
+            if retries_left > 0:
+                ctx.source(LogKind.Save, SaveData(None, counter + 1))
+                backoff = strategy.linear(retries_left)
+                await asyncio.sleep(backoff)
+                raise RetryMode
+            else:
+                raise e
 
 
 Empty: Any = object()

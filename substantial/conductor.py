@@ -4,7 +4,7 @@ import json
 import os
 from typing import Dict, List
 
-from substantial.types import CancelWorkflow, Empty, Event, EventData, Interrupt, Log, LogKind
+from substantial.types import CancelWorkflow, Empty, Event, EventData, Interrupt, Log, LogKind, RetryMode
 from substantial.workflow import WorkflowRun, Workflow
 from pydantic import RootModel
 from pydantic.tools import parse_obj_as
@@ -178,12 +178,18 @@ class SubstantialMemoryConductor(Backend):
                 return ret
             except Interrupt as interrupt:
                 print(f"Interrupted: {interrupt.hint}")
-                asyncio.create_task(
+                await asyncio.create_task(
                     self.schedule_later(self.workflows, workflow_run, 3)
+                )
+            except RetryMode as retry:
+                print("Retry")
+                await asyncio.create_task(
+                    self.schedule_later(self.workflows, workflow_run, 1)
                 )
             except CancelWorkflow as cancel:
                 print(f"Cancelled workflow: {cancel.hint}")
             except Exception as e:
                 print(f"Workflow error: {e}")
+                # raise e
                 # retry
             self.workflows.task_done()

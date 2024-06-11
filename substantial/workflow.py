@@ -9,7 +9,7 @@ from datetime import timedelta
 
 if TYPE_CHECKING:
     from substantial.conductor import Backend
-from substantial.types import AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, ValueEval, Empty, RetryStrategy
+from substantial.types import AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, SaveData, ValueEval, Empty, RetryStrategy
 
 
 class WorkflowRun:
@@ -62,7 +62,7 @@ class Context:
     def __init__(
         self,
         handle: str,
-        backend_event_logger, # TODO: memory for now, should be typed with an interface later
+        backend_event_logger,
         run_logs: List[Log],
         event_logs: List[Log],
     ):
@@ -84,7 +84,26 @@ class Context:
         while True:
             event = next(logs, Empty)
             if event is Empty or event.kind == kind:
+                if event is not Empty and event.kind == LogKind.Save:
+                    assert isinstance(event.data, SaveData)
+                    if event.data.counter != -1:
+                        # front value is still in retry mode
+                        while True:
+                            # popfront till we get the Save with the highest counter
+                            peek_next = next(logs, Empty)
+                            if peek_next is Empty:
+                                print("latest", event)
+                                break
+                            elif peek_next.data.counter != -1 and peek_next.kind == LogKind.Save:
+                                event = peek_next
+                    else:
+                        # front value has been resolved and saved properly
+                        pass
                 break
+        # At this stage `event` should be
+        # 1. The latest retry Save if kind.Save == Save with highest retry counter 
+        # 2. the matching kind of Event 
+        # 3. or Empty
         return event
 
     async def save(
@@ -95,17 +114,30 @@ class Context:
         retry_strategy: Union[RetryStrategy, None] = None
     ) -> Any:
         """ Force idempotency on `callable` and add `ValueEval` like behavior """
+        timeout_secs = timeout.total_seconds() if timeout is not None else None
+        evaluator = ValueEval(callable, timeout_secs, retry_strategy)
+
         val = self.__unqueue_up_to(LogKind.Save)
         if val is Empty:
-            timeout_secs = timeout.total_seconds() if timeout is not None else None
-            value_eval = ValueEval(callable, timeout_secs, retry_strategy)
-            val = await value_eval.exec()
-            self.source(LogKind.Save, val)
+            val = await evaluator.exec(self, None)
+            self.source(LogKind.Save, SaveData(val, -1))
             return val
         else:
-            self.source(LogKind.Meta, f"reused {val.data}")
-            return val.data
-    
+            assert isinstance(val.data, SaveData)
+            val.normalize_data()
+            counter = val.data.counter
+            payload = val.data.payload
+            if counter != -1 and payload is None:
+                # retry mode (after replay)
+                val = await evaluator.exec(self, counter)
+                self.source(LogKind.Save, SaveData(val, -1))
+                return payload
+            else:
+                # resolved mode
+                print("Attempt saving", val.data)
+                self.source(LogKind.Meta, f"reused {val.data.payload}")
+                return payload
+
     async def sleep(self, duration: timedelta) -> Any:
         seconds = duration.total_seconds()
         if seconds <= 0:

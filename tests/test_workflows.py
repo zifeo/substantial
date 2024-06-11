@@ -6,6 +6,7 @@ import time
 import pytest
 from dataclasses import dataclass
 from substantial.task_queue import MultithreadedQueue
+from substantial.types import RetryStrategy
 from tests.utils import LogFilter, TimeStep, WorkflowTest, make_sync, asyncio_fun
 
 from substantial.workflow import workflow, Context
@@ -113,3 +114,26 @@ async def test_multiple_workflows_parallel():
     assert duration < 6.2
  
 
+@asyncio_fun
+async def test_failing_workflow_with_retry():
+    def failing_op():
+        raise Exception("UNREACHABLE")
+
+    retries = 3
+    @workflow()
+    async def failing_workflow(c: Context, name):
+        _not_failing1 = await c.save(lambda: "A") 
+        r1 = await c.save(
+            lambda: failing_op(),
+            retry_strategy=RetryStrategy(
+                max_retries=retries,
+                initial_backoff_interval=1,
+                max_backoff_interval=5
+            )
+        )
+        return r1
+
+    s = WorkflowTest().step().timeout(5)
+    s = await s.exec_workflow(failing_workflow)
+    retries_accounting_first_run = retries - 1
+    assert len(s.get_logs(LogFilter.runs)) == (1 + retries_accounting_first_run)

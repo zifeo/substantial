@@ -73,9 +73,9 @@ class WorkflowTest:
         if len(other) == 0:
             raise Exception(f"Cannot compare empty logs to logs of size {len(res)}")
         if isinstance(res[0], Log):
-            res = [log.data for log in res]
+            res = [log.data.payload for log in res]
         if isinstance(other[0], Log):
-            other = [log.data for log in other]
+            other = [log.data.payload for log in other]
         assert res == other
 
         return self
@@ -126,7 +126,7 @@ class WorkflowTest:
 
 
 def make_sync(fn: any) -> any:
-    # Naive impl may run it from a running event loop
+    # Naive impl will run it in the ongoing event loop
     # return asyncio.run(fn())
     def syncified():
         with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
