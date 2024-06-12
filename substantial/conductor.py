@@ -1,76 +1,10 @@
 import asyncio
 from dataclasses import dataclass
-import json
-import os
-from typing import Dict, List
+from typing import List
 
+from substantial.log_recorder import Recorder
 from substantial.types import CancelWorkflow, Empty, Event, EventData, Interrupt, Log, LogKind, RetryMode
 from substantial.workflow import WorkflowRun, Workflow
-from pydantic import RootModel
-from pydantic.tools import parse_obj_as
-
-class Recorder:
-    logs: Dict[str, List[Log]]
-    events: Dict[str, List[Log]]
-
-    def __init__(self) -> None:
-        self.logs = dict()
-        self.events = dict()
-
-    def record(self, handle: str, log: Log):
-        action_kinds = [LogKind.Save, LogKind.Sleep]
-        event_kinds = [LogKind.EventIn, LogKind.EventOut]
-
-        if log.kind in action_kinds:
-            if handle not in self.logs:
-                self.logs[handle] = []
-            self.logs[handle].append(log)
-        elif log.kind in event_kinds:
-            if handle not in self.events:
-                self.events[handle] = []
-            self.events[handle].append(log)
-
-        if log.kind in (action_kinds + event_kinds):
-            self.persist(handle, log)
-        else:
-            print(f"{log.kind} received but not persisted")
-
-    def get_recorded_runs(self, handle: str) -> List[Log]:
-        if handle not in self.logs:
-            self.logs[handle] = []
-        return self.logs[handle]
-
-    def get_recorded_events(self, handle: str) -> List[Log]:
-        if handle not in self.events:
-            self.events[handle] = []
-        return self.events[handle]
-
-    def persist(self, handle: str, log: Log):
-        with open(f"logs/{handle}", "a") as file:
-            file.write(f"{RootModel[Log](log).model_dump_json()}\n")
-
-    def recover_from_file(self, filename: str, handle: str):
-        if os.path.exists(filename):
-            if len(self.logs) > 0:
-                raise Exception("Invalid state: cannot recover from non empty logs")
-
-            # ignore handle field by default
-            force_override = True
-            self.logs = dict()
-
-            with open(filename, "r") as file:
-                count = 0
-                print(f"[!] Loading logs from {filename} for {handle}")
-                while line := file.readline():
-                    log: Log = parse_obj_as(Log, json.loads(line.rstrip()))
-                    log.normalize_data()
-                    if not force_override and log.handle != handle:
-                        raise Exception(f"Workflow id is not the same as the one from '{filename}':\n\t'{log.handle}' != '{handle}'")
-                    else:
-                        log.handle = handle
-                    self.record(handle, log)
-                    count += 1
-                print(f"Read {count} lines")
 
 class Backend:
     def get_run_logs(self, handle: str) -> List[Log]:
@@ -101,7 +35,6 @@ class SubstantialMemoryConductor(Backend):
         # mulithreaded safe queues
         self.events = asyncio.Queue()
         self.workflows = asyncio.Queue()
-        self.runs = Recorder()
 
     def register(self, workflow: Workflow):
         self.known_workflows[workflow.id] = workflow
@@ -114,23 +47,23 @@ class SubstantialMemoryConductor(Backend):
     async def send(self, handle: str, event_name: str, *args):
         ret = asyncio.Future()
         data = EventData(event_name, list(args))
-        self.runs.record(handle, Log(handle, LogKind.EventIn, data))
+        Recorder.record(handle, Log(handle, LogKind.EventIn, data))
         await self.events.put(Event(handle, event_name, data, ret))
         return ret
 
     def get_run_logs(self, handle: str):
-        return self.runs.get_recorded_runs(handle)
+        return Recorder.get_recorded_runs(handle)
 
     def get_event_logs(self, handle: str):
-        return self.runs.get_recorded_events(handle)
+        return Recorder.get_recorded_events(handle)
 
     def load_file(self, filename: str, handle: str):
-        self.runs.recover_from_file(filename, handle)
+        Recorder.recover_from_file(filename, handle)
 
     def log(self, log: Log):
         dt = log.at.strftime("%Y-%m-%d %H:%M:%S.%f")
         print(f"{dt} [{log.handle}] {log.kind} {log.data}")
-        self.runs.record(log.handle, log)
+        Recorder.record(log.handle, log)
 
     async def schedule_later(self, queue, task, secs):
         await asyncio.sleep(secs)

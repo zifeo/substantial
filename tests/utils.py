@@ -29,7 +29,6 @@ class WorkflowTest:
     name: str
     event_timeline: List[TimeStep]
     handle: Union[str, None] = None
-    recorder: Union[Recorder, None] = None
 
     def __init__(self) -> None:
         self.timeout_secs = []
@@ -54,16 +53,16 @@ class WorkflowTest:
 
     def get_logs(self, filter: LogFilter):
         if filter.name == LogFilter.runs:
-            return self.recorder.get_recorded_runs(self.handle)
-        return self.recorder.get_recorded_events(self.handle)        
-        
+            return Recorder.get_recorded_runs(self.handle)
+        return Recorder.get_recorded_events(self.handle)
+
     def logs_data_equal(
         self,
         filter: LogFilter,
         other: List[Log] | List[any],
     ):
         res = []
-        if self.recorder is None or self.handle is None:
+        if self.handle is None:
             raise self.error("No workflow has been run prior the call")
 
         res = self.get_logs(filter)
@@ -113,7 +112,6 @@ class WorkflowTest:
         except:
             raise
 
-        self.recorder = substantial.runs
         self.handle = handle 
 
         return self
