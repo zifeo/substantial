@@ -1,7 +1,8 @@
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Union
+import time
+from typing import Dict, List, Union
 
 import pytest
 import uvloop
@@ -15,9 +16,8 @@ class LogFilter(str, Enum):
     Runs = "runs"
 
 @dataclass
-class TimeStep:
+class EventSend:
     event_name: str
-    delta_time: int
     payload: Union[any, None] = None
 
 class StepError(Exception):
@@ -27,12 +27,12 @@ class StepError(Exception):
 class WorkflowTest:
     timeout_secs: int
     name: str
-    event_timeline: List[TimeStep]
+    event_timeline: Dict[float, EventSend]
     handle: Union[str, None] = None
 
     def __init__(self) -> None:
         self.timeout_secs = []
-        self.event_timeline = []
+        self.event_timeline = dict()
 
     def error(self, message: str):
         return StepError(self.name, message)
@@ -47,8 +47,8 @@ class WorkflowTest:
         self.timeout_secs = timeout_secs
         return self
     
-    def timeline(self, time_step: TimeStep):
-        self.event_timeline.append(time_step)
+    def events(self, event_timeline: Dict[float, EventSend]):
+        self.event_timeline = event_timeline
         return self
 
     def get_logs(self, filter: LogFilter):
@@ -103,9 +103,19 @@ class WorkflowTest:
 
         async def go():
             await substantial.start(workflow_run)
-            for ev in self.event_timeline:
-                await asyncio.sleep(ev.delta_time)
-                await signaler.send(ev.event_name, ev.payload)
+            time_prev = 0
+            # 0 ======== t1 ===== t2 ======== t3 ======== .. ===>
+            #   <========>
+            #     t1 - 0
+            #              <=======>
+            #                t2 -t1 
+            # TODO: this should use Recorder directly and write into the file!
+            for (t, event) in self.event_timeline.items():
+                delta_time = t - time_prev
+                time_prev = t
+                await asyncio.sleep(delta_time)
+                # TODO: reimplement with continuous `poll` and rely on `class Recorder(LogSource)` directly for communication
+                await signaler.send(event.event_name, event.payload)
             await backend_exec
 
         try:

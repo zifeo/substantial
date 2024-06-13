@@ -8,7 +8,7 @@ import pytest
 from dataclasses import asdict, dataclass
 from substantial.task_queue import MultithreadedQueue
 from substantial.types import Log, RetryStrategy, SaveData
-from tests.utils import LogFilter, TimeStep, WorkflowTest, make_sync, asyncio_fun
+from tests.utils import EventSend, LogFilter, WorkflowTest, make_sync, asyncio_fun
 
 from substantial.workflow import workflow, Context
 
@@ -17,8 +17,12 @@ from substantial.workflow import workflow, Context
 
 # However, each test are still run sequentially
 
+@pytest.fixture
+def t():
+    return WorkflowTest()
+
 @asyncio_fun
-async def test_simple():
+async def test_simple(t: WorkflowTest):
     @workflow("simple-test")
     async def simple_workflow(c: Context, name):
         async def async_op(v):
@@ -28,7 +32,6 @@ async def test_simple():
         r3 = await c.save(lambda: async_op(r2))
         return r3
 
-    t = WorkflowTest()
     s = await (
         t
         .step()
@@ -42,7 +45,7 @@ async def test_simple():
     )
 
 @asyncio_fun
-async def test_events():
+async def test_events(t: WorkflowTest):
     @dataclass
     class State:
         is_cancelled: bool
@@ -60,19 +63,20 @@ async def test_events():
             r3 = await c.save(lambda: f"{payload} B {r1}")
         return r3
 
-    t = WorkflowTest()
     s = t.step().timeout(10)
     s = await (
         s
-        .timeline(TimeStep("sayHello", 1, "Hello from outside!"))
-        .timeline(TimeStep("cancel", 5))
+        .events({
+            1: EventSend("sayHello", "Hello from outside!"),
+            6: EventSend("cancel")
+        })
         .exec_workflow(event_workflow)
     )
     s.logs_data_equal(LogFilter.Runs, ['A', 'Hello from outside! B A'])
 
 
 @asyncio_fun
-async def test_multiple_workflows_parallel():
+async def test_multiple_workflows_parallel(t: WorkflowTest):
     @workflow()
     async def first(c: Context, name):
         v = await c.save(lambda: "first")
@@ -91,7 +95,6 @@ async def test_multiple_workflows_parallel():
         v = await c.save(lambda: "third")
         return v
 
-    t = WorkflowTest()
     def exec(wf):
         # curryfy is necessary as dill will freeze
         # the arg to latest seen if we iter through `arg in [first, second]` for example
@@ -116,7 +119,7 @@ async def test_multiple_workflows_parallel():
  
 
 @asyncio_fun
-async def test_failing_workflow_with_retry():
+async def test_failing_workflow_with_retry(t: WorkflowTest):
     def failing_op():
         raise Exception("UNREACHABLE")
 
@@ -134,13 +137,13 @@ async def test_failing_workflow_with_retry():
         )
         return r1
 
-    s = WorkflowTest().step().timeout(5)
+    s = t.step().timeout(5)
     s = await s.exec_workflow(failing_workflow)
     retries_accounting_first_run = retries - 1
     assert len(s.get_logs(LogFilter.Runs)) == (1 + retries_accounting_first_run)
 
 @asyncio_fun
-async def test_timeout_with_retries():
+async def test_timeout_with_retries(t: WorkflowTest):
     async def do_wait(v):
         await asyncio.timeout(5)
         return v
@@ -158,7 +161,7 @@ async def test_timeout_with_retries():
             )
         )
 
-    s = WorkflowTest().step().timeout(10)
+    s = t.step().timeout(10)
     s = await s.exec_workflow(workflow_that_fails)
     save_logs: List[Log] = list(filter(lambda l: isinstance(l.data, SaveData), s.get_logs(LogFilter.Runs)))
     save_datas = [asdict(l.data) for l in save_logs]
