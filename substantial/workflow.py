@@ -94,13 +94,14 @@ class Context:
                     if event.data.counter != -1:
                         # front value is still in retry mode
                         while True:
-                            # popfront till we get the Save with the highest counter
+                            # popfront till we get the Save with the highest counter or resolved (-1)
                             peek_next = next(logs, Empty)
                             if peek_next is Empty:
-                                print("latest", event)
                                 break
-                            elif peek_next.data.counter != -1 and peek_next.kind == LogKind.Save:
+                            elif peek_next.kind == LogKind.Save:
                                 event = peek_next
+                                if peek_next.data.counter == -1:
+                                    break
                     else:
                         # front value has been resolved and saved properly
                         pass

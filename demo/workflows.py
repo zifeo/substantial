@@ -10,35 +10,7 @@ retry_strategy = RetryStrategy(
     max_backoff_interval=10
 )
 
-# @workflow(name="continue-example", restore_using="example")
-@workflow()
-async def example_simple(c: Context, name):
-    r1 = await c.save(lambda: step_1())
-    print(r1)
-
-    r2 = await c.save(
-        lambda: step_2(r1),
-        timeout=timedelta(seconds=1),
-        retry_strategy=retry_strategy
-    )
-    print(r2)
-
-    await c.sleep(timedelta(seconds=2))
-
-    r3 = await c.save(lambda: step_3(r2))
-    print(r3)
-
-    n = await c.event("do_print")
-    s = State(is_cancelled=False)
-
-    c.register("cancel", s.update)
-
-    if await c.wait_on(lambda: s.is_cancelled):
-        r4 = await c.save(lambda: step_4(r3, n))
-
-    return r4
-
-@workflow()
+@workflow(name="continue-example222", restore_using="example_retry-9a7cd18a-c082-4d8a-a0b4-3ab09892caf5")
 async def example_retry(c: Context, name):
     a = await c.save(
         lambda: "A",
@@ -61,6 +33,30 @@ async def example_retry(c: Context, name):
     )
     return r1
 
+@workflow()
+async def example_simple(c: Context, name):
+    r1 = await c.save(lambda: step_1())
+    print(r1)
+
+    r2 = await c.save(
+        lambda: step_2(r1),
+        timeout=timedelta(seconds=1),
+        retry_strategy=retry_strategy
+    )
+
+    await c.sleep(timedelta(seconds=2))
+
+    r3 = await c.save(lambda: step_3(r2))
+
+    n = await c.event("do_print")
+    s = State(is_cancelled=False)
+
+    c.register("cancel", s.update)
+
+    if await c.wait_on(lambda: s.is_cancelled):
+        r4 = await c.save(lambda: step_4(r3, n))
+
+    return r4
 
 @dataclass
 class State:
@@ -81,7 +77,7 @@ async def step_3(b):
 async def step_4(b, a):
     return f"{a} D {b}"
 
-def failing_op():
-    if random.random() > 0.7:
+async def failing_op():
+    if random.random() > 0.2:
         raise Exception("random failure")
     return "RESOLVED => SHOULD STOP"
