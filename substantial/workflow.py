@@ -24,13 +24,13 @@ class WorkflowRun:
         self,
         workflow: "Workflow",
         run_id: str,
-        recover_source_id: Union[str, None] = None
+        restore_source_id: Union[str, None] = None
     ):
         self.run_id = run_id
         self.workflow = workflow
         self.replayed = False
-        # self.recovery_source_id = "example"
-        self.recovery_source_id = None
+        # self.restore_source_id = "example"
+        self.restore_source_id = restore_source_id
 
     @property
     def handle(self) -> str:
@@ -38,8 +38,8 @@ class WorkflowRun:
 
     async def replay(self, backend: 'Backend'):
         print("----------------- replay -----------------")
-        if not self.replayed and self.recovery_source_id is not None:
-            log_path = Recorder.get_log_path(self.recover_source_id)
+        if not self.replayed and self.restore_source_id is not None:
+            log_path = Recorder.get_log_path(self.restore_source_id)
             Recorder.recover_from_file(log_path, self.handle)
             self.replayed = True
 
@@ -194,24 +194,26 @@ class Workflow:
         self,
         f: Callable[..., Any],
         workflow_name: Optional[str] = None,
+        restore_source_id: Union[str, None] = None,
         # multiple queues
         # timeout
         # user-defined migration
         # retry track and backoff
     ):
-        if workflow_name is None:
-            workflow_name = f.__name__
-
-        self.id = workflow_name
+        self.id = workflow_name or f.__name__
         self.f = f
+        self.restore_source_id = restore_source_id
 
     def __call__(self):
         run_id = uuid4()
-        return WorkflowRun(self, run_id)
+        return WorkflowRun(self, run_id, self.restore_source_id)
 
 
-def workflow(name: Union[str, None] = None):
+def workflow(
+    name: Union[str, None] = None,
+    restore_using: Union[str, None] = None
+):
     def wrapper(f):
-        return Workflow(f, name or f.__name__)
+        return Workflow(f, name or f.__name__, restore_using)
 
     return wrapper

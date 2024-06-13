@@ -10,6 +10,7 @@ retry_strategy = RetryStrategy(
     max_backoff_interval=10
 )
 
+# @workflow(name="continue-example", restore_using="example")
 @workflow()
 async def example_simple(c: Context, name):
     r1 = await c.save(lambda: step_1())
