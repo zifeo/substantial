@@ -3,10 +3,11 @@
 import asyncio
 from datetime import timedelta
 import time
+from typing import List
 import pytest
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from substantial.task_queue import MultithreadedQueue
-from substantial.types import RetryStrategy
+from substantial.types import Log, RetryStrategy, SaveData
 from tests.utils import LogFilter, TimeStep, WorkflowTest, make_sync, asyncio_fun
 
 from substantial.workflow import workflow, Context
@@ -36,8 +37,8 @@ async def test_simple():
     )
     (
         s
-        .logs_data_equal(LogFilter.runs, ['A', 'B A', 'C B A'])
-        .logs_data_equal(LogFilter.event, [])
+        .logs_data_equal(LogFilter.Runs, ['A', 'B A', 'C B A'])
+        .logs_data_equal(LogFilter.Events, [])
     )
 
 @asyncio_fun
@@ -67,7 +68,7 @@ async def test_events():
         .timeline(TimeStep("cancel", 5))
         .exec_workflow(event_workflow)
     )
-    s.logs_data_equal(LogFilter.runs, ['A', 'Hello from outside! B A'])
+    s.logs_data_equal(LogFilter.Runs, ['A', 'Hello from outside! B A'])
 
 
 @asyncio_fun
@@ -97,7 +98,7 @@ async def test_multiple_workflows_parallel():
         async def test():
             s = t.step().timeout(3)
             s = await s.exec_workflow(wf)
-            return len(s.get_logs(LogFilter.runs))
+            return len(s.get_logs(LogFilter.Runs))
         return test
 
     todos = [make_sync(exec(wf)) for wf in [first, second, third]]
@@ -136,4 +137,34 @@ async def test_failing_workflow_with_retry():
     s = WorkflowTest().step().timeout(5)
     s = await s.exec_workflow(failing_workflow)
     retries_accounting_first_run = retries - 1
-    assert len(s.get_logs(LogFilter.runs)) == (1 + retries_accounting_first_run)
+    assert len(s.get_logs(LogFilter.Runs)) == (1 + retries_accounting_first_run)
+
+@asyncio_fun
+async def test_timeout_with_retries():
+    async def do_wait(v):
+        await asyncio.timeout(5)
+        return v
+
+    @workflow()
+    async def workflow_that_fails(c: Context, name):
+        a = await c.save(lambda: "A")
+        return await c.save(
+            lambda: do_wait(a),
+            timeout=timedelta(seconds=1),
+            retry_strategy=RetryStrategy(
+                max_retries=4,
+                initial_backoff_interval=1,
+                max_backoff_interval=5
+            )
+        )
+
+    s = WorkflowTest().step().timeout(10)
+    s = await s.exec_workflow(workflow_that_fails)
+    save_logs: List[Log] = list(filter(lambda l: isinstance(l.data, SaveData), s.get_logs(LogFilter.Runs)))
+    save_datas = [asdict(l.data) for l in save_logs]
+    assert save_datas == [
+        {'counter': -1, 'payload': 'A'}, # -1 for resolved
+        {'counter': 2, 'payload': None}, # 2nd retry (counter: 1 is not recorded)
+        {'counter': 3, 'payload': None}, # 3rd retry
+        {'counter': 4, 'payload': None}, # 4th retry
+    ]

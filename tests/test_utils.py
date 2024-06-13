@@ -17,7 +17,7 @@ async def test_async():
 async def test_test():
     t = WorkflowTest()
     with pytest.raises(StepError) as info:
-        t.step("A").logs_data_equal(LogFilter.runs, [])
+        t.step("A").logs_data_equal(LogFilter.Runs, [])
     assert info.value.args[0] == "'A': No workflow has been run prior the call"
 
 

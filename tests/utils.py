@@ -11,8 +11,8 @@ from substantial.types import Log
 from substantial.workflow import Workflow
 
 class LogFilter(str, Enum):
-    event = "event"
-    runs = "runs"
+    Events = "events"
+    Runs = "runs"
 
 @dataclass
 class TimeStep:
@@ -52,9 +52,12 @@ class WorkflowTest:
         return self
 
     def get_logs(self, filter: LogFilter):
-        if filter.name == LogFilter.runs:
+        if filter == LogFilter.Runs:
             return Recorder.get_recorded_runs(self.handle)
-        return Recorder.get_recorded_events(self.handle)
+        elif filter == LogFilter.Events:
+            return Recorder.get_recorded_events(self.handle)
+        else:
+            raise Exception(f"Unsupported filter {filter}")
 
     def logs_data_equal(
         self,

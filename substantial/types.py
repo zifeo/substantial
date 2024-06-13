@@ -5,6 +5,7 @@ import math
 
 from datetime import datetime
 from enum import Enum
+import time
 from typing import Any, Callable, List, Optional, Union
 from pydantic import field_serializer, field_validator
 from pydantic.dataclasses import dataclass
@@ -114,10 +115,23 @@ class ValueEval:
         )
 
         try:
-            op = self.lambda_fn()
+            ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
+            before_spawn = time.time()
+            op = self.lambda_fn() # this does not account the case when lambda_fn() is not async
+
             if inspect.iscoroutine(op):
-                return await asyncio.wait_for(op, self.timeout)
+                after_spawn = time.time()
+                elapsed_after_spawn = after_spawn - before_spawn
+                timeout = (
+                    None if self.timeout is None
+                    else max(0.0001, self.timeout - elapsed_after_spawn)
+                )
+                return await asyncio.wait_for(op, timeout)
             elif not inspect.isfunction(op):
+                after_spawn = time.time()
+                elapsed_after_spawn = after_spawn - before_spawn
+                if self.timeout is not None and elapsed_after_spawn > self.timeout:
+                    pass # raise? in a way, op has been resolved at this stage
                 return op
             else:
                 raise Exception(f"Expected value or coroutine object, got {type(op)} instead")

@@ -138,7 +138,6 @@ class Context:
                 return payload
             else:
                 # resolved mode
-                print("Attempt saving", val.data)
                 self.source(LogKind.Meta, f"reused {val.data.payload}")
                 return payload
 
