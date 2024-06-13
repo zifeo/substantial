@@ -13,9 +13,6 @@ class Backend:
     def get_event_logs(self, handle: str) -> List[Log]:
         raise Exception("Not implemented")
     
-    def load_file(self, filename: str, handle: str):
-        raise Exception("Not implemented")
-
     def send(self, handle: str, event_name: str, *args):
         raise Exception("Not implemented")
 
@@ -46,9 +43,9 @@ class SubstantialMemoryConductor(Backend):
 
     async def send(self, handle: str, event_name: str, *args):
         ret = asyncio.Future()
-        data = EventData(event_name, list(args))
-        Recorder.record(handle, Log(handle, LogKind.EventIn, data))
-        await self.events.put(Event(handle, event_name, data, ret))
+        event_data = EventData(event_name, list(args))
+        Recorder.record(handle, Log(handle, LogKind.EventIn, event_data))
+        await self.events.put(Event(handle, event_name, event_data, ret))
         return ret
 
     def get_run_logs(self, handle: str):
@@ -57,13 +54,10 @@ class SubstantialMemoryConductor(Backend):
     def get_event_logs(self, handle: str):
         return Recorder.get_recorded_events(handle)
 
-    def load_file(self, filename: str, handle: str):
-        Recorder.recover_from_file(filename, handle)
-
     def log(self, log: Log):
         dt = log.at.strftime("%Y-%m-%d %H:%M:%S.%f")
-        print(f"{dt} [{log.handle}] {log.kind} {log.data}")
-        Recorder.record(log.handle, log)
+        print(f"{dt} [{log._handle}] {log.kind} {log.data}")
+        Recorder.record(log._handle, log)
 
     async def schedule_later(self, queue, task, secs):
         await asyncio.sleep(secs)
@@ -75,10 +69,10 @@ class SubstantialMemoryConductor(Backend):
         w = asyncio.create_task(self.run_workflows())
         return await asyncio.gather(e, w)
 
-    async def run_as_task(self):
+    # async def run_as_task(self):
         # FIXME: x = backend.run_as_task() has the same effect as x = self.run()
         # vs a direct call at the place where it is used
-        return asyncio.create_task(self.run())
+        # return asyncio.create_task(self.run())
 
     async def run_events(self):
         """ Event loop """

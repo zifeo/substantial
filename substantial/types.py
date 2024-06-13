@@ -6,8 +6,8 @@ import math
 from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, List, Optional, Union
-# from pydantic.dataclasses import dataclass # does not work with futures out of the box
-from dataclasses import dataclass
+from pydantic import field_serializer, field_validator
+from pydantic.dataclasses import dataclass
 import dataclasses
 
 class LogKind(str, Enum):
@@ -24,29 +24,35 @@ class EventData:
 
 @dataclass
 class SaveData:
-    payload: any
+    payload: Any
     counter: int
+
+LogData = Optional[Union[str, SaveData, EventData]]
 
 @dataclass
 class Log:
-    handle: str
+    _handle: str
     kind: LogKind
-    data: Union[Any, None]
+    data: LogData
     at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
-    def normalize_data(self):
-        if isinstance(self.data, dict):
-            if "event_name" in self.data and "args" in self.data:
-                self.data = EventData(self.data["event_name"], self.data["args"])
-            elif "payload" in self.data and "counter" in self.data:
-                self.data = SaveData(self.data["payload"], self.data["counter"])
 
 @dataclass
 class Event:
     handle: str
     name: str
     data: Any
-    future: asyncio.Future
+    future: Any # asyncio.Future
     at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
+
+    @field_serializer("future")
+    @classmethod
+    def serialize_future(cls, val, _info):
+        return None
+
+    @classmethod
+    @field_validator("future")
+    def validate_future(cls, val, _info):
+        return val
 
 class Interrupt(BaseException):
     hint: str

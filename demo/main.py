@@ -2,7 +2,7 @@
 import asyncio
 from substantial.conductor import SubstantialMemoryConductor, HandleSignaler
 
-from workflows import example_simple
+from workflows import example_simple, example_retry
 
 async def same_thread_example():
     substantial = SubstantialMemoryConductor()

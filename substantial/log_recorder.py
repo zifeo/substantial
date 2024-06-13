@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 import json
 from typing import List
-from pydantic import RootModel
-from pydantic.tools import parse_obj_as
+from pydantic import TypeAdapter
+
 import os
 
 from substantial.types import Log, LogKind
@@ -66,8 +66,9 @@ class Recorder(LogSource):
         with open(filepath, "r") as file:
             count = 0
             while line := file.readline():
-                log: Log = parse_obj_as(Log, json.loads(line.rstrip()))
-                log.normalize_data()
+                dc = json.loads(line.rstrip())
+                dc["_handle"] = handle # row does not have _handle field
+                log = TypeAdapter(Log).validate_python(dc)
                 logs.append(log)
                 count += 1
         return logs
@@ -89,18 +90,20 @@ class Recorder(LogSource):
     @staticmethod
     def persist(handle: str, log: Log):
         with open(f"logs/{handle}", "a+") as file:
-            file.write(f"{RootModel[Log](log).model_dump_json()}\n")
+            row = TypeAdapter(Log).dump_json(log, exclude=["_handle"]).decode("utf-8")
+            file.write(f"{row}\n")
 
     @staticmethod
     def recover_from_file(filename: str, handle: str):
+        """ Restore existing logs into a new log file associated with handle """
         if os.path.exists(filename):
             with open(filename, "r") as file:
                 count = 0
                 print(f"[!] Loading logs from {filename} for {handle}")
                 while line := file.readline():
-                    log: Log = parse_obj_as(Log, json.loads(line.rstrip()))
-                    log.normalize_data()
-                    log.handle = handle # force overwrite
+                    dc = json.loads(line.rstrip())
+                    dc["_handle"] = handle
+                    log: Log = TypeAdapter(Log).validate_python(dc)
                     Recorder.record(handle, log)
                     count += 1
                 print(f"Read {count} lines")

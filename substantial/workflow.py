@@ -9,7 +9,8 @@ from datetime import timedelta
 
 if TYPE_CHECKING:
     from substantial.conductor import Backend
-from substantial.types import AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, SaveData, ValueEval, Empty, RetryStrategy
+from substantial.log_recorder import Recorder
+from substantial.types import LogData, AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, SaveData, ValueEval, Empty, RetryStrategy
 
 
 class WorkflowRun:
@@ -22,11 +23,14 @@ class WorkflowRun:
     def __init__(
         self,
         workflow: "Workflow",
-        run_id,
+        run_id: str,
+        recover_source_id: Union[str, None] = None
     ):
         self.run_id = run_id
         self.workflow = workflow
         self.replayed = False
+        # self.recovery_source_id = "example"
+        self.recovery_source_id = None
 
     @property
     def handle(self) -> str:
@@ -34,9 +38,10 @@ class WorkflowRun:
 
     async def replay(self, backend: 'Backend'):
         print("----------------- replay -----------------")
-        # if not self.replayed:
-        #     backend.load_file("logs/example", self.handle)
-        #     self.replayed = True
+        if not self.replayed and self.recovery_source_id is not None:
+            log_path = Recorder.get_log_path(self.recover_source_id)
+            Recorder.recover_from_file(log_path, self.handle)
+            self.replayed = True
 
         run_logs = backend.get_run_logs(self.handle)
         events_logs = backend.get_event_logs(self.handle)
@@ -72,7 +77,7 @@ class Context:
         self.event_logs = iter(event_logs)
         self.events = {}
 
-    def source(self, kind: LogKind, data: any):
+    def source(self, kind: LogKind, data: LogData):
         self.backend_event_logger(Log(self.handle, kind, data))
 
     def __unqueue_up_to(self, kind: LogKind):
@@ -124,7 +129,6 @@ class Context:
             return val
         else:
             assert isinstance(val.data, SaveData)
-            val.normalize_data()
             counter = val.data.counter
             payload = val.data.payload
             if counter != -1 and payload is None:
