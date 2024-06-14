@@ -10,26 +10,25 @@ async def same_thread_example():
     substantial = SubstantialConductor()
     substantial.register(w)
 
-    # Note: `create_task` makes sure substantial.run executes async
-    # all await calls that happens after will run in parallel to this task
-    execution = asyncio.create_task(substantial.run())
-
     workflow_run = w()
 
     handle = await substantial.start(workflow_run)
 
+    workflow_output, _ = await asyncio.gather(
+        substantial.run(),
+        event_timeline(EventEmitter(handle))
+    )
+
+    print("Final output", workflow_output)
+
+
+async def event_timeline(emitter: EventEmitter):
     await asyncio.sleep(3) # just pick a big enough delay (we have sleep(1) on the example workflow)
-
-    signaler = EventEmitter(handle)
-
     print("Sending...")
-    print(await signaler.send("do_print", "'sent from app'"))
+    print(await emitter.send("do_print", "'sent from app'"))
 
     await asyncio.sleep(5)
     print("Cancelling...")
-    print(await signaler.send("cancel"))
-
-    await execution
-
+    print(await emitter.send("cancel"))
 
 asyncio.run(same_thread_example())

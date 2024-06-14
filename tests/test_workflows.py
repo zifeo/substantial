@@ -71,7 +71,8 @@ async def test_events(t: WorkflowTest):
         })
         .exec_workflow(event_workflow, 10)
     )
-    s.logs_data_equal(LogFilter.Runs, ['A', 'Hello from outside! B A'])
+    s.logs_data_equal(LogFilter.Runs, ["A", "Hello from outside! B A"])
+    assert s.workflow_output == "Hello from outside! B A"
 
 
 @asyncio_fun
@@ -137,7 +138,7 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
         return r1
 
     s = t.step()
-    s = await s.exec_workflow(failing_workflow, 5)
+    s = await s.expects_timeout().exec_workflow(failing_workflow, 5)
     retries_accounting_first_run = retries - 1
     assert len(s.get_logs(LogFilter.Runs)) == (1 + retries_accounting_first_run)
 
@@ -161,7 +162,7 @@ async def test_timeout_with_retries(t: WorkflowTest):
         )
 
     s = t.step()
-    s = await s.exec_workflow(workflow_that_fails, 10)
+    s = await s.expects_timeout().exec_workflow(workflow_that_fails, 10)
     save_logs: List[Log] = list(filter(lambda l: isinstance(l.data, SaveData), s.get_logs(LogFilter.Runs)))
     save_datas = [asdict(l.data) for l in save_logs]
     assert save_datas == [

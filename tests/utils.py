@@ -28,6 +28,9 @@ class WorkflowTest:
     name: str
     event_timeline: Dict[float, EventSend]
     handle: Union[str, None] = None
+    workflow_output: Union[any, None] = None
+    timed_out: bool = False
+    expect_timed_out: bool = False
 
     def __init__(self) -> None:
         self.event_timeline = dict()
@@ -76,15 +79,9 @@ class WorkflowTest:
 
         return self
 
-    async def logs_run_within(
-        self,
-        logs: List[Log],
-        delta_time_secs: List[int] | int
-    ):
-        """ Compare elapsed time in between two rows """
-        # idea: run a workflow multiple times, keep the recorded runs
-        # then compare
-        raise Exception("TODO")
+    def expects_timeout(self):
+        self.timed_out_expected = True
+        return self
 
     async def exec_workflow(
         self,
@@ -93,38 +90,39 @@ class WorkflowTest:
     ):
         substantial = SubstantialConductor()
         substantial.register(workflow)
-        backend_exec = asyncio.create_task(substantial.run())
 
         workflow_run = workflow()
         handle = workflow_run.handle
-        signaler = EventEmitter(handle)
+        _ = await substantial.start(workflow_run)
 
-        async def go():
-            await substantial.start(workflow_run)
-            time_prev = 0
+        emitter = EventEmitter(handle)
+        async def event_timeline():
             # 0 ======== t1 ===== t2 ======== t3 ======== .. ===>
             #   <========>
-            #     t1 - 0
-            #              <=======>
-            #                t2 -t1 
-            # TODO: this should use Recorder directly and write into the file!
+            #     t1 - 0  <=======>
+            #               t2 -t1
+            time_prev = 0
             for (t, event) in self.event_timeline.items():
                 delta_time = t - time_prev
                 time_prev = t
                 await asyncio.sleep(delta_time)
-                # TODO: reimplement with continuous `poll` and rely on `class Recorder(LogSource)` directly for communication
-                await signaler.send(event.event_name, event.payload)
-            await backend_exec
+                await emitter.send(event.event_name, event.payload)
 
         try:
-            await asyncio.wait_for(go(), timeout_secs)
+            workflow_output, _ = await asyncio.gather(
+                asyncio.wait_for(substantial.run(), timeout_secs), # wrapped in a task
+                event_timeline()
+            )
+
+            self.workflow_output = workflow_output
         except TimeoutError:
-            pass
+            self.timed_out = True
+            if not self.timed_out_expected:
+                raise
         except:
             raise
 
-        self.handle = handle 
-
+        self.handle = handle
         return self
 
     # async def replay(self, count: int):

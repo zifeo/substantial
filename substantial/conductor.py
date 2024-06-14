@@ -41,7 +41,7 @@ class SubstantialConductor:
     async def run(self):
         w = asyncio.create_task(self.run_workflows())
         # return w # FIXME: not working?
-        return await asyncio.gather(w)
+        return (await asyncio.gather(w))[0]
 
     async def run_workflows(self):
         while True:

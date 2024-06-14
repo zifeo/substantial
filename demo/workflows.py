@@ -34,6 +34,7 @@ async def failing_op():
         raise Exception("random failure")
     return "RESOLVED => SHOULD STOP"
 
+# @workflow(restore_using="example_simple-6fa7eb9b-53d1-4926-a5dd-98e19b96e5d1")
 @workflow()
 async def example_simple(c: Context, name):
     retry_strategy = RetryStrategy(
