@@ -7,7 +7,7 @@ from typing import Dict, List, Union
 import pytest
 import uvloop
 
-from substantial.conductor import HandleSignaler, Recorder, SubstantialMemoryConductor
+from substantial.conductor import HandleSignaler, Recorder, SubstantialConductor
 from substantial.types import Log
 from substantial.workflow import Workflow
 
@@ -93,7 +93,7 @@ class WorkflowTest:
         raise Exception("TODO")
 
     async def exec_workflow(self, workflow: Workflow):
-        substantial = SubstantialMemoryConductor()
+        substantial = SubstantialConductor()
         substantial.register(workflow)
         backend_exec = asyncio.create_task(substantial.run())
 

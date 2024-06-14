@@ -8,7 +8,7 @@ from uuid import uuid4
 from datetime import timedelta
 
 if TYPE_CHECKING:
-    from substantial.conductor import Backend
+    from substantial.conductor import SubstantialConductor
 from substantial.log_recorder import Recorder
 from substantial.types import LogData, AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, SaveData, ValueEval, Empty, RetryStrategy
 
@@ -36,17 +36,17 @@ class WorkflowRun:
     def handle(self) -> str:
         return f"{self.workflow.id}-{self.run_id}"
 
-    async def replay(self, backend: 'Backend'):
+    async def replay(self, conductor: 'SubstantialConductor'):
         print("----------------- replay -----------------")
         if not self.replayed and self.restore_source_id is not None:
             log_path = Recorder.get_log_path(self.restore_source_id)
             Recorder.recover_from_file(log_path, self.handle)
             self.replayed = True
 
-        run_logs = backend.get_run_logs(self.handle)
-        events_logs = backend.get_event_logs(self.handle)
+        run_logs = conductor.get_run_logs(self.handle)
+        events_logs = conductor.get_event_logs(self.handle)
 
-        ctx = Context(self.handle, backend.log, run_logs, events_logs)
+        ctx = Context(self.handle, conductor.log, run_logs, events_logs)
         ctx.source(LogKind.Meta, f"replaying ...")
         try:
             ret = await self.workflow.f(ctx, self.workflow.id)

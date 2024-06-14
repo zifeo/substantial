@@ -6,26 +6,7 @@ from substantial.log_recorder import Recorder
 from substantial.types import CancelWorkflow, Empty, Event, EventData, Interrupt, Log, LogKind, RetryMode
 from substantial.workflow import WorkflowRun, Workflow
 
-class Backend:
-    def get_run_logs(self, handle: str) -> List[Log]:
-        raise Exception("Not implemented")
-
-    def get_event_logs(self, handle: str) -> List[Log]:
-        raise Exception("Not implemented")
-    
-    def send(self, handle: str, event_name: str, *args):
-        raise Exception("Not implemented")
-
-@dataclass
-class HandleSignaler:
-    """ Simple wrapper for backend.send(handle, event, *args) """
-    handle: str
-    backend: Backend
-    async def send(self, event_name, *args):
-        return await self.backend.send(self.handle, event_name, *args)
-
-
-class SubstantialMemoryConductor(Backend):
+class SubstantialConductor:
     def __init__(self):
         # num workers
         self.known_workflows = {}
@@ -120,3 +101,12 @@ class SubstantialMemoryConductor(Backend):
                 # raise e
                 # retry
             self.workflows.task_done()
+
+@dataclass
+class HandleSignaler:
+    """ Simple wrapper for backend.send(handle, event, *args) """
+    handle: str
+    backend: 'SubstantialConductor'
+    async def send(self, event_name, *args):
+        return await self.backend.send(self.handle, event_name, *args)
+
