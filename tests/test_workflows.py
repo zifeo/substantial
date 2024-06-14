@@ -35,8 +35,7 @@ async def test_simple(t: WorkflowTest):
     s = await (
         t
         .step()
-        .timeout(3)
-        .exec_workflow(simple_workflow)
+        .exec_workflow(simple_workflow, 3)
     )
     (
         s
@@ -63,14 +62,14 @@ async def test_events(t: WorkflowTest):
             r3 = await c.save(lambda: f"{payload} B {r1}")
         return r3
 
-    s = t.step().timeout(10)
+    s = t.step()
     s = await (
         s
         .events({
             1: EventSend("sayHello", "Hello from outside!"),
             6: EventSend("cancel")
         })
-        .exec_workflow(event_workflow)
+        .exec_workflow(event_workflow, 10)
     )
     s.logs_data_equal(LogFilter.Runs, ['A', 'Hello from outside! B A'])
 
@@ -99,8 +98,8 @@ async def test_multiple_workflows_parallel(t: WorkflowTest):
         # curryfy is necessary as dill will freeze
         # the arg to latest seen if we iter through `arg in [first, second]` for example
         async def test():
-            s = t.step().timeout(3)
-            s = await s.exec_workflow(wf)
+            s = t.step()
+            s = await s.exec_workflow(wf, 3)
             return len(s.get_logs(LogFilter.Runs))
         return test
 
@@ -137,8 +136,8 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
         )
         return r1
 
-    s = t.step().timeout(5)
-    s = await s.exec_workflow(failing_workflow)
+    s = t.step()
+    s = await s.exec_workflow(failing_workflow, 5)
     retries_accounting_first_run = retries - 1
     assert len(s.get_logs(LogFilter.Runs)) == (1 + retries_accounting_first_run)
 
@@ -161,8 +160,8 @@ async def test_timeout_with_retries(t: WorkflowTest):
             )
         )
 
-    s = t.step().timeout(10)
-    s = await s.exec_workflow(workflow_that_fails)
+    s = t.step()
+    s = await s.exec_workflow(workflow_that_fails, 10)
     save_logs: List[Log] = list(filter(lambda l: isinstance(l.data, SaveData), s.get_logs(LogFilter.Runs)))
     save_datas = [asdict(l.data) for l in save_logs]
     assert save_datas == [

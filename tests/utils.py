@@ -25,13 +25,11 @@ class StepError(Exception):
         super().__init__(f"'{step}': {message}")
 
 class WorkflowTest:
-    timeout_secs: int
     name: str
     event_timeline: Dict[float, EventSend]
     handle: Union[str, None] = None
 
     def __init__(self) -> None:
-        self.timeout_secs = []
         self.event_timeline = dict()
 
     def error(self, message: str):
@@ -43,10 +41,6 @@ class WorkflowTest:
         runner.name = name or "<unnamed>"
         return runner
 
-    def timeout(self, timeout_secs: int):
-        self.timeout_secs = timeout_secs
-        return self
-    
     def events(self, event_timeline: Dict[float, EventSend]):
         self.event_timeline = event_timeline
         return self
@@ -92,7 +86,11 @@ class WorkflowTest:
         # then compare
         raise Exception("TODO")
 
-    async def exec_workflow(self, workflow: Workflow):
+    async def exec_workflow(
+        self,
+        workflow: Workflow,
+        timeout_secs: Union[float, None] = 120
+    ):
         substantial = SubstantialConductor()
         substantial.register(workflow)
         backend_exec = asyncio.create_task(substantial.run())
@@ -119,7 +117,7 @@ class WorkflowTest:
             await backend_exec
 
         try:
-            await asyncio.wait_for(go(), self.timeout_secs)
+            await asyncio.wait_for(go(), timeout_secs)
         except TimeoutError:
             pass
         except:
