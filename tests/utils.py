@@ -7,7 +7,7 @@ from typing import Dict, List, Union
 import pytest
 import uvloop
 
-from substantial.conductor import HandleSignaler, Recorder, SubstantialConductor
+from substantial.conductor import EventEmitter, Recorder, SubstantialConductor
 from substantial.types import Log
 from substantial.workflow import Workflow
 
@@ -97,7 +97,7 @@ class WorkflowTest:
 
         workflow_run = workflow()
         handle = workflow_run.handle
-        signaler = HandleSignaler(handle, substantial)
+        signaler = EventEmitter(handle, substantial)
 
         async def go():
             await substantial.start(workflow_run)

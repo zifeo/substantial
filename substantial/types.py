@@ -37,24 +37,6 @@ class Log:
     data: LogData
     at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
 
-@dataclass
-class Event:
-    handle: str
-    name: str
-    data: Any
-    future: Any # asyncio.Future
-    at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
-
-    @field_serializer("future")
-    @classmethod
-    def serialize_future(cls, val, _info):
-        return None
-
-    @classmethod
-    @field_validator("future")
-    def validate_future(cls, val, _info):
-        return val
-
 class Interrupt(BaseException):
     hint: str
     def __init__(self, hint: Union[str, None] = None) -> None:

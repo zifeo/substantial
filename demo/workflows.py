@@ -34,11 +34,34 @@ async def failing_op():
         raise Exception("random failure")
     return "RESOLVED => SHOULD STOP"
 
-retry_strategy = RetryStrategy(
-    max_retries=3,
-    initial_backoff_interval=1,
-    max_backoff_interval=10
-)
+@workflow()
+async def example_simple(c: Context, name):
+    retry_strategy = RetryStrategy(
+        max_retries=3,
+        initial_backoff_interval=1,
+        max_backoff_interval=10
+    )
+
+    r1 = await c.save(lambda: step_1())
+    r2 = await c.save(
+        lambda: step_2(r1),
+        timeout=timedelta(seconds=1),
+        retry_strategy=retry_strategy
+    )
+
+    await c.sleep(timedelta(seconds=2))
+
+    r3 = await c.save(lambda: step_3(r2))
+
+    n = await c.event("do_print")
+    # s = State(is_cancelled=False)
+
+    # c.register("cancel", s.update)
+
+    # if await c.wait_on(lambda: s.is_cancelled):
+    #     r4 = await c.save(lambda: step_4(r3, n))
+
+    return n
 
 @dataclass
 class State:

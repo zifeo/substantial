@@ -1,10 +1,10 @@
 # Equiv. server + worker
 import asyncio
-from substantial.conductor import SubstantialConductor, HandleSignaler
+from substantial.conductor import SubstantialConductor, EventEmitter
 
-from workflows import example_retry
+from workflows import example_retry, example_simple
 
-w = example_retry
+w = example_simple
 
 async def same_thread_example():
     substantial = SubstantialConductor()
@@ -20,14 +20,14 @@ async def same_thread_example():
 
     await asyncio.sleep(3) # just pick a big enough delay (we have sleep(1) on the example workflow)
 
-    signaler = HandleSignaler(handle, substantial)
+    signaler = EventEmitter(handle, substantial)
 
-    # print("Sending...")
-    # print(await signaler.send("do_print", "'sent from app'"))
+    print("Sending...")
+    print(await signaler.send("do_print", "'sent from app'"))
 
-    # await asyncio.sleep(5)
-    # print("Cancelling...")
-    # print(await signaler.send("cancel"))
+    await asyncio.sleep(5)
+    print("Cancelling...")
+    print(await signaler.send("cancel"))
 
     await execution
 

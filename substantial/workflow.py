@@ -108,7 +108,7 @@ class Context:
                 break
         # At this stage `event` should be
         # 1. The latest retry Save if kind.Save == Save with highest retry counter 
-        # 2. the matching kind of Event 
+        # 2. or the matching kind of Event 
         # 3. or Empty
         return event
 
@@ -174,7 +174,7 @@ class Context:
 
         result = condition()
         if not result:
-            raise Interrupt("wait => not condition")
+            raise Interrupt("wait => condition is still false")
         return result
 
     async def event(self, event_name: str):
@@ -195,6 +195,7 @@ class Workflow:
         f: Callable[..., Any],
         workflow_name: Optional[str] = None,
         restore_source_id: Union[str, None] = None,
+        use_name_only: bool = False
         # multiple queues
         # timeout
         # user-defined migration
@@ -203,17 +204,19 @@ class Workflow:
         self.id = workflow_name or f.__name__
         self.f = f
         self.restore_source_id = restore_source_id
+        self.use_name_only = use_name_only
 
     def __call__(self):
-        run_id = uuid4()
+        run_id = uuid4() if not self.use_name_only else ""
         return WorkflowRun(self, run_id, self.restore_source_id)
 
 
 def workflow(
     name: Union[str, None] = None,
-    restore_using: Union[str, None] = None
+    restore_using: Union[str, None] = None,
+    use_name_only: bool = False,
 ):
     def wrapper(f):
-        return Workflow(f, name or f.__name__, restore_using)
+        return Workflow(f, name or f.__name__, restore_using, use_name_only)
 
     return wrapper

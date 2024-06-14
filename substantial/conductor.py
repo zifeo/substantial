@@ -1,17 +1,18 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import List
 
 from substantial.log_recorder import Recorder
-from substantial.types import CancelWorkflow, Empty, Event, EventData, Interrupt, Log, LogKind, RetryMode
+from substantial.types import CancelWorkflow, Empty, EventData, Interrupt, Log, LogKind, RetryMode
 from substantial.workflow import WorkflowRun, Workflow
+
 
 class SubstantialConductor:
     def __init__(self):
         # num workers
         self.known_workflows = {}
         # mulithreaded safe queues
-        self.events = asyncio.Queue()
         self.workflows = asyncio.Queue()
 
     def register(self, workflow: Workflow):
@@ -21,13 +22,6 @@ class SubstantialConductor:
         """ Put `workflow_run` into the workflow queue and return the `handle` """
         await self.workflows.put(workflow_run)
         return workflow_run.handle
-
-    async def send(self, handle: str, event_name: str, *args):
-        ret = asyncio.Future()
-        event_data = EventData(event_name, list(args))
-        Recorder.record(handle, Log(handle, LogKind.EventIn, event_data))
-        await self.events.put(Event(handle, event_name, event_data, ret))
-        return ret
 
     def get_run_logs(self, handle: str):
         return Recorder.get_recorded_runs(handle)
@@ -45,38 +39,9 @@ class SubstantialConductor:
         await queue.put(task)
 
     async def run(self):
-        # TODO: use task_queue?
-        e = asyncio.create_task(self.run_events())
+        e = asyncio.create_task(self.run_events(timedelta(0.5)))
         w = asyncio.create_task(self.run_workflows())
         return await asyncio.gather(e, w)
-
-    # async def run_as_task(self):
-        # FIXME: x = backend.run_as_task() has the same effect as x = self.run()
-        # vs a direct call at the place where it is used
-        # return asyncio.create_task(self.run())
-
-    async def run_events(self):
-        """ Event loop """
-        while True:
-            # Note: if empty, this will block and wait otherwise process the latest
-            event: Event = await self.events.get()
-            event_logs = self.get_event_logs(event.handle)
-
-            res = Empty
-            for log in event_logs[::-1]:
-                if log.kind == LogKind.EventOut:
-                    data: EventData = log.data
-                    if data.event_name == event.name:
-                        res = data.args
-                        break
-
-            if res is Empty:
-                asyncio.create_task(self.schedule_later(self.events, event, 2))
-            else:
-                event.future.set_result(event.data)
-                event.future.done()
-
-            self.events.task_done()
 
     async def run_workflows(self):
         while True:
@@ -103,10 +68,8 @@ class SubstantialConductor:
             self.workflows.task_done()
 
 @dataclass
-class HandleSignaler:
-    """ Simple wrapper for backend.send(handle, event, *args) """
+class EventEmitter:
     handle: str
-    backend: 'SubstantialConductor'
     async def send(self, event_name, *args):
-        return await self.backend.send(self.handle, event_name, *args)
-
+        event_data = EventData(event_name, list(args))
+        Recorder.record(self.handle, Log(self.handle, LogKind.EventIn, event_data))
