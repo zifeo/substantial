@@ -39,9 +39,9 @@ class SubstantialConductor:
         await queue.put(task)
 
     async def run(self):
-        e = asyncio.create_task(self.run_events(timedelta(0.5)))
         w = asyncio.create_task(self.run_workflows())
-        return await asyncio.gather(e, w)
+        # return w # FIXME: not working?
+        return await asyncio.gather(w)
 
     async def run_workflows(self):
         while True:

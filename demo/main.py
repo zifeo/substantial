@@ -20,7 +20,7 @@ async def same_thread_example():
 
     await asyncio.sleep(3) # just pick a big enough delay (we have sleep(1) on the example workflow)
 
-    signaler = EventEmitter(handle, substantial)
+    signaler = EventEmitter(handle)
 
     print("Sending...")
     print(await signaler.send("do_print", "'sent from app'"))

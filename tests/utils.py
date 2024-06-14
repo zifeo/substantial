@@ -97,7 +97,7 @@ class WorkflowTest:
 
         workflow_run = workflow()
         handle = workflow_run.handle
-        signaler = EventEmitter(handle, substantial)
+        signaler = EventEmitter(handle)
 
         async def go():
             await substantial.start(workflow_run)

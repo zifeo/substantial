@@ -54,14 +54,14 @@ async def example_simple(c: Context, name):
     r3 = await c.save(lambda: step_3(r2))
 
     n = await c.event("do_print")
-    # s = State(is_cancelled=False)
+    s = State(is_cancelled=False)
 
-    # c.register("cancel", s.update)
+    c.register("cancel", s.update)
 
-    # if await c.wait_on(lambda: s.is_cancelled):
-    #     r4 = await c.save(lambda: step_4(r3, n))
+    if await c.wait_on(lambda: s.is_cancelled):
+        r4 = await c.save(lambda: step_4(r3, n))
 
-    return n
+    return r4
 
 @dataclass
 class State:
