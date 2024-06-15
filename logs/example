@@ -1,0 +1,9 @@
+{"kind":"save","data":{"payload":"A","counter":-1},"at":"2024-06-13T19:29:18.271558"}
+{"kind":"save","data":{"payload":"B A","counter":-1},"at":"2024-06-13T19:29:18.271836"}
+{"kind":"sleep","data":null,"at":"2024-06-13T19:29:20.273963"}
+{"kind":"save","data":{"payload":"C B A","counter":-1},"at":"2024-06-13T19:29:20.274233"}
+{"kind":"event_in","data":{"event_name":"do_print","args":["'sent from app'"]},"at":"2024-06-13T19:29:21.272889"}
+{"kind":"event_out","data":{"event_name":"do_print","args":null},"at":"2024-06-13T19:29:23.277027"}
+{"kind":"event_in","data":{"event_name":"cancel","args":[]},"at":"2024-06-13T19:29:26.275342"}
+{"kind":"event_out","data":{"event_name":"cancel","args":null},"at":"2024-06-13T19:29:26.278287"}
+{"kind":"save","data":{"payload":"'sent from app' D C B A","counter":-1},"at":"2024-06-13T19:29:26.278377"}

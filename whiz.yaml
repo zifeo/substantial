@@ -1,0 +1,19 @@
+# demo:
+#   watch: [ "demo/**/*.py", "substantial/**/*.py" ]
+#   command: |
+#     poetry shell
+#     python3 demo/main.py
+#   depends_on: setup
+
+setup:
+  workdir: "."
+  command: |
+    source .venv/bin/activate
+    poetry lock
+    poetry install
+
+async-test:
+  workdir: "."
+  command: |
+    source .venv/bin/activate
+    pytest tests/test_* -o log_cli=true -vv
