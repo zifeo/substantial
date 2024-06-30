@@ -1,59 +1,149 @@
-from typing import TYPE_CHECKING, Optional
+import asyncio
+from datetime import datetime, timedelta
 
+from substantial.backends.backend import Backend
+from substantial.conductor import Conductor
+from substantial.protos import events
+from substantial.protos import metadata
 from substantial.workflows.context import Context
-from substantial.workflows.ref import Ref
 
-if TYPE_CHECKING:
-    from substantial.conductor import SubstantialConductor
-    from substantial.workflows.workflow import Workflow
 
-from substantial.log_recorder import Recorder
 from substantial.types import (
+    CancelWorkflow,
     Interrupt,
-    LogKind,
+    RetryMode,
 )
+
+import betterproto.lib.google.protobuf as protobuf
 
 
 class Run:
     def __init__(
         self,
-        workflow: "Workflow",
         run_id: str,
-        restore_source_id: Optional[str] = None,
+        queue: str,
+        backend: Backend,
     ):
         self.run_id = run_id
-        self.workflow = workflow
+        self.queue = queue
+        self.backend = backend
 
-        self.replayed = False
-        # self.restore_source_id = "example"
-        self.restore_source_id = restore_source_id
+    async def start(self, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
 
-    @property
-    def ref(self) -> Ref:
-        return Ref(self.workflow.id, self.run_id)
+        now = datetime.now()
+        event = events.Event(
+            at=now,
+            start=events.Start(
+                kwargs=protobuf.Struct(kwargs),
+            ),
+        )
 
-    async def replay(self, conductor: "SubstantialConductor"):
-        print("----------------- replay -----------------")
-        if not self.replayed and self.restore_source_id is not None:
-            log_path = Recorder.get_log_path(self.restore_source_id)
-            Recorder.recover_from_file(log_path, self.ref)
-            self.replayed = True
+        # FIXME change in in bytes later
+        await self.backend.add_schedule(self.queue, self.run_id, now, event.to_json())
 
-        run_logs = conductor.get_run_logs(self.ref)
-        events_logs = conductor.get_event_logs(self.ref)
+    async def send(self, name, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
 
-        ctx = Context(self.ref, conductor.log, run_logs, events_logs)
-        ctx.source(LogKind.Meta, "replaying ...")
+        now = datetime.now()
+        event = events.Event(
+            at=now,
+            send=events.Send(
+                name=name,
+                value=protobuf.Struct(kwargs),
+            ),
+        )
+
+        await self.backend.add_schedule(self.queue, self.run_id, now, event.to_json())
+
+    async def result(self):
+        while True:
+            events_raw = await self.backend.read_events(self.run_id)
+            events_records = events_raw.Records.from_json(events_raw)
+            for record in events_records.events:
+                if not record.stop:
+                    continue
+
+                if record.stop.err:
+                    raise Exception(record.stop.err)
+
+                return record.stop.ok
+
+            await asyncio.sleep(1)
+
+    async def replay(self, schedule=None):
+        start_at = datetime.now()
+
+        # fetch previous events
+        events_raw = await self.backend.read_events(self.run_id)
+        events_records = (
+            []
+            if events_raw is None
+            else events_raw.Records.from_json(events_raw).events
+        )
+
+        # new on each replay
+        metadata_records = [
+            metadata.Metadata(at=start_at, info=metadata.Info("replay"))
+        ]
+
+        # when there is a new event in schedule
+        if schedule is not None:
+            new_event = await self.backend.read_schedule(
+                self.queue, self.run_id, schedule
+            )
+            if new_event is not None:
+                events_records.append(events.Event().from_json(new_event))
+        else:
+            schedule = start_at
+
+        ctx = Context(self, metadata_records, events_records)
+
+        workflow = Conductor.known_workflows.get(self.run_id)
+        if workflow is None:
+            raise Exception(f"Unknown workflow: {self.run_id}")
+
         try:
-            ret = await self.workflow.f(ctx)
-            self.replayed = True
-        except Interrupt:
-            ctx.source(LogKind.Meta, "waiting for condition...")
-            raise
+            workflow(ctx, **events_records[0].kwargs)
+        except Interrupt as interrupt:
+            # FIXME need to specify the delta
+            print(f"Interrupted: {interrupt.hint}")
+            await self.backend.add_schedule(
+                self.queue, self.run_id, schedule + timedelta(seconds=10), ""
+            )
+        except RetryMode:
+            print("Retry")
+            # FIXME need to specify the delta
+            await self.backend.add_schedule(
+                self.queue, self.run_id, schedule + timedelta(seconds=10), ""
+            )
+        except CancelWorkflow as cancel:
+            # save cancel events
+            print(f"Cancelled workflow: {cancel.hint}")
         except Exception as e:
-            ctx.source(LogKind.Meta, f"error: {e}")
-            raise
-        finally:
-            ctx.source(LogKind.Meta, "replayed")
+            metadata_records.append(
+                metadata.Metadata(
+                    at=datetime.now(),
+                    error=metadata.Error(f"error: {e}", "stacktrace", str(type(e))),
+                )
+            )
+            await self.backend.add_schedule(
+                self.queue, self.run_id, schedule + timedelta(seconds=10), ""
+            )
 
-        return ret
+        finally:
+            events_save = events.Records(
+                run_id=self.run_id,
+                events=events_records,
+            )
+
+            metadata_save = metadata.Records(
+                run_id=self.run_id, metadata=metadata_records
+            )
+            await self.backend.write_events(self.run_id, events_save.to_json())
+            await self.backend.append_metadata(
+                self.run_id, schedule, metadata_save.to_json()
+            )
+            await self.backend.close_schedule(self.queue, self.run_id, schedule)

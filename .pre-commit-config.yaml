@@ -26,3 +26,9 @@ repos:
       - id: commitizen
         stages:
           - commit-msg
+  - repo: https://github.com/yoheimuta/protolint
+    rev: v0.50.2
+    hooks:
+      - id: protolint
+        args:
+          - -fix

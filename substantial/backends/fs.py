@@ -6,8 +6,10 @@ from substantial.backends.backend import Backend
 
 class FSBackend(Backend):
     """
-    This backend is for testing purposes only.
-    As there is no order defined in the filesystem, all the runs need to be loaded in memory.
+    This backend is for testing purposes only as it is not scalable:
+      - there is no file order in POSIX
+      - all the runs need to be loaded in memory
+      - not all required operations are atomic or using compare-and-swap
     """
 
     def __init__(self, root: str):
@@ -18,7 +20,7 @@ class FSBackend(Backend):
     def read_events(self, run_id: str):
         f = self.root / "runs" / run_id / "events"
         if not f.exists():
-            raise Exception(f"events file not found: {f}")
+            return None
 
         return f.read_text()
 
@@ -44,17 +46,26 @@ class FSBackend(Backend):
         excludes_set = set(excludes)
 
         for schedule in sorted(f.iterdir()):
-            if schedule.name not in excludes_set:
-                return schedule.name
+            if schedule.stem not in excludes_set:
+                run_id = schedule.stem
+                schedule = schedule.parent.stem
+                return run_id, datetime.fromisoformat(schedule)
 
         return None
 
-    def schedule_run(self, queue: str, run_id: str, schedule: datetime):
-        f = self.root / "schedules" / queue / schedule.isoformat() / run_id
-        f.parent.mkdir(parents=True, exist_ok=False)
-        f.touch()
+    def add_schedule(self, queue: str, run_id: str, schedule: datetime, content: str):
+        f1 = self.root / "schedules" / queue / schedule.isoformat() / run_id
+        f1.parent.mkdir(parents=True, exist_ok=False)
+        f1.write_text(content)
 
-    def unschedule_run(self, queue: str, run_id: str, schedule: datetime):
+    def read_schedule(self, queue: str, run_id: str, schedule: datetime):
+        f = self.root / "schedules" / queue / schedule.isoformat() / run_id
+        if not f.exists():
+            raise Exception(f"run not found: {f}")
+        ret = f.read_text()
+        return None if ret == "" else ret
+
+    def close_schedule(self, queue: str, run_id: str, schedule: datetime):
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
             raise Exception(f"run not found: {f}")
@@ -62,22 +73,16 @@ class FSBackend(Backend):
 
     def active_leases(self, lease_seconds: int):
         f = self.root / "leases"
-        now = datetime.now()
         ret = []
         for lease in f.iterdir():
-            if (
-                datetime.fromtimestamp(lease.stat().st_mtime)
-                + timedelta(seconds=lease_seconds)
-                < now
-            ):
-                # lease is expired
+            if not lease_held(lease, lease_seconds):
                 continue
             ret.append(lease.name)
         return ret
 
     def acquire_lease(self, run_id: str, lease_seconds: int) -> bool:
         f = self.root / "leases" / run_id
-        return cas(f, "acquire", lease_seconds)
+        return leasing_cas(f, "acquire", lease_seconds)
 
     def renew_lease(self, run_id: str, lease_seconds: int) -> bool:
         f = self.root / "leases" / run_id
@@ -85,7 +90,7 @@ class FSBackend(Backend):
         if not f.exists():
             raise Exception(f"lease not found: {f}")
 
-        return cas(f, "renew", lease_seconds)
+        return leasing_cas(f, "renew", lease_seconds)
 
     def remove_lease(self, run_id: str, lease_seconds: int):
         f = self.root / "leases" / run_id
@@ -93,20 +98,27 @@ class FSBackend(Backend):
         if not f.exists():
             raise Exception(f"lease not found: {f}")
 
-        still_holding = cas(f, "remove", lease_seconds)
+        still_holding = leasing_cas(f, "remove", lease_seconds)
         if still_holding:
             f.unlink()
 
 
-def cas(f: Path, suffix: str, lease_seconds: int) -> bool:
-    if (
+def leasing_cas(f: Path, suffix: str, lease_seconds: int) -> bool:
+    if lease_held(f, lease_seconds):
+        return False
+
+    return cas(f, suffix)
+
+
+def lease_held(f: Path, lease_seconds: int) -> bool:
+    return (
         f.exists()
         and datetime.fromtimestamp(f.stat().st_mtime) + timedelta(seconds=lease_seconds)
         > datetime.now()
-    ):
-        # lease is already acquired
-        return False
+    )
 
+
+def cas(f: Path, suffix: str) -> bool:
     nonce = str(uuid4())
     witness = f.parent / f"{f.stem}.{suffix}"
     witness.write_text(nonce)

@@ -2,17 +2,16 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Callable, List, Optional
 from datetime import timedelta
 
-from substantial.workflows.ref import Ref
+from substantial.protos import events, metadata
+from substantial.workflows.run import Run
 
 if TYPE_CHECKING:
     pass
 from substantial.types import (
-    LogData,
     AppError,
     CancelWorkflow,
     EventData,
     Interrupt,
-    Log,
     LogKind,
     SaveData,
     ValueEval,
@@ -24,28 +23,23 @@ from substantial.types import (
 class Context:
     def __init__(
         self,
-        ref: Ref,
-        backend_event_logger,
-        run_logs: List[Log],
-        event_logs: List[Log],
+        run: Run,
+        metadata: List[metadata.Metadata],
+        events: List[events.Event],
     ):
-        self.ref = ref
-        self.backend_event_logger = backend_event_logger
-        self.run_logs = iter(run_logs)
-        self.event_logs = iter(event_logs)
-        self.events = {}
-
-    def source(self, kind: LogKind, data: LogData):
-        self.backend_event_logger(Log(self.ref, kind, data))
+        self.run = run
+        self.metadata = metadata
+        # FIXME only events should be required, metadata is only for the run, not the context
+        self.events = events
 
     def __unqueue_up_to(self, kind: LogKind):
         """
         unshift, popfront: discard old events till kind is found
         """
         event = Empty
-        logs = self.run_logs
+        logs = self.metadata
         if kind == LogKind.EventIn or kind == LogKind.EventOut:
-            logs = self.event_logs
+            logs = self.events
         while True:
             event = next(logs, Empty)
             if event is Empty or event.kind == kind:
@@ -156,4 +150,4 @@ class Context:
         """
         Interrupt after the call
         """
-        raise CancelWorkflow(self.ref)
+        raise CancelWorkflow(self.run)

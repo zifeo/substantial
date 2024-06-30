@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Union
 import pytest
 import uvloop
 
-from substantial.conductor import Handle, Recorder, SubstantialConductor
+from substantial.conductor import Handle, Recorder, Conductor
 from substantial.types import Log
 from substantial.workflow import Workflow
 
@@ -89,7 +89,7 @@ class WorkflowTest:
     async def exec_workflow(
         self, workflow: Workflow, timeout_secs: Union[float, None] = 120
     ):
-        substantial = SubstantialConductor()
+        substantial = Conductor()
         substantial.register(workflow)
 
         workflow_run = workflow()

@@ -6,27 +6,6 @@ from substantial import workflow, Context
 
 
 @workflow()
-async def example_retry(c: Context):
-    a = await c.save(
-        lambda: "A",
-        retry_strategy=RetryStrategy(
-            max_retries=10, initial_backoff_interval=1, max_backoff_interval=10
-        ),
-    )
-
-    await c.sleep(timedelta(seconds=10))
-    await c.save(lambda: a + " B")
-
-    r1 = await c.save(
-        step_failing,
-        retry_strategy=RetryStrategy(
-            max_retries=10, initial_backoff_interval=1, max_backoff_interval=4
-        ),
-    )
-    return r1
-
-
-@workflow()
 async def example_simple(c: Context):
     retry_strategy = RetryStrategy(
         max_retries=3, initial_backoff_interval=1, max_backoff_interval=10
@@ -50,6 +29,27 @@ async def example_simple(c: Context):
         r4 = await c.save(lambda: step_4(r3, n))
 
     return r4
+
+
+@workflow()
+async def example_retry(c: Context):
+    a = await c.save(
+        lambda: "A",
+        retry_strategy=RetryStrategy(
+            max_retries=10, initial_backoff_interval=1, max_backoff_interval=10
+        ),
+    )
+
+    await c.sleep(timedelta(seconds=10))
+    await c.save(lambda: a + " B")
+
+    r1 = await c.save(
+        step_failing,
+        retry_strategy=RetryStrategy(
+            max_retries=10, initial_backoff_interval=1, max_backoff_interval=4
+        ),
+    )
+    return r1
 
 
 @dataclass

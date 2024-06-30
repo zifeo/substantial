@@ -1,45 +1,9 @@
 import asyncio
 import inspect
 
-from datetime import datetime
-from enum import Enum
 import time
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, Union
 from pydantic.dataclasses import dataclass
-import dataclasses
-
-from substantial.workflows.ref import Ref
-
-
-class LogKind(str, Enum):
-    Save = "save"
-    Sleep = "sleep"
-    EventIn = "event_in"
-    EventOut = "event_out"
-    Meta = "meta"
-
-
-@dataclass
-class EventData:
-    event_name: str
-    args: Optional[List[Any]]
-
-
-@dataclass
-class SaveData:
-    payload: Any
-    counter: int
-
-
-LogData = Optional[Union[str, SaveData, EventData]]
-
-
-@dataclass
-class Log:
-    _ref: "Ref"
-    kind: LogKind
-    data: LogData
-    at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())
 
 
 class Interrupt(BaseException):

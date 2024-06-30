@@ -2,6 +2,8 @@ from datetime import datetime
 
 
 class Backend:
+    # run related
+
     async def read_events(self, run_id: str):
         raise NotImplementedError()
 
@@ -14,13 +16,20 @@ class Backend:
     async def append_metadata(self, run_id: str, schedule: datetime, content: str):
         raise NotImplementedError()
 
+    async def add_schedule(
+        self, queue: str, run_id: str, schedule: datetime, content: str
+    ):
+        raise NotImplementedError()
+
+    async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> str:
+        raise NotImplementedError()
+
+    async def close_schedule(self, queue: str, run_id: str, schedule: datetime):
+        raise NotImplementedError()
+
+    # agent related
+
     async def next_run(self, queue: str, excludes: list[str]):
-        raise NotImplementedError()
-
-    async def schedule_run(self, queue: str, run_id: str, schedule: datetime):
-        raise NotImplementedError()
-
-    async def unschedule_run(self, queue: str, run_id: str, schedule: datetime):
         raise NotImplementedError()
 
     async def active_leases(self, lease_seconds: int):
