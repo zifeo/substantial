@@ -5,8 +5,9 @@ from substantial.types import RetryStrategy
 from substantial.workflow import workflow, Context
 
 
+# FIXME
 @workflow()
-async def example_retry(c: Context, name):
+async def example_retry(c: Context):
     a = await c.save(
         lambda: "A",
         retry_strategy=RetryStrategy(
@@ -18,7 +19,7 @@ async def example_retry(c: Context, name):
     await c.save(lambda: a + " B")
 
     r1 = await c.save(
-        lambda: failing_op(),
+        step_failing,
         retry_strategy=RetryStrategy(
             max_retries=10, initial_backoff_interval=1, max_backoff_interval=4
         ),
@@ -26,19 +27,13 @@ async def example_retry(c: Context, name):
     return r1
 
 
-async def failing_op():
-    if random.random() > 0.2:
-        raise Exception("random failure")
-    return "RESOLVED => SHOULD STOP"
-
-
 @workflow()
-async def example_simple(c: Context, name):
+async def example_simple(c: Context):
     retry_strategy = RetryStrategy(
         max_retries=3, initial_backoff_interval=1, max_backoff_interval=10
     )
 
-    r1 = await c.save(lambda: step_1())
+    r1 = await c.save(step_1)
     r2 = await c.save(
         lambda: step_2(r1), timeout=timedelta(seconds=1), retry_strategy=retry_strategy
     )
@@ -80,3 +75,9 @@ async def step_3(b):
 
 async def step_4(b, a):
     return f"{a} D {b}"
+
+
+async def step_failing():
+    if random.random() > 0.2:
+        raise Exception("random failure")
+    return "RESOLVED => SHOULD STOP"

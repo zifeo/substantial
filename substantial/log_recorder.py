@@ -16,26 +16,34 @@ class LogSource(ABC):
     @staticmethod
     @abstractmethod
     def get_logs(query: str) -> List[Log]:
-        """Return all logs of any kind from a source"""
-        raise Exception("get_logs Not implemented")
+        """
+        Return all logs of any kind from a source
+        """
+        raise NotImplementedError()
 
     @staticmethod
     @abstractmethod
     def get_recorded_runs(handle: str) -> List[Log]:
-        """Return all logs that is not meta or event from a source"""
-        raise Exception("get_recorded_runs Not implemented")
+        """
+        Return all logs that is not meta or event from a source
+        """
+        raise NotImplementedError()
 
     @staticmethod
     @abstractmethod
     def get_recorded_events(handle: str) -> List[Log]:
-        """Return all event logs from a source"""
-        raise Exception("get_recorded_events not implemented")
+        """
+        Return all event logs from a source
+        """
+        raise NotImplementedError()
 
     @staticmethod
     @abstractmethod
     def persist(handle: str, log: Log):
-        """Write/Serialize log into a source"""
-        raise Exception("persist not implemented")
+        """
+        Write/Serialize log into a source
+        """
+        raise NotImplementedError()
 
 
 class Recorder(LogSource):

@@ -6,7 +6,7 @@ import pytest
 from dataclasses import asdict, dataclass
 from substantial.task_queue import MultithreadedQueue
 from substantial.types import Log, RetryStrategy, SaveData
-from tests.utils import EventSend, LogFilter, WorkflowTest, make_sync, asyncio_fun
+from tests.utils import EventSend, LogFilter, WorkflowTest, make_sync, async_test
 
 from substantial.workflow import workflow, Context
 
@@ -21,10 +21,10 @@ def t():
     return WorkflowTest()
 
 
-@asyncio_fun
+@async_test
 async def test_simple(t: WorkflowTest):
-    @workflow("simple-test")
-    async def simple_workflow(c: Context, name):
+    @workflow()
+    async def simple_workflow(c: Context):
         async def async_op(v):
             return f"C {v}"
 
@@ -41,7 +41,7 @@ async def test_simple(t: WorkflowTest):
     )
 
 
-@asyncio_fun
+@async_test
 async def test_events(t: WorkflowTest):
     @dataclass
     class State:
@@ -51,7 +51,7 @@ async def test_events(t: WorkflowTest):
             self.is_cancelled = True
 
     @workflow()
-    async def event_workflow(c: Context, name):
+    async def event_workflow(c: Context):
         r1 = await c.save(lambda: "A")
         payload = await c.event("sayHello")
 
@@ -69,15 +69,15 @@ async def test_events(t: WorkflowTest):
     assert s.workflow_output == "Hello from outside! B A"
 
 
-@asyncio_fun
+@async_test
 async def test_multiple_workflows_parallel(t: WorkflowTest):
     @workflow()
-    async def first(c: Context, name):
+    async def first(c: Context):
         v = await c.save(lambda: "first")
         return v
 
     @workflow()
-    async def second(c: Context, name):
+    async def second(c: Context):
         v = await c.save(lambda: "second 1")
         v = await c.save(lambda: f"{v} 2")
         await c.sleep(timedelta(seconds=1))
@@ -85,7 +85,7 @@ async def test_multiple_workflows_parallel(t: WorkflowTest):
         return v
 
     @workflow()
-    async def third(c: Context, name):
+    async def third(c: Context):
         v = await c.save(lambda: "third")
         return v
 
@@ -113,7 +113,7 @@ async def test_multiple_workflows_parallel(t: WorkflowTest):
     assert duration < 6.2
 
 
-@asyncio_fun
+@async_test
 async def test_failing_workflow_with_retry(t: WorkflowTest):
     def failing_op():
         raise Exception("UNREACHABLE")
@@ -121,8 +121,8 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
     retries = 3
 
     @workflow()
-    async def failing_workflow(c: Context, name):
-        _not_failing1 = await c.save(lambda: "A")
+    async def failing_workflow(c: Context):
+        await c.save(lambda: "A")
         r1 = await c.save(
             lambda: failing_op(),
             retry_strategy=RetryStrategy(
@@ -137,10 +137,11 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
     assert len(s.get_logs(LogFilter.Runs)) == (1 + retries_accounting_first_run)
 
 
-@asyncio_fun
+@async_test
 async def test_timeout_with_retries(t: WorkflowTest):
     async def do_wait(v):
-        await asyncio.timeout(5)
+        async with asyncio.timeout(5):
+            pass
         return v
 
     @workflow()

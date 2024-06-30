@@ -15,7 +15,6 @@ from substantial.workflow import WorkflowRun, Workflow
 
 class SubstantialConductor:
     def __init__(self):
-        # num workers
         self.known_workflows = {}
         # mulithreaded safe queues
         self.workflows = asyncio.Queue()
@@ -24,7 +23,9 @@ class SubstantialConductor:
         self.known_workflows[workflow.id] = workflow
 
     async def start(self, workflow_run: WorkflowRun):
-        """Put `workflow_run` into the workflow queue and return the `handle`"""
+        """
+        Put `workflow_run` into the workflow queue and return the `handle`
+        """
         await self.workflows.put(workflow_run)
         return workflow_run.handle
 
@@ -40,6 +41,7 @@ class SubstantialConductor:
         Recorder.record(log._handle, log)
 
     async def schedule_later(self, queue, task, secs):
+        # FIXME
         await asyncio.sleep(secs)
         await queue.put(task)
 

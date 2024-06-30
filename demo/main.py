@@ -4,28 +4,27 @@ from substantial.conductor import SubstantialConductor, EventEmitter
 
 from .workflows import example_simple
 
-w = example_simple
-
 
 async def same_thread_example():
     substantial = SubstantialConductor()
-    substantial.register(w)
+    substantial.register(example_simple)
 
-    workflow_run = w()
+    workflow_run = example_simple()
 
     handle = await substantial.start(workflow_run)
 
     workflow_output, _ = await asyncio.gather(
-        substantial.run(), event_timeline(EventEmitter(handle))
+        substantial.run(),
+        # FIXME
+        event_timeline(EventEmitter(handle)),
     )
 
     print("Final output", workflow_output)
 
 
 async def event_timeline(emitter: EventEmitter):
-    await asyncio.sleep(
-        3
-    )  # just pick a big enough delay (we have sleep(1) on the example workflow)
+    # just pick a big enough delay (we have sleep(1) on the example workflow)
+    await asyncio.sleep(3)
     print("Sending...")
     print(await emitter.send("do_print", "'sent from app'"))
 

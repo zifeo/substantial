@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Union
+from typing import Any, Dict, List, Union
 
 import pytest
 import uvloop
@@ -19,7 +19,7 @@ class LogFilter(str, Enum):
 @dataclass
 class EventSend:
     event_name: str
-    payload: Union[any, None] = None
+    payload: Union[Any, None] = None
 
 
 class StepError(Exception):
@@ -30,8 +30,9 @@ class StepError(Exception):
 class WorkflowTest:
     name: str
     event_timeline: Dict[float, EventSend]
+    # FIXME
     handle: Union[str, None] = None
-    workflow_output: Union[any, None] = None
+    workflow_output: Union[Any, None] = None
     timed_out: bool = False
     expect_timed_out: bool = False
 
@@ -54,15 +55,14 @@ class WorkflowTest:
     def get_logs(self, filter: LogFilter):
         if filter == LogFilter.Runs:
             return Recorder.get_recorded_runs(self.handle)
-        elif filter == LogFilter.Events:
+        if filter == LogFilter.Events:
             return Recorder.get_recorded_events(self.handle)
-        else:
-            raise Exception(f"Unsupported filter {filter}")
+        raise Exception(f"Unsupported filter {filter}")
 
     def logs_data_equal(
         self,
         filter: LogFilter,
-        other: List[Log] | List[any],
+        other: List[Log] | List[Any],
     ):
         res = []
         if self.handle is None:
@@ -134,7 +134,8 @@ class WorkflowTest:
     # though it can be simulated with events
 
 
-def make_sync(fn: any) -> any:
+# FIXME
+def make_sync(fn: Any) -> Any:
     # Naive impl will run it in the ongoing event loop
     # return asyncio.run(fn())
     def syncified():
@@ -145,4 +146,4 @@ def make_sync(fn: any) -> any:
     return syncified
 
 
-asyncio_fun = pytest.mark.asyncio(scope="function")
+async_test = pytest.mark.asyncio(scope="function")
