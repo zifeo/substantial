@@ -18,7 +18,9 @@ Substantial is designed around a replay mechanism that reconstructs the function
 ## Getting started
 
 ```
-TODO
+poetry install
+
+protoc -I . --python_betterproto_out=. protocol/*
 ```
 
 ### Workflow

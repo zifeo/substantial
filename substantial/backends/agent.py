@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import suppress
+from datetime import datetime, timedelta
 from substantial.backends.backend import Backend
 
 
@@ -21,10 +22,6 @@ class Agent:
                 await asyncio.sleep(1)
                 continue
 
-            leased = await self.backend.acquire_lease(run_id, lease_seconds)
-            if not leased:
-                continue
-
             async def heartbeat():
                 while True:
                     await asyncio.sleep(renew_seconds)
@@ -32,8 +29,13 @@ class Agent:
                     if not renewed:
                         return
 
+            leased = await self.backend.acquire_lease(run_id, lease_seconds)
+            if not leased:
+                continue
+
             renew_task = asyncio.create_task(heartbeat())
-            process_task = asyncio.create_task(self.process(run_id))
+            schedule = datetime.now()
+            process_task = asyncio.create_task(self.process(run_id, schedule))
 
             done, pending = await asyncio.wait(
                 [
@@ -51,19 +53,25 @@ class Agent:
 
             await self.backend.remove_lease(run_id, lease_seconds)
 
-            exception = done.exception()
-            if exception is None:
-                print("done")
-            else:
-                print("error", exception)
-
-    async def process(self, run_id: str):
+    async def process(self, run_id: str, schedule: datetime):
         try:
+            events = await self.backend.read_events(run_id)
+            log = ""
+
+            print("events", events)
+
+            await self.backend.schedule_run(
+                self.queue, run_id, schedule + timedelta(seconds=10)
+            )
+
+            await self.backend.unschedule_run(self.queue, run_id, schedule)
+
             pass
 
         except Exception as e:
             print(e)
 
         finally:
-            # write log and events
+            await self.backend.write_events(run_id, events)
+            await self.backend.append_metadata(run_id, schedule, log)
             pass

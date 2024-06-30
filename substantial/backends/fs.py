@@ -27,14 +27,14 @@ class FSBackend(Backend):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
 
-    def read_logs(self, run_id: str):
+    def read_all_metadata(self, run_id: str):
         f = self.root / "runs" / run_id / "logs"
         ret = []
         for log in f.iterdir():
             ret.append(log.read_text())
         return ret
 
-    def append_log(self, run_id: str, schedule: datetime, content: str):
+    def append_metadata(self, run_id: str, schedule: datetime, content: str):
         f = self.root / "runs" / run_id / "logs" / schedule.isoformat()
         f.parent.mkdir(parents=True, exist_ok=False)
         f.write_text(content)

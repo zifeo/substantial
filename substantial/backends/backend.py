@@ -8,10 +8,10 @@ class Backend:
     async def write_events(self, run_id: str, content: str):
         raise NotImplementedError()
 
-    async def read_logs(self, run_id: str):
+    async def read_all_metadata(self, run_id: str):
         raise NotImplementedError()
 
-    async def append_log(self, run_id: str, schedule: datetime, content: str):
+    async def append_metadata(self, run_id: str, schedule: datetime, content: str):
         raise NotImplementedError()
 
     async def next_run(self, queue: str, excludes: list[str]):
