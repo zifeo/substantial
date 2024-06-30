@@ -44,9 +44,9 @@ async def example_simple(c: Context):
     n = await c.event("do_print")
     s = State(is_cancelled=False)
 
-    c.register("cancel", s.update)
+    c.handle("cancel", s.update)
 
-    if await c.wait_on(lambda: s.is_cancelled):
+    if await c.ensure(lambda: s.is_cancelled):
         r4 = await c.save(lambda: step_4(r3, n))
 
     return r4

@@ -8,7 +8,7 @@ from typing import Any, Callable, List, Optional, Union
 from pydantic.dataclasses import dataclass
 import dataclasses
 
-from substantial.workflows.handle import Handle
+from substantial.workflows.ref import Ref
 
 
 class LogKind(str, Enum):
@@ -36,7 +36,7 @@ LogData = Optional[Union[str, SaveData, EventData]]
 
 @dataclass
 class Log:
-    _handle: "Handle"
+    _ref: "Ref"
     kind: LogKind
     data: LogData
     at: Optional[datetime] = dataclasses.field(default_factory=lambda: datetime.now())

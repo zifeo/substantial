@@ -15,7 +15,7 @@ Durable execution is a programming model where the state of a function is preser
 
 Substantial is designed around a replay mechanism that reconstructs the function state by re-executing historical events from stored logs. All the logic is embedded in a protocol and there is no centralized broker, allowing it to work with any backend (local files, cloud storage and databases). It aims to be an alternative for use cases that do not require the scale and complexity of [Temporal](https://github.com/temporalio/temporal) or [Durable Task](https://github.com/Azure/durabletask).
 
-## Geting started
+## Getting started
 
 ```
 TODO
@@ -37,11 +37,11 @@ TODO
 
 ### Primitives
 
-`save(f: Callable, compensate_with: Optional[Callable]): Any` - memoize the result of a function to avoid re-execution on replay. Functions shall be idempotent as they may be called more than once in case of failure before the memoization. The function can be compensated by providing its inverse effect and trigger later in the workflow with `revert`.
+`save(f: Callable, compensate_with: Optional[Callable]): Any` - memoize the result of a function to avoid re-execution on replay. Functions shall be idempotent as they may be called more than once in case of failure before the value is persisted. The function can be compensated by providing its inverse effect and trigger later in the workflow with `revert`.
 
 `handle(event_name: str, cb: Callable): None` - register a callback to be executed when a specific event is received. The callbacks are executed in the order they were received and whenever a primitive being called.
 
-`ensure(f: Callable): True` - wait for the function to and schedule a new run when false.
+`ensure(f: Callable): True` - wait for the function to evaluate to true and schedule a new run when false.
 
 ### Higher-level
 
@@ -53,7 +53,7 @@ TODO
 
 `uuid4`
 
-`await_value`
+`receive`
 
 `sleep`
 

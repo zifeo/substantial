@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from substantial.workflows.handle import Handle
+from substantial.workflows.ref import Ref
 import json
 from typing import List
 from pydantic import TypeAdapter
@@ -24,7 +24,7 @@ class LogSource(ABC):
 
     @staticmethod
     @abstractmethod
-    def get_recorded_runs(handle: str) -> List[Log]:
+    def get_recorded_runs(ref: str) -> List[Log]:
         """
         Return all logs that is not meta or event from a source
         """
@@ -32,7 +32,7 @@ class LogSource(ABC):
 
     @staticmethod
     @abstractmethod
-    def get_recorded_events(handle: str) -> List[Log]:
+    def get_recorded_events(ref: str) -> List[Log]:
         """
         Return all event logs from a source
         """
@@ -40,7 +40,7 @@ class LogSource(ABC):
 
     @staticmethod
     @abstractmethod
-    def persist(handle: str, log: Log):
+    def persist(ref: str, log: Log):
         """
         Write/Serialize log into a source
         """
@@ -56,8 +56,8 @@ class Recorder(LogSource):
     event_kinds = [LogKind.EventIn, LogKind.EventOut]
 
     @staticmethod
-    def get_log_path(handle: Handle):
-        location = f"logs/{handle}"
+    def get_log_path(ref: Ref):
+        location = f"logs/{ref}"
         if os.path.exists(location):
             return location
         with open(location, "w+"):
@@ -65,21 +65,21 @@ class Recorder(LogSource):
         return location
 
     @staticmethod
-    def record(handle: Handle, log: Log):
+    def record(ref: Ref, log: Log):
         if log.kind in (Recorder.action_kinds + Recorder.event_kinds):
-            Recorder.persist(handle, log)
+            Recorder.persist(ref, log)
         else:
             print(f"[!] Received {log.kind} but it was not persisted")
 
     @staticmethod
-    def get_logs(handle: Handle) -> List[Log]:
-        filepath = Recorder.get_log_path(handle)
+    def get_logs(ref: Ref) -> List[Log]:
+        filepath = Recorder.get_log_path(ref)
         logs = []
         with open(filepath, "r") as file:
             count = 0
             while line := file.readline():
                 dc = json.loads(line.rstrip())
-                dc["_handle"] = handle  # row does not have _handle field
+                dc["_ref"] = ref  # row does not have _ref field
                 log = TypeAdapter(Log).validate_python(dc)
                 logs.append(log)
                 count += 1
@@ -90,32 +90,32 @@ class Recorder(LogSource):
     # One might think of calling `get_recorded_runs`/`get_recorded_events` as costly as a web request
 
     @staticmethod
-    def get_recorded_runs(handle: Handle) -> List[Log]:
-        logs = Recorder.get_logs(handle)
+    def get_recorded_runs(ref: Ref) -> List[Log]:
+        logs = Recorder.get_logs(ref)
         return list(filter(lambda log: log.kind in Recorder.action_kinds, logs))
 
     @staticmethod
-    def get_recorded_events(handle: Handle) -> List[Log]:
-        logs = Recorder.get_logs(handle)
+    def get_recorded_events(ref: Ref) -> List[Log]:
+        logs = Recorder.get_logs(ref)
         return list(filter(lambda log: log.kind in Recorder.event_kinds, logs))
 
     @staticmethod
-    def persist(handle: Handle, log: Log):
-        with open(f"logs/{handle}", "a+") as file:
-            row = TypeAdapter(Log).dump_json(log, exclude=["_handle"]).decode("utf-8")
+    def persist(ref: Ref, log: Log):
+        with open(f"logs/{ref}", "a+") as file:
+            row = TypeAdapter(Log).dump_json(log, exclude=["_ref"]).decode("utf-8")
             file.write(f"{row}\n")
 
     @staticmethod
-    def recover_from_file(filename: str, handle: Handle):
-        """Restore existing logs into a new log file associated with handle"""
+    def recover_from_file(filename: str, ref: Ref):
+        """Restore existing logs into a new log file associated with ref"""
         if os.path.exists(filename):
             with open(filename, "r") as file:
                 count = 0
-                print(f"[!] Loading logs from {filename} for {handle}")
+                print(f"[!] Loading logs from {filename} for {ref}")
                 while line := file.readline():
                     dc = json.loads(line.rstrip())
-                    dc["_handle"] = handle
+                    dc["_ref"] = ref
                     log: Log = TypeAdapter(Log).validate_python(dc)
-                    Recorder.record(handle, log)
+                    Recorder.record(ref, log)
                     count += 1
                 print(f"Read {count} lines")

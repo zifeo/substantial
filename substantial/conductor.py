@@ -22,21 +22,21 @@ class SubstantialConductor:
 
     async def start(self, workflow_run: Run):
         """
-        Put `workflow_run` into the workflow queue and return the `handle`
+        Put `workflow_run` into the workflow queue and return the `ref`
         """
         await self.workflows.put(workflow_run)
-        return workflow_run.handle
+        return workflow_run.ref
 
-    def get_run_logs(self, handle: str):
-        return Recorder.get_recorded_runs(handle)
+    def get_run_logs(self, ref: str):
+        return Recorder.get_recorded_runs(ref)
 
-    def get_event_logs(self, handle: str):
-        return Recorder.get_recorded_events(handle)
+    def get_event_logs(self, ref: str):
+        return Recorder.get_recorded_events(ref)
 
     def log(self, log: Log):
         dt = log.at.strftime("%Y-%m-%d %H:%M:%S.%f")
-        print(f"{dt} [{log._handle}] {log.kind} {log.data}")
-        Recorder.record(log._handle, log)
+        print(f"{dt} [{log._ref}] {log.kind} {log.data}")
+        Recorder.record(log._ref, log)
 
     async def schedule_later(self, queue, task, secs):
         # FIXME
