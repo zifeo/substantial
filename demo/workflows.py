@@ -2,10 +2,9 @@ from dataclasses import dataclass
 from datetime import timedelta
 import random
 from substantial.types import RetryStrategy
-from substantial.workflow import workflow, Context
+from substantial import workflow, Context
 
 
-# FIXME
 @workflow()
 async def example_retry(c: Context):
     a = await c.save(

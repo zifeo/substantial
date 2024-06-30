@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from substantial.workflows.handle import Handle
 import json
 from typing import List
 from pydantic import TypeAdapter
@@ -55,7 +56,7 @@ class Recorder(LogSource):
     event_kinds = [LogKind.EventIn, LogKind.EventOut]
 
     @staticmethod
-    def get_log_path(handle: str):
+    def get_log_path(handle: Handle):
         location = f"logs/{handle}"
         if os.path.exists(location):
             return location
@@ -64,14 +65,14 @@ class Recorder(LogSource):
         return location
 
     @staticmethod
-    def record(handle: str, log: Log):
+    def record(handle: Handle, log: Log):
         if log.kind in (Recorder.action_kinds + Recorder.event_kinds):
             Recorder.persist(handle, log)
         else:
             print(f"[!] Received {log.kind} but it was not persisted")
 
     @staticmethod
-    def get_logs(handle: str) -> List[Log]:
+    def get_logs(handle: Handle) -> List[Log]:
         filepath = Recorder.get_log_path(handle)
         logs = []
         with open(filepath, "r") as file:
@@ -89,23 +90,23 @@ class Recorder(LogSource):
     # One might think of calling `get_recorded_runs`/`get_recorded_events` as costly as a web request
 
     @staticmethod
-    def get_recorded_runs(handle: str) -> List[Log]:
+    def get_recorded_runs(handle: Handle) -> List[Log]:
         logs = Recorder.get_logs(handle)
         return list(filter(lambda log: log.kind in Recorder.action_kinds, logs))
 
     @staticmethod
-    def get_recorded_events(handle: str) -> List[Log]:
+    def get_recorded_events(handle: Handle) -> List[Log]:
         logs = Recorder.get_logs(handle)
         return list(filter(lambda log: log.kind in Recorder.event_kinds, logs))
 
     @staticmethod
-    def persist(handle: str, log: Log):
+    def persist(handle: Handle, log: Log):
         with open(f"logs/{handle}", "a+") as file:
             row = TypeAdapter(Log).dump_json(log, exclude=["_handle"]).decode("utf-8")
             file.write(f"{row}\n")
 
     @staticmethod
-    def recover_from_file(filename: str, handle: str):
+    def recover_from_file(filename: str, handle: Handle):
         """Restore existing logs into a new log file associated with handle"""
         if os.path.exists(filename):
             with open(filename, "r") as file:

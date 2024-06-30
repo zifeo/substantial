@@ -51,6 +51,8 @@ TODO
 
 `random`
 
+`uuid4`
+
 `await_value`
 
 `sleep`
@@ -70,3 +72,4 @@ TODO
 - ghjk
 - protobuf log serialization
 - s3 and redis backend
+- child workflow

@@ -1,6 +1,5 @@
-# Equiv. server + worker
 import asyncio
-from substantial.conductor import SubstantialConductor, EventEmitter
+from substantial import SubstantialConductor, Handle
 
 from .workflows import example_simple
 
@@ -16,21 +15,21 @@ async def same_thread_example():
     workflow_output, _ = await asyncio.gather(
         substantial.run(),
         # FIXME
-        event_timeline(EventEmitter(handle)),
+        event_timeline(handle),
     )
 
     print("Final output", workflow_output)
 
 
-async def event_timeline(emitter: EventEmitter):
+async def event_timeline(handle: Handle):
     # just pick a big enough delay (we have sleep(1) on the example workflow)
     await asyncio.sleep(3)
     print("Sending...")
-    print(await emitter.send("do_print", "'sent from app'"))
+    print(await handle.send("do_print", "'sent from app'"))
 
     await asyncio.sleep(5)
     print("Cancelling...")
-    print(await emitter.send("cancel"))
+    print(await handle.send("cancel"))
 
 
 asyncio.run(same_thread_example())

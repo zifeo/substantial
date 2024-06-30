@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Union
 import pytest
 import uvloop
 
-from substantial.conductor import EventEmitter, Recorder, SubstantialConductor
+from substantial.conductor import Handle, Recorder, SubstantialConductor
 from substantial.types import Log
 from substantial.workflow import Workflow
 
@@ -96,7 +96,7 @@ class WorkflowTest:
         handle = workflow_run.handle
         _ = await substantial.start(workflow_run)
 
-        emitter = EventEmitter(handle)
+        emitter = Handle(handle)
 
         async def event_timeline():
             # 0 ======== t1 ===== t2 ======== t3 ======== .. ===>

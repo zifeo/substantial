@@ -1,16 +1,14 @@
 import asyncio
-from dataclasses import dataclass
 
 from substantial.log_recorder import Recorder
 from substantial.types import (
     CancelWorkflow,
-    EventData,
     Interrupt,
     Log,
-    LogKind,
     RetryMode,
 )
-from substantial.workflow import WorkflowRun, Workflow
+from substantial.workflows.run import Run
+from substantial.workflows.workflow import Workflow
 
 
 class SubstantialConductor:
@@ -22,7 +20,7 @@ class SubstantialConductor:
     def register(self, workflow: Workflow):
         self.known_workflows[workflow.id] = workflow
 
-    async def start(self, workflow_run: WorkflowRun):
+    async def start(self, workflow_run: Run):
         """
         Put `workflow_run` into the workflow queue and return the `handle`
         """
@@ -52,7 +50,7 @@ class SubstantialConductor:
 
     async def run_workflows(self):
         while True:
-            workflow_run: WorkflowRun = await self.workflows.get()
+            workflow_run: Run = await self.workflows.get()
             try:
                 ret = await workflow_run.replay(self)
                 return ret
@@ -73,12 +71,3 @@ class SubstantialConductor:
                 # raise e
                 # retry
             self.workflows.task_done()
-
-
-@dataclass
-class EventEmitter:
-    handle: str
-
-    async def send(self, event_name, *args):
-        event_data = EventData(event_name, list(args))
-        Recorder.record(self.handle, Log(self.handle, LogKind.EventIn, event_data))
