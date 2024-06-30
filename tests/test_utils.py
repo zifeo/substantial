@@ -1,5 +1,3 @@
-
-
 import asyncio
 import pytest
 from substantial.task_queue import MultithreadedQueue
@@ -8,10 +6,12 @@ import time
 
 from tests.utils import LogFilter, StepError, WorkflowTest, make_sync, asyncio_fun
 
+
 @make_sync
 async def test_async():
     await asyncio.sleep(1)
-    assert 1 + 1 is 2
+    assert 1 + 1 == 2
+
 
 @make_sync
 async def test_test():
@@ -22,25 +22,31 @@ async def test_test():
 
 
 duration = 3
+
+
 def sleep_and_id(v):
     time.sleep(duration)
     return v
 
+
 def a():
     return sleep_and_id(1)
+
 
 def b():
     return sleep_and_id(2)
 
+
 def c():
     return sleep_and_id(3)
+
 
 @asyncio_fun
 async def test_parallel_static_calls():
     todos = [a, b, c]
     qcount = 2
-    # 0s    3s       6s    
-    # ai---af,ci-----cf--------> 
+    # 0s    3s       6s
+    # ai---af,ci-----cf-------->
     # bi-----bf---------------->
     start_time = time.time()
     async with MultithreadedQueue(qcount) as send:
@@ -53,7 +59,6 @@ async def test_parallel_static_calls():
     assert diff < 6.2
 
 
-
 @asyncio_fun
 async def test_parallel_dynamic_calls():
     # This will only work out of the box with aioprocessing[dill]
@@ -64,15 +69,17 @@ async def test_parallel_dynamic_calls():
     async with MultithreadedQueue(2) as send:
         results = await asyncio.gather(*[send(todo) for todo in todos])
 
-    # arg is frozen right when it's latest(i) + 1 
+    # arg is frozen right when it's latest(i) + 1
     assert results == [3, 3, 3]
 
     end_time = time.time()
     diff = end_time - start_time
     assert diff < 6.2
 
+
 async def d():
     return sleep_and_id(3)
+
 
 @asyncio_fun
 async def test_parallel_static_async_hack():

@@ -1,7 +1,6 @@
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-import time
 from typing import Dict, List, Union
 
 import pytest
@@ -11,18 +10,22 @@ from substantial.conductor import EventEmitter, Recorder, SubstantialConductor
 from substantial.types import Log
 from substantial.workflow import Workflow
 
+
 class LogFilter(str, Enum):
     Events = "events"
     Runs = "runs"
+
 
 @dataclass
 class EventSend:
     event_name: str
     payload: Union[any, None] = None
 
+
 class StepError(Exception):
     def __init__(self, step: str, message) -> None:
         super().__init__(f"'{step}': {message}")
+
 
 class WorkflowTest:
     name: str
@@ -39,7 +42,7 @@ class WorkflowTest:
         return StepError(self.name, message)
 
     def step(self, name: str | None = None):
-        """ Prepare a new test scope """
+        """Prepare a new test scope"""
         runner = WorkflowTest()
         runner.name = name or "<unnamed>"
         return runner
@@ -84,9 +87,7 @@ class WorkflowTest:
         return self
 
     async def exec_workflow(
-        self,
-        workflow: Workflow,
-        timeout_secs: Union[float, None] = 120
+        self, workflow: Workflow, timeout_secs: Union[float, None] = 120
     ):
         substantial = SubstantialConductor()
         substantial.register(workflow)
@@ -96,13 +97,14 @@ class WorkflowTest:
         _ = await substantial.start(workflow_run)
 
         emitter = EventEmitter(handle)
+
         async def event_timeline():
             # 0 ======== t1 ===== t2 ======== t3 ======== .. ===>
             #   <========>
             #     t1 - 0  <=======>
             #               t2 -t1
             time_prev = 0
-            for (t, event) in self.event_timeline.items():
+            for t, event in self.event_timeline.items():
                 delta_time = t - time_prev
                 time_prev = t
                 await asyncio.sleep(delta_time)
@@ -110,8 +112,8 @@ class WorkflowTest:
 
         try:
             workflow_output, _ = await asyncio.gather(
-                asyncio.wait_for(substantial.run(), timeout_secs), # wrapped in a task
-                event_timeline()
+                asyncio.wait_for(substantial.run(), timeout_secs),  # wrapped in a task
+                event_timeline(),
             )
 
             self.workflow_output = workflow_output
@@ -127,7 +129,7 @@ class WorkflowTest:
 
     # async def replay(self, count: int):
     #     pass
-    # Not sure about the feasability since 
+    # Not sure about the feasability since
     # replay is hidden inside the backend's workflow queue and is is not reachable from outside
     # though it can be simulated with events
 
@@ -139,6 +141,7 @@ def make_sync(fn: any) -> any:
         with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
             ret = runner.run(fn())
         return ret
+
     return syncified
 
 

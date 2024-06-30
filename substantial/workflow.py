@@ -10,7 +10,19 @@ from datetime import timedelta
 if TYPE_CHECKING:
     from substantial.conductor import SubstantialConductor
 from substantial.log_recorder import Recorder
-from substantial.types import LogData, AppError, CancelWorkflow, EventData, Interrupt, Log, LogKind, SaveData, ValueEval, Empty, RetryStrategy
+from substantial.types import (
+    LogData,
+    AppError,
+    CancelWorkflow,
+    EventData,
+    Interrupt,
+    Log,
+    LogKind,
+    SaveData,
+    ValueEval,
+    Empty,
+    RetryStrategy,
+)
 
 
 class WorkflowRun:
@@ -24,7 +36,7 @@ class WorkflowRun:
         self,
         workflow: "Workflow",
         run_id: str,
-        restore_source_id: Union[str, None] = None
+        restore_source_id: Union[str, None] = None,
     ):
         self.run_id = run_id
         self.workflow = workflow
@@ -36,7 +48,7 @@ class WorkflowRun:
     def handle(self) -> str:
         return f"{self.workflow.id}-{self.run_id}"
 
-    async def replay(self, conductor: 'SubstantialConductor'):
+    async def replay(self, conductor: "SubstantialConductor"):
         print("----------------- replay -----------------")
         if not self.replayed and self.restore_source_id is not None:
             log_path = Recorder.get_log_path(self.restore_source_id)
@@ -47,7 +59,7 @@ class WorkflowRun:
         events_logs = conductor.get_event_logs(self.handle)
 
         ctx = Context(self.handle, conductor.log, run_logs, events_logs)
-        ctx.source(LogKind.Meta, f"replaying ...")
+        ctx.source(LogKind.Meta, "replaying ...")
         try:
             ret = await self.workflow.f(ctx, self.workflow.id)
             self.replayed = True
@@ -81,7 +93,7 @@ class Context:
         self.backend_event_logger(Log(self.handle, kind, data))
 
     def __unqueue_up_to(self, kind: LogKind):
-        """ unshift, popfront: discard old events till kind is found """
+        """unshift, popfront: discard old events till kind is found"""
         event = Empty
         logs = self.run_logs
         if kind == LogKind.EventIn or kind == LogKind.EventOut:
@@ -107,8 +119,8 @@ class Context:
                         pass
                 break
         # At this stage `event` should be
-        # 1. The latest retry Save if kind.Save == Save with highest retry counter 
-        # 2. or the matching kind of Event 
+        # 1. The latest retry Save if kind.Save == Save with highest retry counter
+        # 2. or the matching kind of Event
         # 3. or Empty
         return event
 
@@ -117,9 +129,9 @@ class Context:
         callable: Callable,
         *,
         timeout: Union[timedelta, None] = None,
-        retry_strategy: Union[RetryStrategy, None] = None
+        retry_strategy: Union[RetryStrategy, None] = None,
     ) -> Any:
-        """ Force idempotency on `callable` and add `ValueEval` like behavior """
+        """Force idempotency on `callable` and add `ValueEval` like behavior"""
         timeout_secs = timeout.total_seconds() if timeout is not None else None
         evaluator = ValueEval(callable, timeout_secs, retry_strategy)
 
@@ -158,7 +170,7 @@ class Context:
         self.events[event_name] = callback
 
     async def wait_on(self, condition: Callable[[], bool]):
-        """ Wait for `condition()` to be True """
+        """Wait for `condition()` to be True"""
         self.source(LogKind.Meta, "waiting...")
         event = self.__unqueue_up_to(LogKind.EventIn)
         if event is not Empty:
@@ -178,14 +190,14 @@ class Context:
         return result
 
     async def event(self, event_name: str):
-        """ Register a new event that can be triggered from outside the workflow """
+        """Register a new event that can be triggered from outside the workflow"""
         proxy = {}
         self.register(event_name, lambda x: proxy.update(val=x))
         await self.wait_on(lambda: "val" in proxy)
         return proxy["val"]
 
     def cancel_run(self):
-        """ Interrupt after the call """
+        """Interrupt after the call"""
         raise CancelWorkflow(self.handle)
 
 
@@ -195,7 +207,7 @@ class Workflow:
         f: Callable[..., Any],
         workflow_name: Optional[str] = None,
         restore_source_id: Union[str, None] = None,
-        use_name_only: bool = False
+        use_name_only: bool = False,
         # multiple queues
         # timeout
         # user-defined migration

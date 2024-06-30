@@ -7,32 +7,34 @@ import os
 
 from substantial.types import Log, LogKind
 
+
 class LogSource(ABC):
     """
     Interface that provide ways to read/write into a given log source.
     """
+
     @staticmethod
     @abstractmethod
     def get_logs(query: str) -> List[Log]:
-        """ Return all logs of any kind from a source """
+        """Return all logs of any kind from a source"""
         raise Exception("get_logs Not implemented")
 
     @staticmethod
     @abstractmethod
     def get_recorded_runs(handle: str) -> List[Log]:
-        """ Return all logs that is not meta or event from a source """
+        """Return all logs that is not meta or event from a source"""
         raise Exception("get_recorded_runs Not implemented")
 
     @staticmethod
     @abstractmethod
     def get_recorded_events(handle: str) -> List[Log]:
-        """ Return all event logs from a source """
+        """Return all event logs from a source"""
         raise Exception("get_recorded_events not implemented")
 
     @staticmethod
     @abstractmethod
     def persist(handle: str, log: Log):
-        """ Write/Serialize log into a source """
+        """Write/Serialize log into a source"""
         raise Exception("persist not implemented")
 
 
@@ -40,6 +42,7 @@ class Recorder(LogSource):
     """
     `LogSource` implementation that uses files as log source
     """
+
     action_kinds = [LogKind.Save, LogKind.Sleep]
     event_kinds = [LogKind.EventIn, LogKind.EventOut]
 
@@ -67,7 +70,7 @@ class Recorder(LogSource):
             count = 0
             while line := file.readline():
                 dc = json.loads(line.rstrip())
-                dc["_handle"] = handle # row does not have _handle field
+                dc["_handle"] = handle  # row does not have _handle field
                 log = TypeAdapter(Log).validate_python(dc)
                 logs.append(log)
                 count += 1
@@ -80,12 +83,12 @@ class Recorder(LogSource):
     @staticmethod
     def get_recorded_runs(handle: str) -> List[Log]:
         logs = Recorder.get_logs(handle)
-        return list(filter(lambda l: l.kind in Recorder.action_kinds, logs))
+        return list(filter(lambda log: log.kind in Recorder.action_kinds, logs))
 
     @staticmethod
     def get_recorded_events(handle: str) -> List[Log]:
         logs = Recorder.get_logs(handle)
-        return list(filter(lambda l: l.kind in Recorder.event_kinds, logs))
+        return list(filter(lambda log: log.kind in Recorder.event_kinds, logs))
 
     @staticmethod
     def persist(handle: str, log: Log):
@@ -95,7 +98,7 @@ class Recorder(LogSource):
 
     @staticmethod
     def recover_from_file(filename: str, handle: str):
-        """ Restore existing logs into a new log file associated with handle """
+        """Restore existing logs into a new log file associated with handle"""
         if os.path.exists(filename):
             with open(filename, "r") as file:
                 count = 0
