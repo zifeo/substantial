@@ -59,7 +59,7 @@ TODO
 
 `sleep`
 
-###
+### Advanced (not yet implemented)
 
 `revert()` - execute the compensations and stop the workflow.
 
@@ -69,9 +69,9 @@ TODO
 
 ## Roadmap
 
-- leases
-- higher-level abstractions
+- finish refactor
+- tests basic cases
 - ghjk
-- protobuf log serialization
+- implement the rest of the readme interface (except the advances ones)
 - s3 and redis backend
 - child workflow
