@@ -1,19 +1,14 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional
 from datetime import timedelta
 
 from substantial.protos import events, metadata
 from substantial.workflows.run import Run
 
-if TYPE_CHECKING:
-    pass
 from substantial.types import (
     AppError,
     CancelWorkflow,
-    EventData,
     Interrupt,
-    LogKind,
-    SaveData,
     ValueEval,
     Empty,
     RetryStrategy,
@@ -131,13 +126,13 @@ class Context:
 
         val = self.__unqueue_up_to(LogKind.Sleep)
         if val is Empty:
-            # FIXME
+            # FIXME this should not sleep but reschedule later
             await asyncio.sleep(seconds)
             self.source(LogKind.Sleep, None)
         else:
             self.source(LogKind.Meta, f"{seconds}s sleep already executed")
 
-    async def event(self, event_name: str):
+    async def receive(self, event_name: str):
         """
         Register a new event that can be triggered from outside the workflow
         """

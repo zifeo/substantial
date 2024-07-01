@@ -21,7 +21,7 @@ class Backend:
     ):
         raise NotImplementedError()
 
-    async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> str:
+    async def read_schedule(self, queue: str, run_id: str, schedule: datetime):
         raise NotImplementedError()
 
     async def close_schedule(self, queue: str, run_id: str, schedule: datetime):

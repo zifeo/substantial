@@ -20,7 +20,7 @@ async def example_simple(c: Context):
 
     r3 = await c.save(lambda: step_3(r2))
 
-    n = await c.event("do_print")
+    n = await c.receive("do_print")
     s = State(is_cancelled=False)
 
     c.handle("cancel", s.update)

@@ -30,7 +30,7 @@ class StepError(Exception):
 class WorkflowTest:
     name: str
     event_timeline: Dict[float, EventSend]
-    # FIXME
+    # FIXME Union[X, None] is Optional[X]
     handle: Union[str, None] = None
     workflow_output: Union[Any, None] = None
     timed_out: bool = False
@@ -134,7 +134,6 @@ class WorkflowTest:
     # though it can be simulated with events
 
 
-# FIXME
 def make_sync(fn: Any) -> Any:
     # Naive impl will run it in the ongoing event loop
     # return asyncio.run(fn())

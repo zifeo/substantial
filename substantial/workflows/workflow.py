@@ -12,7 +12,7 @@ class Workflow:
         self.f = f
         args = inspect.signature(f).parameters
         print(args)
-        # FIXME
+        # FIXME check that context is the first argument and preprocess params for Conductor.start to check that they match
 
 
 def workflow(
