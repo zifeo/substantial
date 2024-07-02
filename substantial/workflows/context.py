@@ -1,9 +1,11 @@
 import asyncio
-from typing import Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 from datetime import timedelta
 
 from substantial.protos import events, metadata
-from substantial.workflows.run import Run
+
+if TYPE_CHECKING:
+    from substantial.workflows.run import Run
 
 from substantial.types import (
     AppError,
@@ -18,7 +20,7 @@ from substantial.types import (
 class Context:
     def __init__(
         self,
-        run: Run,
+        run: "Run",
         metadata: List[metadata.Metadata],
         events: List[events.Event],
     ):
@@ -27,39 +29,39 @@ class Context:
         # FIXME only events should be required, metadata is only for the run, not the context
         self.events = events
 
-    def __unqueue_up_to(self, kind: LogKind):
-        """
-        unshift, popfront: discard old events till kind is found
-        """
-        event = Empty
-        logs = self.metadata
-        if kind == LogKind.EventIn or kind == LogKind.EventOut:
-            logs = self.events
-        while True:
-            event = next(logs, Empty)
-            if event is Empty or event.kind == kind:
-                if event is not Empty and event.kind == LogKind.Save:
-                    assert isinstance(event.data, SaveData)
-                    if event.data.counter != -1:
-                        # front value is still in retry mode
-                        while True:
-                            # popfront till we get the Save with the highest counter or resolved (-1)
-                            peek_next = next(logs, Empty)
-                            if peek_next is Empty:
-                                break
-                            elif peek_next.kind == LogKind.Save:
-                                event = peek_next
-                                if peek_next.data.counter == -1:
-                                    break
-                    else:
-                        # front value has been resolved and saved properly
-                        pass
-                break
-        # At this stage `event` should be
-        # 1. The latest retry Save if kind.Save == Save with highest retry counter
-        # 2. or the matching kind of Event
-        # 3. or Empty
-        return event
+    # def __unqueue_up_to(self, kind: LogKind):
+    #    """
+    #    unshift, popfront: discard old events till kind is found
+    #    """
+    #    event = Empty
+    #    logs = self.metadata
+    #    if kind == LogKind.EventIn or kind == LogKind.EventOut:
+    #        logs = self.events
+    #    while True:
+    #        event = next(logs, Empty)
+    #        if event is Empty or event.kind == kind:
+    #            if event is not Empty and event.kind == LogKind.Save:
+    #                assert isinstance(event.data, SaveData)
+    #                if event.data.counter != -1:
+    #                    # front value is still in retry mode
+    #                    while True:
+    #                        # popfront till we get the Save with the highest counter or resolved (-1)
+    #                        peek_next = next(logs, Empty)
+    #                        if peek_next is Empty:
+    #                            break
+    #                        elif peek_next.kind == LogKind.Save:
+    #                            event = peek_next
+    #                            if peek_next.data.counter == -1:
+    #                                break
+    #                else:
+    #                    # front value has been resolved and saved properly
+    #                    pass
+    #            break
+    #    # At this stage `event` should be
+    #    # 1. The latest retry Save if kind.Save == Save with highest retry counter
+    #    # 2. or the matching kind of Event
+    #    # 3. or Empty
+    #    return event
 
     # low-level
 

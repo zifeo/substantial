@@ -18,21 +18,21 @@ class Start(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Save(betterproto.Message):
-    value: "betterproto_lib_google_protobuf.Struct" = betterproto.message_field(1)
+    value: "betterproto_lib_google_protobuf.Value" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
 class Send(betterproto.Message):
     name: str = betterproto.string_field(1)
-    value: "betterproto_lib_google_protobuf.Struct" = betterproto.message_field(2)
+    value: "betterproto_lib_google_protobuf.Value" = betterproto.message_field(2)
 
 
 @dataclass(eq=False, repr=False)
 class Stop(betterproto.Message):
-    ok: "betterproto_lib_google_protobuf.Struct" = betterproto.message_field(
+    ok: "betterproto_lib_google_protobuf.Value" = betterproto.message_field(
         1, group="result"
     )
-    err: "betterproto_lib_google_protobuf.Struct" = betterproto.message_field(
+    err: "betterproto_lib_google_protobuf.Value" = betterproto.message_field(
         2, group="result"
     )
 

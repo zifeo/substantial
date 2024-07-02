@@ -69,6 +69,7 @@ TODO
 
 ## Roadmap
 
+- add ctrl-c handling and crash process in dev (otherwise we may skip the error)
 - finish refactor
 - tests basic cases
 - ghjk

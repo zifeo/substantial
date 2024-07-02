@@ -10,18 +10,18 @@ message Start {
 }
 
 message Save {
-  google.protobuf.Struct value = 1;
+  google.protobuf.Value value = 1;
 }
 
 message Send {
   string name = 1;
-  google.protobuf.Struct value = 2;
+  google.protobuf.Value value = 2;
 }
 
 message Stop {
   oneof result {
-    google.protobuf.Struct ok = 1;
-    google.protobuf.Struct err = 2;
+    google.protobuf.Value ok = 1;
+    google.protobuf.Value err = 2;
   }
 }
 

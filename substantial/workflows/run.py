@@ -2,9 +2,9 @@ import asyncio
 from datetime import datetime, timedelta
 
 from substantial.backends.backend import Backend
-from substantial.conductor import Conductor
 from substantial.protos import events
 from substantial.protos import metadata
+from substantial.workflows import Store
 from substantial.workflows.context import Context
 
 
@@ -43,19 +43,18 @@ class Run:
         # FIXME change in in bytes later
         await self.backend.add_schedule(self.queue, self.run_id, now, event.to_json())
 
-    async def send(self, name, kwargs=None):
-        if kwargs is None:
-            kwargs = {}
-
+    async def send(self, name, value=None):
         now = datetime.now()
         event = events.Event(
             at=now,
             send=events.Send(
                 name=name,
-                value=protobuf.Struct(kwargs),
+                value=protobuf.Value(value),
             ),
         )
 
+        print("send", event)
+        print("send", event.to_json())
         await self.backend.add_schedule(self.queue, self.run_id, now, event.to_json())
 
     async def result(self):
@@ -101,7 +100,7 @@ class Run:
 
         ctx = Context(self, metadata_records, events_records)
 
-        workflow = Conductor.known_workflows.get(self.run_id)
+        workflow = Store.from_run(self.run_id)
         if workflow is None:
             raise Exception(f"Unknown workflow: {self.run_id}")
 

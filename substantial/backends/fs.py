@@ -17,61 +17,62 @@ class FSBackend(Backend):
         for d in ["runs", "schedules", "leases"]:
             (self.root / d).mkdir(parents=True, exist_ok=True)
 
-    def read_events(self, run_id: str):
+    async def read_events(self, run_id: str):
         f = self.root / "runs" / run_id / "events"
         if not f.exists():
             return None
 
         return f.read_text()
 
-    def write_events(self, run_id: str, content: str):
+    async def write_events(self, run_id: str, content: str):
         f = self.root / "runs" / run_id / "events"
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
 
-    def read_all_metadata(self, run_id: str):
+    async def read_all_metadata(self, run_id: str):
         f = self.root / "runs" / run_id / "logs"
         ret = []
         for log in f.iterdir():
             ret.append(log.read_text())
         return ret
 
-    def append_metadata(self, run_id: str, schedule: datetime, content: str):
+    async def append_metadata(self, run_id: str, schedule: datetime, content: str):
         f = self.root / "runs" / run_id / "logs" / schedule.isoformat()
         f.parent.mkdir(parents=True, exist_ok=False)
         f.write_text(content)
 
-    def next_run(self, queue: str, excludes: list[str]):
+    async def next_run(self, queue: str, excludes: list[str]):
         f = self.root / "schedules" / queue
         excludes_set = set(excludes)
 
         for schedule in sorted(f.iterdir()):
-            if schedule.stem not in excludes_set:
-                run_id = schedule.stem
-                schedule = schedule.parent.stem
-                return run_id, datetime.fromisoformat(schedule)
+            for run_id in schedule.iterdir():
+                if run_id.name not in excludes_set:
+                    return run_id.name, datetime.fromisoformat(schedule.name)
 
         return None
 
-    def add_schedule(self, queue: str, run_id: str, schedule: datetime, content: str):
+    async def add_schedule(
+        self, queue: str, run_id: str, schedule: datetime, content: str
+    ):
         f1 = self.root / "schedules" / queue / schedule.isoformat() / run_id
         f1.parent.mkdir(parents=True, exist_ok=False)
         f1.write_text(content)
 
-    def read_schedule(self, queue: str, run_id: str, schedule: datetime):
+    async def read_schedule(self, queue: str, run_id: str, schedule: datetime):
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
             raise Exception(f"run not found: {f}")
         ret = f.read_text()
         return None if ret == "" else ret
 
-    def close_schedule(self, queue: str, run_id: str, schedule: datetime):
+    async def close_schedule(self, queue: str, run_id: str, schedule: datetime):
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
             raise Exception(f"run not found: {f}")
         f.unlink()
 
-    def active_leases(self, lease_seconds: int):
+    async def active_leases(self, lease_seconds: int):
         f = self.root / "leases"
         ret = []
         for lease in f.iterdir():
@@ -80,11 +81,11 @@ class FSBackend(Backend):
             ret.append(lease.name)
         return ret
 
-    def acquire_lease(self, run_id: str, lease_seconds: int) -> bool:
+    async def acquire_lease(self, run_id: str, lease_seconds: int) -> bool:
         f = self.root / "leases" / run_id
         return leasing_cas(f, "acquire", lease_seconds)
 
-    def renew_lease(self, run_id: str, lease_seconds: int) -> bool:
+    async def renew_lease(self, run_id: str, lease_seconds: int) -> bool:
         f = self.root / "leases" / run_id
 
         if not f.exists():
@@ -92,7 +93,7 @@ class FSBackend(Backend):
 
         return leasing_cas(f, "renew", lease_seconds)
 
-    def remove_lease(self, run_id: str, lease_seconds: int):
+    async def remove_lease(self, run_id: str, lease_seconds: int):
         f = self.root / "leases" / run_id
 
         if not f.exists():
@@ -120,7 +121,7 @@ def lease_held(f: Path, lease_seconds: int) -> bool:
 
 def cas(f: Path, suffix: str) -> bool:
     nonce = str(uuid4())
-    witness = f.parent / f"{f.stem}.{suffix}"
+    witness = f.parent / f"{f.name}.{suffix}"
     witness.write_text(nonce)
 
     try:

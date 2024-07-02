@@ -6,6 +6,12 @@ import uvloop
 from substantial.workflows.run import Run
 
 
+# move to backend?
+lease_seconds = 10
+renew_seconds = 8
+pool_interval = 1
+
+
 class Agent:
     def __init__(self, backend: Backend, queue: str):
         self.backend = backend
@@ -18,12 +24,9 @@ class Agent:
     async def run(self):
         while True:
             await self.poll_with_lease()
+            await asyncio.sleep(pool_interval)
 
     async def poll_with_lease(self):
-        # move to backend?
-        lease_seconds = 10
-        renew_seconds = 8
-
         active_leases = await self.backend.active_leases(lease_seconds)
         next_run = await self.backend.next_run(self.queue, active_leases)
         print("run_id", next_run)

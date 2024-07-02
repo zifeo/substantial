@@ -3,19 +3,18 @@ from uuid import uuid4
 
 from substantial.agent import Agent
 from substantial.backends.backend import Backend
+from substantial.workflows import Store
 from substantial.workflows.run import Run
 from substantial.workflows.workflow import Workflow
 import aioprocessing
 
 
 class Conductor:
-    known_workflows = {}
-
     def __init__(self, backend: Backend):
         self.backend = backend
 
     def register(self, workflow: Workflow):
-        Conductor.known_workflows[workflow.id] = workflow
+        Store.register(workflow)
 
     async def start(
         self,
