@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
+import json
 
 from substantial.backends.backend import Backend
 from substantial.protos import events
@@ -59,7 +60,12 @@ class Run:
 
     async def result(self):
         while True:
-            events_raw = await self.backend.read_events(self.run_id)
+            events_raw = await self.backend.read_events(self.run_id) # can be none?
+            print("value", events_raw)
+            if events_raw is None:
+                await asyncio.sleep(1)
+                continue
+
             events_records = events_raw.Records.from_json(events_raw)
             for record in events_records.events:
                 if not record.stop:
@@ -77,10 +83,13 @@ class Run:
 
         # fetch previous events
         events_raw = await self.backend.read_events(self.run_id)
+        print("EVENT RAW", events_raw)
+        from substantial.protos.events import Event
         events_records = (
             []
             if events_raw is None
-            else events_raw.Records.from_json(events_raw).events
+            else Event().from_json(json.dumps(events_raw))
+            # else events_raw.Records.from_json(events_raw).events
         )
 
         # new on each replay

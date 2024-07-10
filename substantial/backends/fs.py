@@ -27,6 +27,7 @@ class FSBackend(Backend):
     async def write_events(self, run_id: str, content: str):
         f = self.root / "runs" / run_id / "events"
         f.parent.mkdir(parents=True, exist_ok=True)
+        print("EVENT WRITE RAW", content)
         f.write_text(content)
 
     async def read_all_metadata(self, run_id: str):
@@ -38,7 +39,7 @@ class FSBackend(Backend):
 
     async def append_metadata(self, run_id: str, schedule: datetime, content: str):
         f = self.root / "runs" / run_id / "logs" / schedule.isoformat()
-        f.parent.mkdir(parents=True, exist_ok=False)
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
 
     async def next_run(self, queue: str, excludes: list[str]):

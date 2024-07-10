@@ -73,9 +73,9 @@ class Context:
         timeout: Optional[timedelta] = None,
         retry_strategy: Optional[RetryStrategy] = None,
     ) -> Any:
+        print("SAVE CALLED")
         timeout_secs = timeout.total_seconds() if timeout is not None else None
         evaluator = ValueEval(f, timeout_secs, retry_strategy)
-
         val = self.__unqueue_up_to(LogKind.Save)
         if val is Empty:
             val = await evaluator.exec(self, None)
