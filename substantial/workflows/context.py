@@ -77,6 +77,8 @@ class Context:
         timeout_secs = timeout.total_seconds() if timeout is not None else None
         evaluator = ValueEval(f, timeout_secs, retry_strategy)
         val = self.__unqueue_up_to(LogKind.Save)
+        print("AFTER EVAL")
+
         if val is Empty:
             val = await evaluator.exec(self, None)
             self.source(LogKind.Save, SaveData(val, -1))

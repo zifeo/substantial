@@ -7,17 +7,19 @@ from substantial import workflow, Context
 
 @workflow()
 async def example_simple(c: Context):
-    print("ONE")
     retry_strategy = RetryStrategy(
         max_retries=3, initial_backoff_interval=1, max_backoff_interval=10
     )
 
+    print("ONE")
     r1 = await c.save(step_1)
+
     print("TWO")
     r2 = await c.save(
         lambda: step_2(r1), timeout=timedelta(seconds=1), retry_strategy=retry_strategy
     )
 
+    print("THREE")
     await c.sleep(timedelta(seconds=2))
 
     # r3 = await c.save(lambda: step_3(r2))

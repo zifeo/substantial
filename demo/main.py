@@ -16,13 +16,13 @@ async def example():
         example_simple,
     )
 
-    # await asyncio.sleep(3)
-    # print("Sending...")
-    # print(await w.send("do_print", "'sent from app'"))
+    await asyncio.sleep(3)
+    print("Sending...")
+    print(await w.send("do_print", "'sent from app'"))
 
-    # await asyncio.sleep(5)
-    # print("Cancelling...")
-    # print(await w.send("cancel"))
+    await asyncio.sleep(5)
+    print("Cancelling...")
+    print(await w.send("cancel"))
 
     output = await w.result()
     print("Final output", output)

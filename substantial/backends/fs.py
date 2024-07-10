@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import List, Tuple, Union
 from uuid import uuid4
 from substantial.backends.backend import Backend
+from substantial.protos.metadata import Metadata
+from substantial.protos.events import Event, Records
 
 
 class FSBackend(Backend):
@@ -17,23 +20,22 @@ class FSBackend(Backend):
         for d in ["runs", "schedules", "leases"]:
             (self.root / d).mkdir(parents=True, exist_ok=True)
 
-    async def read_events(self, run_id: str):
+    async def read_events(self, run_id: str) -> Union[Records, None]:
         f = self.root / "runs" / run_id / "events"
         if not f.exists():
             return None
+        return Records().from_json(f.read_text())
 
-        return f.read_text()
-
-    async def write_events(self, run_id: str, content: str):
+    async def write_events(self, run_id: str, content: Records) -> None:
         f = self.root / "runs" / run_id / "events"
         f.parent.mkdir(parents=True, exist_ok=True)
-        print("EVENT WRITE RAW", content)
-        f.write_text(content)
+        f.write_text(content.to_json())
 
-    async def read_all_metadata(self, run_id: str):
+    async def read_all_metadata(self, run_id: str) -> List[str]:
         f = self.root / "runs" / run_id / "logs"
         ret = []
         for log in f.iterdir():
+            # could be polymorphic
             ret.append(log.read_text())
         return ret
 
@@ -42,7 +44,7 @@ class FSBackend(Backend):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
 
-    async def next_run(self, queue: str, excludes: list[str]):
+    async def next_run(self, queue: str, excludes: list[str])  -> Union[Tuple[str, datetime], None]:
         f = self.root / "schedules" / queue
         excludes_set = set(excludes)
 
@@ -54,26 +56,29 @@ class FSBackend(Backend):
         return None
 
     async def add_schedule(
-        self, queue: str, run_id: str, schedule: datetime, content: str
-    ):
+        self, queue: str, run_id: str, schedule: datetime, content: Union[Event, None]
+    ) -> None:
         f1 = self.root / "schedules" / queue / schedule.isoformat() / run_id
-        f1.parent.mkdir(parents=True, exist_ok=False)
-        f1.write_text(content)
+        f1.parent.mkdir(parents=True, exist_ok=True)
+        f1.write_text(
+            "" if content is None
+            else content.to_json()
+        )
 
-    async def read_schedule(self, queue: str, run_id: str, schedule: datetime):
+    async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
             raise Exception(f"run not found: {f}")
         ret = f.read_text()
-        return None if ret == "" else ret
+        return None if ret == "" else Event().from_json(ret)
 
-    async def close_schedule(self, queue: str, run_id: str, schedule: datetime):
+    async def close_schedule(self, queue: str, run_id: str, schedule: datetime) -> None:
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
             raise Exception(f"run not found: {f}")
         f.unlink()
 
-    async def active_leases(self, lease_seconds: int):
+    async def active_leases(self, lease_seconds: int) -> List[str]:
         f = self.root / "leases"
         ret = []
         for lease in f.iterdir():

@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
 import json
+from typing import Union
 
 from substantial.backends.backend import Backend
 from substantial.protos import events
@@ -42,33 +43,36 @@ class Run:
         )
 
         # FIXME change in in bytes later
-        await self.backend.add_schedule(self.queue, self.run_id, now, event.to_json())
+        await self.backend.add_schedule(self.queue, self.run_id, now, event)
 
-    async def send(self, name, value=None):
+    async def send(self, name, value: Union[str, None] =None):
         now = datetime.now()
         event = events.Event(
             at=now,
             send=events.Send(
                 name=name,
-                value=protobuf.Value(value),
+                value=(
+                    # protobuf.Value("'sent from app'")
+                    # => "'sent from app'" is not a valid NullValue?
+                    protobuf.Value(string_value=value)
+                ),
             ),
         )
 
         print("send", event)
         print("send", event.to_json())
-        await self.backend.add_schedule(self.queue, self.run_id, now, event.to_json())
+        await self.backend.add_schedule(self.queue, self.run_id, now, event)
 
     async def result(self):
         while True:
-            events_raw = await self.backend.read_events(self.run_id) # can be none?
-            print("value", events_raw)
-            if events_raw is None:
+            events_records = await self.backend.read_events(self.run_id) # can be none?
+            if events_records is None:
                 await asyncio.sleep(1)
                 continue
 
-            events_records = events_raw.Records.from_json(events_raw)
             for record in events_records.events:
-                if not record.stop:
+                loosy_rec = record.to_dict()
+                if "stop" not in loosy_rec:
                     continue
 
                 if record.stop.err:
@@ -82,14 +86,12 @@ class Run:
         start_at = datetime.now()
 
         # fetch previous events
-        events_raw = await self.backend.read_events(self.run_id)
-        print("EVENT RAW", events_raw)
-        from substantial.protos.events import Event
+        records = await self.backend.read_events(self.run_id)
+
         events_records = (
             []
-            if events_raw is None
-            else Event().from_json(json.dumps(events_raw))
-            # else events_raw.Records.from_json(events_raw).events
+            if records is None
+            else records.events
         )
 
         # new on each replay
@@ -103,7 +105,7 @@ class Run:
                 self.queue, self.run_id, schedule
             )
             if new_event is not None:
-                events_records.append(events.Event().from_json(new_event))
+                events_records.append(new_event)
         else:
             schedule = start_at
 
@@ -114,18 +116,18 @@ class Run:
             raise Exception(f"Unknown workflow: {self.run_id}")
 
         try:
-            workflow(ctx, **events_records[0].kwargs)
+            await workflow(ctx, **events_records[0].start.kwargs.to_dict())
         except Interrupt as interrupt:
             # FIXME need to specify the delta
             print(f"Interrupted: {interrupt.hint}")
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=10), ""
+                self.queue, self.run_id, schedule + timedelta(seconds=10), None
             )
         except RetryMode:
             print("Retry")
             # FIXME need to specify the delta
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=10), ""
+                self.queue, self.run_id, schedule + timedelta(seconds=10), None
             )
         except CancelWorkflow as cancel:
             # save cancel events
@@ -138,8 +140,9 @@ class Run:
                 )
             )
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=10), ""
+                self.queue, self.run_id, schedule + timedelta(seconds=10), None
             )
+            # raise # force missed errors
 
         finally:
             events_save = events.Records(
@@ -150,7 +153,7 @@ class Run:
             metadata_save = metadata.Records(
                 run_id=self.run_id, metadata=metadata_records
             )
-            await self.backend.write_events(self.run_id, events_save.to_json())
+            await self.backend.write_events(self.run_id, events_save)
             await self.backend.append_metadata(
                 self.run_id, schedule, metadata_save.to_json()
             )
