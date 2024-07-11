@@ -45,17 +45,13 @@ class Run:
         # FIXME change in in bytes later
         await self.backend.add_schedule(self.queue, self.run_id, now, event)
 
-    async def send(self, name, value: Union[str, None] =None):
+    async def send(self, name, value = None):
         now = datetime.now()
         event = events.Event(
             at=now,
             send=events.Send(
                 name=name,
-                value=(
-                    # protobuf.Value("'sent from app'")
-                    # => "'sent from app'" is not a valid NullValue?
-                    protobuf.Value(string_value=value)
-                ),
+                value=json.dumps(value)
             ),
         )
 
@@ -71,8 +67,7 @@ class Run:
                 continue
 
             for record in events_records.events:
-                loosy_rec = record.to_dict()
-                if "stop" not in loosy_rec:
+                if "stop" not in record.to_dict():
                     continue
 
                 if record.stop.err:
@@ -116,6 +111,8 @@ class Run:
             raise Exception(f"Unknown workflow: {self.run_id}")
 
         try:
+            # FIXME: save will require backend ops or we can append onto Context.events
+            # and replace the local events_records with that..
             await workflow(ctx, **events_records[0].start.kwargs.to_dict())
         except Interrupt as interrupt:
             # FIXME need to specify the delta
@@ -142,7 +139,7 @@ class Run:
             await self.backend.add_schedule(
                 self.queue, self.run_id, schedule + timedelta(seconds=10), None
             )
-            # raise # force missed errors
+            # raise
 
         finally:
             events_save = events.Records(

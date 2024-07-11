@@ -29,7 +29,11 @@ class FSBackend(Backend):
     async def write_events(self, run_id: str, content: Records) -> None:
         f = self.root / "runs" / run_id / "events"
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(content.to_json())
+        try:
+            f.write_text(content.to_json())
+        except Exception as e:
+            print("BAD", content)
+            raise
 
     async def read_all_metadata(self, run_id: str) -> List[str]:
         f = self.root / "runs" / run_id / "logs"
@@ -59,7 +63,7 @@ class FSBackend(Backend):
         self, queue: str, run_id: str, schedule: datetime, content: Union[Event, None]
     ) -> None:
         f1 = self.root / "schedules" / queue / schedule.isoformat() / run_id
-        f1.parent.mkdir(parents=True, exist_ok=True)
+        f1.parent.mkdir(parents=True, exist_ok=False)
         f1.write_text(
             "" if content is None
             else content.to_json()

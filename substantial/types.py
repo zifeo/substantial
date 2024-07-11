@@ -5,6 +5,8 @@ import time
 from typing import Any, Callable, Union
 from pydantic.dataclasses import dataclass
 
+from substantial.protos import events
+
 
 class Interrupt(BaseException):
     hint: str
@@ -72,7 +74,7 @@ class ValueEval:
         )
 
         try:
-            ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
+            # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
             before_spawn = time.time()
             op = (
                 self.lambda_fn()
@@ -101,7 +103,8 @@ class ValueEval:
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:
-                ctx.source(LogKind.Save, SaveData(None, counter + 1))
+                save = events.Save(None, counter + 1)
+                ctx.source(events.Event(save=save))
                 backoff = strategy.linear(retries_left)
                 await asyncio.sleep(backoff)
                 raise RetryMode

@@ -18,13 +18,19 @@ class Start(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Save(betterproto.Message):
-    value: "betterproto_lib_google_protobuf.Value" = betterproto.message_field(1)
+    value: str = betterproto.string_field(1)
+    counter: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class Sleep(betterproto.Message):
+    info: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
 class Send(betterproto.Message):
     name: str = betterproto.string_field(1)
-    value: "betterproto_lib_google_protobuf.Value" = betterproto.message_field(2)
+    value: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -42,8 +48,9 @@ class Event(betterproto.Message):
     at: datetime = betterproto.message_field(1)
     start: "Start" = betterproto.message_field(10, group="of")
     save: "Save" = betterproto.message_field(11, group="of")
-    send: "Send" = betterproto.message_field(12, group="of")
-    stop: "Stop" = betterproto.message_field(13, group="of")
+    sleep: "Sleep" = betterproto.message_field(12, group="of")
+    send: "Send" = betterproto.message_field(13, group="of")
+    stop: "Stop" = betterproto.message_field(14, group="of")
 
 
 @dataclass(eq=False, repr=False)
