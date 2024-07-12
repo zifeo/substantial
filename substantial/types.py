@@ -115,7 +115,7 @@ class ValueEval:
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:
-                save = events.Save(save_id, None, counter + 1)
+                save = events.Save(save_id, json.dumps(None), counter + 1)
                 ctx.source(events.Event(save=save))
 
                 delta = strategy.linear(retries_left)
