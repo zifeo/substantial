@@ -10,8 +10,9 @@ message Start {
 }
 
 message Save {
-  string value = 1;
-  int32 counter = 2;
+  uint32 id = 1;
+  string value = 2;
+  int32 counter = 3;
 }
 
 message Sleep {

@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from substantial.protos import events, metadata
 from betterproto.lib.google.protobuf import Value
@@ -31,6 +31,13 @@ class Context:
         # self.metadata = metadata
         # FIXME only events should be required, metadata is only for the run, not the context
         self.events = events
+        self.__id = 0
+
+    def __next_id(self):
+        # FIXME: maybe use lambda hash instead? but how portable that would be?
+        # Also this relies on the fact that the Context is recreated each replay
+        self.__id += 1
+        return self.__id
 
     def source(self, event: events.Event):
         self.events.append(event)
@@ -47,12 +54,14 @@ class Context:
     ) -> Any:
         timeout_secs = timeout.total_seconds() if timeout is not None else None
         evaluator = ValueEval(f, timeout_secs, retry_strategy)
+        save_id = self.__next_id()
 
         saved = None
-        save_records = filter(lambda e: "saved" in e.to_dict(), self.events)
-        # FIXME: no reuse happening.. saved is always None
-        # print(self.events)
-        for record in reversed(list(save_records)):
+        save_records = filter(
+            lambda e: e.is_set("save") and save_id == e.save.id, self.events
+        )
+
+        for record in save_records:
             if record.save.counter == -1:
                 saved = record.save
             else:
@@ -70,18 +79,18 @@ class Context:
                     saved = latest.save
 
         if saved is None:
-            val = await evaluator.exec(self, None)
-            self.source(events.Event(save=events.Save(json.dumps(val), -1)))
+            val = await evaluator.exec(self, save_id, None)
+            print(f"Computed id#{save_id}, {val}")
             return val
         else:
             if saved.counter != -1:
                 # retry mode (after replay)
-                val = await evaluator.exec(self, saved.counter)
-                self.source(events.Event(save=events.Save(json.dumps(val), -1)))
-                return saved.value
+                print(f"Retry id#{save_id}, counter={saved.counter}")
+                val = await evaluator.exec(self, save_id, saved.counter)
+                return val
             else:
                 # resolved mode
-                print(f"reused {saved.value.to_json()}")
+                # print(f"Reused {saved.value} for id#{save_id}")
                 return saved.value
 
     def handle(self, event_name: str, cb: Callable):
@@ -102,18 +111,19 @@ class Context:
 
     # high-level
 
-    # async def sleep(self, duration: timedelta) -> Any:
-    #     seconds = duration.total_seconds()
-    #     if seconds <= 0:
-    #         raise AppError(f"Invalid timeout value: {seconds}")
+    async def sleep(self, duration: timedelta) -> Any:
+        seconds = duration.total_seconds()
+        if seconds <= 0:
+            raise AppError(f"Invalid timeout value: {seconds}")
 
-    #     val = self.__unqueue_up_to(LogKind.Sleep)
-    #     if val is Empty:
-    #         # FIXME this should not sleep but reschedule later
-    #         await asyncio.sleep(seconds)
-    #         self.source(LogKind.Sleep, None)
-    #     else:
-    #         self.source(LogKind.Meta, f"{seconds}s sleep already executed")
+        now = datetime.now()
+        val = self.__unqueue_up_to(LogKind.Sleep)
+        if val is Empty:
+            # FIXME this should not sleep but reschedule later
+            await asyncio.sleep(seconds)
+            self.source(LogKind.Sleep, None)
+        else:
+            self.source(LogKind.Meta, f"{seconds}s sleep already executed")
 
     async def receive(self, event_name: str):
         """

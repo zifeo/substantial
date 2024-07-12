@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 
+import json
 import time
 from typing import Any, Callable, Union
 from pydantic.dataclasses import dataclass
@@ -68,7 +69,7 @@ class ValueEval:
     timeout: Union[int, None]
     retry_strategy: Union[RetryStrategy, None]
 
-    async def exec(self, ctx, counter) -> Any:
+    async def exec(self, ctx, save_id, counter) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3, initial_backoff_interval=0, max_backoff_interval=10
         )
@@ -80,6 +81,7 @@ class ValueEval:
                 self.lambda_fn()
             )  # this does not account the case when lambda_fn() is not async
 
+            ret = None
             if inspect.iscoroutine(op):
                 after_spawn = time.time()
                 elapsed_after_spawn = after_spawn - before_spawn
@@ -88,23 +90,28 @@ class ValueEval:
                     if self.timeout is None
                     else max(0.0001, self.timeout - elapsed_after_spawn)
                 )
-                return await asyncio.wait_for(op, timeout)
+                ret =  await asyncio.wait_for(op, timeout)
             elif not inspect.isfunction(op):
                 after_spawn = time.time()
                 elapsed_after_spawn = after_spawn - before_spawn
                 if self.timeout is not None and elapsed_after_spawn > self.timeout:
                     pass  # raise? in a way, op has been resolved at this stage
-                return op
+                ret = op
             else:
                 raise Exception(
                     f"Expected value or coroutine object, got {type(op)} instead"
                 )
+
+            save = events.Save(save_id, json.dumps(ret), -1)
+            ctx.source(events.Event(save=save))
+            return ret
         except Exception as e:
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:
-                save = events.Save(None, counter + 1)
+                save = events.Save(save_id, None, counter + 1)
                 ctx.source(events.Event(save=save))
+
                 backoff = strategy.linear(retries_left)
                 await asyncio.sleep(backoff)
                 raise RetryMode

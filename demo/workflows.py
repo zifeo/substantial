@@ -22,7 +22,7 @@ async def example_simple(c: Context):
     r3 = await c.save(lambda: step_3(r2))
 
     n = await c.receive("do_print")
-    print("Outside sent", n)
+    # print("Outside sent", n)
 
     s = State(is_cancelled=False)
     c.handle("cancel", lambda _: s.update())
@@ -81,6 +81,6 @@ async def step_4(b, a):
 
 
 async def step_failing():
-    if random.random() > 0.2:
+    if random.random() > 0.5:
         raise Exception("random failure")
     return "RESOLVED => SHOULD STOP"

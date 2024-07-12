@@ -29,11 +29,7 @@ class FSBackend(Backend):
     async def write_events(self, run_id: str, content: Records) -> None:
         f = self.root / "runs" / run_id / "events"
         f.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            f.write_text(content.to_json())
-        except Exception as e:
-            print("BAD", content)
-            raise
+        f.write_text(content.to_json(indent=4))
 
     async def read_all_metadata(self, run_id: str) -> List[str]:
         f = self.root / "runs" / run_id / "logs"

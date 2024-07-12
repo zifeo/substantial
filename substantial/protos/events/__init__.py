@@ -18,8 +18,9 @@ class Start(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Save(betterproto.Message):
-    value: str = betterproto.string_field(1)
-    counter: int = betterproto.int32_field(2)
+    id: int = betterproto.uint32_field(1)
+    value: str = betterproto.string_field(2)
+    counter: int = betterproto.int32_field(3)
 
 
 @dataclass(eq=False, repr=False)

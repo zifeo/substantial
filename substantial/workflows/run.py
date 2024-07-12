@@ -104,21 +104,18 @@ class Run:
         else:
             schedule = start_at
 
+        print("=============================== Replay")
         ctx = Context(self, metadata_records, events_records)
 
         workflow = Store.from_run(self.run_id)
         if workflow is None:
             raise Exception(f"Unknown workflow: {self.run_id}")
-        ss = False
+
         try:
-            # FIXME: save will require backend ops or we can append onto Context.events
-            # and replace the local events_records with that..
-            ret = await workflow(ctx, **events_records[0].start.kwargs.to_dict())
-            events_records.append(
+            ret = await workflow(ctx, **ctx.events[0].start.kwargs.to_dict())
+            ctx.source(
                 events.Event(
-                    stop=events.Stop(
-                        ok=json.dumps(ret)
-                    )
+                    stop=events.Stop(ok=json.dumps(ret))
                 )
             )
         except Interrupt as interrupt:
@@ -146,12 +143,12 @@ class Run:
             await self.backend.add_schedule(
                 self.queue, self.run_id, schedule + timedelta(seconds=10), None
             )
-            # raise
+            raise
 
         finally:
             events_save = events.Records(
                 run_id=self.run_id,
-                events=events_records,
+                events=ctx.events,
             )
 
             metadata_save = metadata.Records(

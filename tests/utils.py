@@ -8,12 +8,12 @@ import uvloop
 
 from substantial.conductor import Handle, Recorder, Conductor
 from substantial.types import Log
-from substantial.workflow import Workflow
+from substantial.workflows.workflow import Workflow
 
 
 class LogFilter(str, Enum):
-    Events = "events"
-    Runs = "runs"
+    Send = "send"
+    Save = "save"
 
 
 @dataclass
@@ -57,7 +57,6 @@ class WorkflowTest:
             return Recorder.get_recorded_runs(self.handle)
         if filter == LogFilter.Events:
             return Recorder.get_recorded_events(self.handle)
-        raise Exception(f"Unsupported filter {filter}")
 
     def logs_data_equal(
         self,
