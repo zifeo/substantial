@@ -129,7 +129,7 @@ class Run:
             # Same as interrupt, but replay should be instant
             print("Delay", delay.hint)
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
+                self.queue, self.run_id, schedule + timedelta(seconds=1), None
             )
         except RetryMode as retry:
             await self.backend.add_schedule(

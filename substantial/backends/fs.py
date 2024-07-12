@@ -48,6 +48,10 @@ class FSBackend(Backend):
         f = self.root / "schedules" / queue
         excludes_set = set(excludes)
 
+        # FIXME: should invalidate latest scheduled right when new schedule is added for a given id
+        # this introduce inconsistencies as interrupts and such will
+        # schedule a new run everytime
+
         for schedule in sorted(f.iterdir()):
             for run_id in schedule.iterdir():
                 if run_id.name not in excludes_set:
@@ -76,6 +80,7 @@ class FSBackend(Backend):
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
             raise Exception(f"run not found: {f}")
+        print(f"closed {f}")
         f.unlink()
 
     async def active_leases(self, lease_seconds: int) -> List[str]:
