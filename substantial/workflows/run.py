@@ -67,13 +67,13 @@ class Run:
                 continue
 
             for record in events_records.events:
-                if "stop" not in record.to_dict():
+                if not record.is_set("stop"):
                     continue
 
-                if record.stop.err:
+                if record.stop.is_set("err"):
                     raise Exception(record.stop.err)
 
-                return record.stop.ok
+                return json.loads(record.stop.ok)
 
             await asyncio.sleep(1)
 
@@ -109,11 +109,18 @@ class Run:
         workflow = Store.from_run(self.run_id)
         if workflow is None:
             raise Exception(f"Unknown workflow: {self.run_id}")
-
+        ss = False
         try:
             # FIXME: save will require backend ops or we can append onto Context.events
             # and replace the local events_records with that..
-            await workflow(ctx, **events_records[0].start.kwargs.to_dict())
+            ret = await workflow(ctx, **events_records[0].start.kwargs.to_dict())
+            events_records.append(
+                events.Event(
+                    stop=events.Stop(
+                        ok=json.dumps(ret)
+                    )
+                )
+            )
         except Interrupt as interrupt:
             # FIXME need to specify the delta
             print(f"Interrupted: {interrupt.hint}")
