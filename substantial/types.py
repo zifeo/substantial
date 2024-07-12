@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta
 import inspect
 
 import json
@@ -17,8 +18,11 @@ class Interrupt(BaseException):
 
 
 class RetryMode(BaseException):
-    hint: str
+    def __init__(self, delta: timedelta, hint: Union[str, None] = None) -> None:
+        self.hint = hint or ""
+        self.delta = delta
 
+class DelayMode(BaseException):
     def __init__(self, hint: Union[str, None] = None) -> None:
         self.hint = hint or ""
 
@@ -55,12 +59,14 @@ class RetryStrategy:
         elif low is None and high is not None:
             self.initial_backoff_interval = max(0, self.max_backoff_interval - 10)
 
-    def linear(self, retries_left: int) -> int:
+    def linear(self, retries_left: int) -> timedelta:
         """Scaled timeout in seconds"""
         if retries_left <= 0:
             raise Exception("retries_left <= 0")
         dt = self.max_backoff_interval - self.initial_backoff_interval
-        return int(((self.max_retries - retries_left) * dt) / self.max_retries)
+        return timedelta(
+            int(((self.max_retries - retries_left) * dt) / self.max_retries)
+        )
 
 
 @dataclass
@@ -112,9 +118,8 @@ class ValueEval:
                 save = events.Save(save_id, None, counter + 1)
                 ctx.source(events.Event(save=save))
 
-                backoff = strategy.linear(retries_left)
-                await asyncio.sleep(backoff)
-                raise RetryMode
+                delta = strategy.linear(retries_left)
+                raise RetryMode(delta)
             else:
                 raise e
 

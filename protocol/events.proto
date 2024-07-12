@@ -16,7 +16,9 @@ message Save {
 }
 
 message Sleep {
-  string info = 1;
+  uint32 id = 1;
+  google.protobuf.Timestamp start = 2;
+  google.protobuf.Timestamp end = 3;
 }
 
 message Send {

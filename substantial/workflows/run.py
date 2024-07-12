@@ -12,6 +12,7 @@ from substantial.workflows.context import Context
 
 from substantial.types import (
     CancelWorkflow,
+    DelayMode,
     Interrupt,
     RetryMode,
 )
@@ -124,11 +125,15 @@ class Run:
             await self.backend.add_schedule(
                 self.queue, self.run_id, schedule + timedelta(seconds=10), None
             )
-        except RetryMode:
-            print("Retry")
-            # FIXME need to specify the delta
+        except DelayMode as delay:
+            # Same as interrupt, but replay should be instant
+            print("Delay", delay.hint)
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=10), None
+                self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
+            )
+        except RetryMode as retry:
+            await self.backend.add_schedule(
+                self.queue, self.run_id, schedule + retry.delta, None
             )
         except CancelWorkflow as cancel:
             # save cancel events

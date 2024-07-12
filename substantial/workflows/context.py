@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, tzinfo
 
 from substantial.protos import events, metadata
 from betterproto.lib.google.protobuf import Value
@@ -11,11 +11,10 @@ if TYPE_CHECKING:
     from substantial.workflows.run import Run
 
 from substantial.types import (
-    AppError,
     CancelWorkflow,
+    DelayMode,
     Interrupt,
     ValueEval,
-    Empty,
     RetryStrategy,
 )
 
@@ -64,6 +63,7 @@ class Context:
         for record in save_records:
             if record.save.counter == -1:
                 saved = record.save
+                break
             else:
                 latest = None
                 while True:
@@ -90,7 +90,7 @@ class Context:
                 return val
             else:
                 # resolved mode
-                # print(f"Reused {saved.value} for id#{save_id}")
+                print(f"Reused {saved.value} for id#{save_id}")
                 return saved.value
 
     def handle(self, event_name: str, cb: Callable):
@@ -112,18 +112,27 @@ class Context:
     # high-level
 
     async def sleep(self, duration: timedelta) -> Any:
-        seconds = duration.total_seconds()
-        if seconds <= 0:
-            raise AppError(f"Invalid timeout value: {seconds}")
+        sleep_id = self.__next_id()
+        sleep_records = list(filter(
+            lambda e: e.is_set("sleep") and sleep_id == e.sleep.id, self.events
+        ))
 
-        now = datetime.now()
-        val = self.__unqueue_up_to(LogKind.Sleep)
-        if val is Empty:
-            # FIXME this should not sleep but reschedule later
-            await asyncio.sleep(seconds)
-            self.source(LogKind.Sleep, None)
-        else:
-            self.source(LogKind.Meta, f"{seconds}s sleep already executed")
+        now = datetime.now(tz=timezone.utc)
+        if len(sleep_records) == 0:
+            self.source(
+                events.Event(
+                    sleep=events.Sleep(sleep_id, start=now, end=now + duration)
+                )
+            )
+            raise DelayMode(f"Sleep id#{sleep_id} encoutered")
+
+        for record in sleep_records:
+            op_end = record.sleep.end.replace(tzinfo=timezone.utc)
+            if now >= op_end:
+                print(f"Skip sleep id#{sleep_id}")
+                return
+
+        raise DelayMode(f"Sleep id#{sleep_id} not ending yet")
 
     async def receive(self, event_name: str):
         """

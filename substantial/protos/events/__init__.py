@@ -25,7 +25,9 @@ class Save(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Sleep(betterproto.Message):
-    info: str = betterproto.string_field(1)
+    id: int = betterproto.uint32_field(1)
+    start: datetime = betterproto.message_field(2)
+    end: datetime = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
