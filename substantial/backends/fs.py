@@ -46,11 +46,7 @@ class FSBackend(Backend):
 
     async def next_run(self, queue: str, excludes: list[str])  -> Union[Tuple[str, datetime], None]:
         f = self.root / "schedules" / queue
-        excludes_set = set(excludes)
-
-        # FIXME: should invalidate latest scheduled right when new schedule is added for a given id
-        # this introduce inconsistencies as interrupts and such will
-        # schedule a new run everytime
+        excludes_set = set(excludes) # Note: lease related
 
         for schedule in sorted(f.iterdir()):
             for run_id in schedule.iterdir():
@@ -62,7 +58,29 @@ class FSBackend(Backend):
     async def add_schedule(
         self, queue: str, run_id: str, schedule: datetime, content: Union[Event, None]
     ) -> None:
-        f1 = self.root / "schedules" / queue / schedule.isoformat() / run_id
+        q = self.root / "schedules" / queue
+
+        waiting_schedule = None
+        if q.exists():
+            # Note: new schedule should always overwrite replays (but not scheduled events)
+            # This is for keeping the run consistent,
+            # Case 1: ======= r1 ====== r2 ========>
+            #                      x r3?
+            # Result: ============= r3 ============>
+            # Rationale being that the scheduled replays are often triggered by Interrupts and such
+            # also it's never guaranteed that time(run since r1) <= time(r2 - r1)
+            # some issues I encountered was having a bunch of replays happening even though the run should
+            # have ended
+
+            for sched in sorted(q.iterdir()):
+                for planned in sched.iterdir():
+                    planned_date = datetime.fromisoformat(sched.name)
+                    if planned.name == run_id and schedule >= planned_date:
+                        event = await self.read_schedule(queue, run_id, planned_date)
+                        if event is None: # event => None == scheduled replays..
+                            await self.close_schedule(queue, run_id, planned_date)
+
+        f1 = q / schedule.isoformat() / run_id
         f1.parent.mkdir(parents=True, exist_ok=False)
         f1.write_text(
             "" if content is None

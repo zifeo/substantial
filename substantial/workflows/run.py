@@ -57,7 +57,6 @@ class Run:
         )
 
         print("send", event)
-        print("send", event.to_json())
         await self.backend.add_schedule(self.queue, self.run_id, now, event)
 
     async def result(self):

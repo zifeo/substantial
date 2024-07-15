@@ -95,7 +95,7 @@ class Context:
 
     def handle(self, event_name: str, cb: Callable):
         for record in self.events:
-            if "send" in record.to_dict() and event_name == record.send.name:
+            if record.is_set("send") and event_name == record.send.name:
                 payload = json.loads(record.send.value)
                 ret = cb(payload)
                 return ret
