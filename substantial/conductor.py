@@ -44,6 +44,7 @@ class Conductor:
             await p.coro_join()
             return p
         except asyncio.CancelledError:
+            p.terminate()
             print("Cancelled")
         except Exception:
             raise
