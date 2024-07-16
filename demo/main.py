@@ -27,6 +27,11 @@ async def example():
     output = await w.result()
     print("Final output", output)
 
+    # should be put on schedule, but ignored (don't trigger `Stop` flagged run)
+    print(await w.send("after stop", "one"))
+    await asyncio.sleep(0.5)
+    print(await w.send("after stop", "two"))
+
     agent.cancel()
     await agent
 

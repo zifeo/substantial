@@ -64,18 +64,16 @@ class FSBackend(Backend):
         if q.exists():
             # Note: new schedule should always overwrite replays (but not scheduled events)
             # This is for keeping the run consistent,
-            # Case 1: ======= r1 ====== r2 ========>
-            #                      x r3?
-            # Result: ============= r3 ============>
+            # Case 1: ======= r1 == ev1 == r2 ====== r3 ========>
+            #                              x r4
+            # Result: ============== ev1 = r4 ====== r3 ========>
             # Rationale being that the scheduled replays are often triggered by Interrupts and such
-            # also it's never guaranteed that time(run since r1) <= time(r2 - r1)
-            # some issues I encountered was having a bunch of replays happening even though the run should
-            # have ended
+            # for more sane runs, fuse planned replays (induced by add_schedule calls)?
 
             for sched in sorted(q.iterdir()):
                 for planned in sched.iterdir():
                     planned_date = datetime.fromisoformat(sched.name)
-                    if planned.name == run_id and schedule >= planned_date:
+                    if planned.name == run_id and planned_date <= schedule:
                         event = await self.read_schedule(queue, run_id, planned_date)
                         if event is None: # event => None == scheduled replays..
                             await self.close_schedule(queue, run_id, planned_date)
@@ -97,7 +95,8 @@ class FSBackend(Backend):
     async def close_schedule(self, queue: str, run_id: str, schedule: datetime) -> None:
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
-            raise Exception(f"run not found: {f}")
+            # raise Exception(f"run not found: {f}")
+            return
         print(f"closed {f}")
         f.unlink()
 

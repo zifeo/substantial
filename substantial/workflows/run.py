@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
 import json
-from typing import Union
+from typing import List
 
 from substantial.backends.backend import Backend
 from substantial.protos import events
@@ -94,12 +94,15 @@ class Run:
             metadata.Metadata(at=start_at, info=metadata.Info("replay"))
         ]
 
+        stopped_run = execution_has_stopped(events_records)
+
         # when there is a new event in schedule
         if schedule is not None:
+            # Note: if stopped_run == True, incoming events are still consumed and closed
             new_event = await self.backend.read_schedule(
                 self.queue, self.run_id, schedule
             )
-            if new_event is not None:
+            if new_event is not None and not stopped_run:
                 events_records.append(new_event)
         else:
             schedule = start_at
@@ -112,23 +115,24 @@ class Run:
             raise Exception(f"Unknown workflow: {self.run_id}")
 
         try:
-            ret = await workflow(ctx, **ctx.events[0].start.kwargs.to_dict())
-            ctx.source(
-                events.Event(
-                    stop=events.Stop(ok=json.dumps(ret))
+            if not stopped_run:
+                ret = await workflow(ctx, **ctx.events[0].start.kwargs.to_dict())
+                ctx.source(
+                    events.Event(
+                        stop=events.Stop(ok=json.dumps(ret))
+                    )
                 )
-            )
         except Interrupt as interrupt:
             # FIXME need to specify the delta
             print(f"Interrupted: {interrupt.hint}")
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=10), None
+                self.queue, self.run_id, schedule + timedelta(seconds=1), None
             )
         except DelayMode as delay:
             # Same as interrupt, but replay should be instant
             print("Delay", delay.hint)
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=1), None
+                self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
             )
         except RetryMode as retry:
             await self.backend.add_schedule(
@@ -163,3 +167,31 @@ class Run:
                 self.run_id, schedule, metadata_save.to_json()
             )
             await self.backend.close_schedule(self.queue, self.run_id, schedule)
+
+
+def execution_has_stopped(records: List[events.Event]):
+    # Expected timeline shape:
+    #       == Start == .. == Stop == Start == .. == Stop ==
+    # Corrupted: 
+    #   1. Start before closing old:
+    #       == Start == Start .. == Stop == ..
+    #   2. Stop before start:
+    #       == Stop == ..
+    life = 0
+    has_stopped = False
+    for rec in records:
+        if rec.is_set("start"):
+            if life >= 1:
+                raise Exception(
+                    "potentially corrupted logs, another run occured yet previous has not stopped"
+                )
+            life += 1
+            has_stopped = False
+        elif rec.is_set("stop"):
+            if life <= 0:
+                raise Exception(
+                    "potentially corrupted logs, attempt stopping already closed run, or run with a missing start"
+                )
+            life -= 1
+            has_stopped = True
+    return has_stopped

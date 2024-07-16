@@ -17,7 +17,7 @@ async def example_simple(c: Context):
         lambda: step_2(r1), timeout=timedelta(seconds=1), retry_strategy=retry_strategy
     )
 
-    await c.sleep(timedelta(seconds=1))
+    await c.sleep(timedelta(seconds=10))
 
     r3 = await c.save(lambda: step_3(r2))
 
