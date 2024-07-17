@@ -1,7 +1,12 @@
+from dataclasses import dataclass
+import json
 import pytest
-from substantial.workflows import workflow
+from substantial.backends.fs import FSBackend
+from substantial.workflows.workflow import workflow
 from substantial.workflows.context import Context
-from tests.utils import LogFilter, WorkflowTest, async_test
+from tests.utils import EventSend, WorkflowTest, async_test
+from substantial.protos.events import Event, Save, Start, Stop
+import betterproto.lib.google.protobuf as protobuf
 
 
 # Further configuration details:
@@ -27,12 +32,18 @@ async def test_simple(t: WorkflowTest):
         r3 = await c.save(lambda: async_op(r2))
         return r3
 
-    s = await t.step().exec_workflow(simple_workflow, 3)
-    (
-        s.logs_data_equal(LogFilter.Runs, ["A", "B A", "C B A"]).logs_data_equal(
-            LogFilter.Events, []
-        )
-    )
+    backend = FSBackend("./logs")
+    s = await t.step(backend).exec_workflow(simple_workflow, 3)
+
+    assert s.w_output == "C B A"
+    assert len(s.w_records.events) > 0
+    assert s.w_records.events == [
+        Event(start=Start(kwargs=protobuf.Struct({})), at=s.w_records.events[0].at),
+        Event(save=Save(1, json.dumps("A"), -1)),
+        Event(save=Save(2, json.dumps("B A"), -1)),
+        Event(save=Save(3, json.dumps("C B A"), -1)),
+        Event(stop=Stop(ok=json.dumps("C B A")))
+    ]
 
 
 # @async_test
@@ -55,12 +66,13 @@ async def test_simple(t: WorkflowTest):
 #             r3 = await c.save(lambda: f"{payload} B {r1}")
 #         return r3
 
-#     s = t.step()
+#     backend = FSBackend("./logs")
+#     s = t.step(backend)
 #     s = await s.events(
 #         {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}
 #     ).exec_workflow(event_workflow, 10)
-#     s.logs_data_equal(LogFilter.Runs, ["A", "Hello from outside! B A"])
-#     assert s.workflow_output == "Hello from outside! B A"
+
+#     assert s.w_output == "Hello from outside! B A"
 
 
 # @async_test

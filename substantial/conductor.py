@@ -33,7 +33,7 @@ class Conductor:
     def run_for(self, run_id, queue="default"):
         return Run(run_id, queue, self.backend)
 
-    async def run(self, queue="default"):
+    def run(self, queue="default"):
         return asyncio.create_task(self.run_as_process(queue))
 
     async def run_as_process(self, queue):

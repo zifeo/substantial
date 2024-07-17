@@ -10,7 +10,7 @@ async def example():
     substantial = Conductor(backend)
     substantial.register(example_simple)
 
-    agent = await substantial.run()
+    agent = substantial.run()
 
     w = await substantial.start(
         example_simple,
