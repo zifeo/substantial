@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import pytest
@@ -82,7 +83,7 @@ class WorkflowTest:
         return self
 
     def expects_timeout(self):
-        self.timed_out_expected = True
+        self.expect_timed_out = True
         return self
 
     async def exec_workflow(
@@ -105,23 +106,35 @@ class WorkflowTest:
                 time_prev = t
                 await asyncio.sleep(delta_time)
                 await w.send(event.event_name, event.payload)
+        
+        async def resolve_output():
+            return [await w.result()]
 
         # event poller task
         agent_task = substantial.run()
 
         try:
-            _done, _pending = await asyncio.wait(
+            done, pending = await asyncio.wait(
                 [
-                    agent_task,
                     asyncio.create_task(event_timeline()),
+                    asyncio.create_task(resolve_output()),
                 ],
                 timeout=timeout_secs
             )
-            self.w_output = await w.result()
+
+            if len(pending) > 0:
+                raise TimeoutError(f"{timeout_secs}s exceeded")
+
             self.w_records = await self.backend.read_events(w.run_id)
+            while len(done) > 0: # done set has random order
+                item = await done.pop()
+                if isinstance(item, list):
+                    self.w_output = item[0]
+                    break
+
         except TimeoutError:
             self.timed_out = True
-            if not self.timed_out_expected:
+            if not self.expect_timed_out:
                 raise
         except:
             raise

@@ -72,7 +72,7 @@ class Run:
                     continue
 
                 if record.stop.is_set("err"):
-                    raise Exception(record.stop.err)
+                    raise Exception(json.loads(record.stop.err))
 
                 return json.loads(record.stop.ok)
 
@@ -142,8 +142,8 @@ class Run:
                 self.queue, self.run_id, schedule + retry.delta, None
             )
         except RetryFail as fail:
-            self.backend.add_schedule(
-                self.queue, self.run_id, schedule,
+            await self.backend.add_schedule(
+                self.queue, self.run_id, schedule + timedelta(seconds=0.5),
                 events.Event(
                     stop=events.Stop(err=json.dumps(fail.error_message))
                 )

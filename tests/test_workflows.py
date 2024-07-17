@@ -35,7 +35,7 @@ async def test_simple(t: WorkflowTest):
         return r3
 
     backend = FSBackend("./logs")
-    s = await t.step(backend).exec_workflow(simple_workflow, 3)
+    s = await t.step(backend).exec_workflow(simple_workflow, 20)
 
     assert s.w_output == "C B A"
     assert len(s.w_records.events) > 0
@@ -47,32 +47,34 @@ async def test_simple(t: WorkflowTest):
         Event(stop=Stop(ok=json.dumps("C B A")))
     ]
 
+@async_test
+async def test_failing_workflow_with_retry(t: WorkflowTest):
+    def failing_op():
+        raise Exception("UNREACHABLE")
 
+    retries = 3
 
-# @async_test
-# async def test_failing_workflow_with_retry(t: WorkflowTest):
-#     def failing_op():
-#         raise Exception("UNREACHABLE")
+    @workflow()
+    async def failing_workflow(c: Context):
+        await c.save(lambda: "A")
+        r1 = await c.save(
+            lambda: failing_op(),
+            retry_strategy=RetryStrategy(
+                max_retries=retries, initial_backoff_interval=1, max_backoff_interval=5
+            ),
+        )
+        return r1
 
-#     retries = 3
-
-#     @workflow()
-#     async def failing_workflow(c: Context):
-#         await c.save(lambda: "A")
-#         r1 = await c.save(
-#             lambda: failing_op(),
-#             retry_strategy=RetryStrategy(
-#                 max_retries=retries, initial_backoff_interval=1, max_backoff_interval=5
-#             ),
-#         )
-#         return r1
-
-#     backend = FSBackend("./logs")
-#     s = t.step(backend)
-#     s = await s.expects_timeout().exec_workflow(failing_workflow, 5)
-#     retries_accounting_first_run = retries - 1
-#     assert s.w == (1 + retries_accounting_first_run)
-
+    backend = FSBackend("./logs")
+    s = t.step(backend)
+    with pytest.raises(Exception) as info:
+        s = await s.exec_workflow(failing_workflow)
+    
+    assert info.value.args[0] == "Exception: UNREACHABLE"
+    assert len(s.w_records.events) >= retries + 1
+    assert s.w_records.events[-1] == Event(
+        stop=Stop(err=json.dumps("Exception: UNREACHABLE"))
+    )
 
 # @async_test
 # async def test_events(t: WorkflowTest):
@@ -145,35 +147,3 @@ async def test_simple(t: WorkflowTest):
 #     # 1i --- 1f,3i --- 3f --->
 #     # 2i --- 2f --------->
 #     assert duration < 6.2
-
-
-# @async_test
-# async def test_timeout_with_retries(t: WorkflowTest):
-#     async def do_wait(v):
-#         async with asyncio.timeout(5):
-#             pass
-#         return v
-
-#     @workflow()
-#     async def workflow_that_fails(c: Context, name):
-#         a = await c.save(lambda: "A")
-#         return await c.save(
-#             lambda: do_wait(a),
-#             timeout=timedelta(seconds=1),
-#             retry_strategy=RetryStrategy(
-#                 max_retries=4, initial_backoff_interval=1, max_backoff_interval=5
-#             ),
-#         )
-
-#     s = t.step()
-#     s = await s.expects_timeout().exec_workflow(workflow_that_fails, 10)
-#     save_logs: List[Log] = list(
-#         filter(lambda log: isinstance(log.data, SaveData), s.get_logs(LogFilter.Runs))
-#     )
-#     save_datas = [asdict(log.data) for log in save_logs]
-#     assert save_datas == [
-#         {"counter": -1, "payload": "A"},  # -1 for resolved
-#         {"counter": 2, "payload": None},  # 2nd retry (counter: 1 is not recorded)
-#         {"counter": 3, "payload": None},  # 3rd retry
-#         {"counter": 4, "payload": None},  # 4th retry
-#     ]
