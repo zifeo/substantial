@@ -14,6 +14,7 @@ from substantial.types import (
     CancelWorkflow,
     DelayMode,
     Interrupt,
+    RetryFail,
     RetryMode,
 )
 
@@ -117,7 +118,9 @@ class Run:
         try:
             if not stopped_run:
                 ret = await workflow(ctx, **ctx.events[0].start.kwargs.to_dict())
-                ctx.source(
+                # Alt impl: ctx.events.append(..)
+                await self.backend.add_schedule(
+                    self.queue, self.run_id, schedule + timedelta(seconds=0.5),
                     events.Event(
                         stop=events.Stop(ok=json.dumps(ret))
                     )
@@ -126,20 +129,27 @@ class Run:
             # FIXME need to specify the delta
             print(f"Interrupted: {interrupt.hint}")
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=1), None
+                self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
             )
         except DelayMode as delay:
-            # Same as interrupt, but replay should be instant
-            print("Delay", delay.hint)
+            print(f"Delay: {delay.hint}")
             await self.backend.add_schedule(
                 self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
             )
         except RetryMode as retry:
+            # should be max(0, schedule + retry.delta - **dur_next_lease_avail_if_exp** - **poll_interv**)  
             await self.backend.add_schedule(
                 self.queue, self.run_id, schedule + retry.delta, None
             )
+        except RetryFail as fail:
+            self.backend.add_schedule(
+                self.queue, self.run_id, schedule,
+                events.Event(
+                    stop=events.Stop(err=json.dumps(fail.error_message))
+                )
+            )
         except CancelWorkflow as cancel:
-            # save cancel events
+            # TODO: save cancel events
             print(f"Cancelled workflow: {cancel.hint}")
         except Exception as e:
             metadata_records.append(

@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+import os
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import pytest
 import uvloop
@@ -109,29 +110,25 @@ class WorkflowTest:
         agent_task = substantial.run()
 
         try:
-            workflow_output, _ = await asyncio.gather(
-                asyncio.wait_for(agent_task, timeout_secs),
-                event_timeline(),
+            _done, _pending = await asyncio.wait(
+                [
+                    agent_task,
+                    asyncio.create_task(event_timeline()),
+                ],
+                timeout=timeout_secs
             )
             self.w_output = await w.result()
             self.w_records = await self.backend.read_events(w.run_id)
-            agent_task.cancel()
         except TimeoutError:
             self.timed_out = True
             if not self.timed_out_expected:
                 raise
-            agent_task.cancel()
         except:
             raise
+        finally:
+            agent_task.cancel()
 
         return self
-
-    # async def replay(self, count: int):
-    #     pass
-    # Not sure about the feasability since
-    # replay is hidden inside the backend's workflow queue and is is not reachable from outside
-    # though it can be simulated with events
-
 
 def make_sync(fn: Any) -> Any:
     # Naive impl will run it in the ongoing event loop

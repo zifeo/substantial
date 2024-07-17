@@ -39,9 +39,7 @@ class Send(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class Stop(betterproto.Message):
     ok: str = betterproto.string_field(1, group="result")
-    err: "betterproto_lib_google_protobuf.Value" = betterproto.message_field(
-        2, group="result"
-    )
+    err: str = betterproto.string_field(2, group="result")
 
 
 @dataclass(eq=False, repr=False)

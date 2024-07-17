@@ -22,6 +22,10 @@ class RetryMode(BaseException):
         self.hint = hint or ""
         self.delta = delta
 
+class RetryFail(BaseException):
+    def __init__(self, error_message: str) -> None:
+        self.error_message = error_message
+
 class DelayMode(BaseException):
     def __init__(self, hint: Union[str, None] = None) -> None:
         self.hint = hint or ""
@@ -121,7 +125,8 @@ class ValueEval:
                 delta = strategy.linear(retries_left)
                 raise RetryMode(delta)
             else:
-                raise e
+                message = f"{type(e).__name__}: {e}"
+                raise RetryFail(message)
 
 
 Empty: Any = object()

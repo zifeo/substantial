@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+from datetime import timedelta
 import json
 import pytest
 from substantial.backends.fs import FSBackend
+from substantial.types import RetryStrategy
 from substantial.workflows.workflow import workflow
 from substantial.workflows.context import Context
 from tests.utils import EventSend, WorkflowTest, async_test
@@ -22,29 +24,54 @@ def t():
 
 @async_test
 async def test_simple(t: WorkflowTest):
-    assert True
-    # @workflow()
-    # async def simple_workflow(c: Context):
-    #     async def async_op(v):
-    #         return f"C {v}"
+    @workflow()
+    async def simple_workflow(c: Context):
+        async def async_op(v):
+            return f"C {v}"
 
-    #     r1 = await c.save(lambda: "A")
-    #     r2 = await c.save(lambda: (lambda: f"B {r1}")())
-    #     r3 = await c.save(lambda: async_op(r2))
-    #     return r3
+        r1 = await c.save(lambda: "A")
+        r2 = await c.save(lambda: (lambda: f"B {r1}")())
+        r3 = await c.save(lambda: async_op(r2))
+        return r3
 
-    # backend = FSBackend("./logs")
-    # s = await t.step(backend).exec_workflow(simple_workflow, 3)
+    backend = FSBackend("./logs")
+    s = await t.step(backend).exec_workflow(simple_workflow, 3)
 
-    # assert s.w_output == "C B A"
-    # assert len(s.w_records.events) > 0
-    # assert s.w_records.events == [
-    #     Event(start=Start(kwargs=protobuf.Struct({})), at=s.w_records.events[0].at),
-    #     Event(save=Save(1, json.dumps("A"), -1)),
-    #     Event(save=Save(2, json.dumps("B A"), -1)),
-    #     Event(save=Save(3, json.dumps("C B A"), -1)),
-    #     Event(stop=Stop(ok=json.dumps("C B A")))
-    # ]
+    assert s.w_output == "C B A"
+    assert len(s.w_records.events) > 0
+    assert s.w_records.events == [
+        Event(start=Start(kwargs=protobuf.Struct({})), at=s.w_records.events[0].at),
+        Event(save=Save(1, json.dumps("A"), -1)),
+        Event(save=Save(2, json.dumps("B A"), -1)),
+        Event(save=Save(3, json.dumps("C B A"), -1)),
+        Event(stop=Stop(ok=json.dumps("C B A")))
+    ]
+
+
+
+# @async_test
+# async def test_failing_workflow_with_retry(t: WorkflowTest):
+#     def failing_op():
+#         raise Exception("UNREACHABLE")
+
+#     retries = 3
+
+#     @workflow()
+#     async def failing_workflow(c: Context):
+#         await c.save(lambda: "A")
+#         r1 = await c.save(
+#             lambda: failing_op(),
+#             retry_strategy=RetryStrategy(
+#                 max_retries=retries, initial_backoff_interval=1, max_backoff_interval=5
+#             ),
+#         )
+#         return r1
+
+#     backend = FSBackend("./logs")
+#     s = t.step(backend)
+#     s = await s.expects_timeout().exec_workflow(failing_workflow, 5)
+#     retries_accounting_first_run = retries - 1
+#     assert s.w == (1 + retries_accounting_first_run)
 
 
 # @async_test
@@ -118,30 +145,6 @@ async def test_simple(t: WorkflowTest):
 #     # 1i --- 1f,3i --- 3f --->
 #     # 2i --- 2f --------->
 #     assert duration < 6.2
-
-
-# @async_test
-# async def test_failing_workflow_with_retry(t: WorkflowTest):
-#     def failing_op():
-#         raise Exception("UNREACHABLE")
-
-#     retries = 3
-
-#     @workflow()
-#     async def failing_workflow(c: Context):
-#         await c.save(lambda: "A")
-#         r1 = await c.save(
-#             lambda: failing_op(),
-#             retry_strategy=RetryStrategy(
-#                 max_retries=retries, initial_backoff_interval=1, max_backoff_interval=5
-#             ),
-#         )
-#         return r1
-
-#     s = t.step()
-#     s = await s.expects_timeout().exec_workflow(failing_workflow, 5)
-#     retries_accounting_first_run = retries - 1
-#     assert len(s.get_logs(LogFilter.Runs)) == (1 + retries_accounting_first_run)
 
 
 # @async_test

@@ -29,7 +29,7 @@ message Send {
 message Stop {
   oneof result {
     string ok = 1;
-    google.protobuf.Value err = 2;
+    string err = 2;
   }
 }
 
