@@ -76,33 +76,33 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
         stop=Stop(err=json.dumps("Exception: UNREACHABLE"))
     )
 
-# @async_test
-# async def test_events(t: WorkflowTest):
-#     @dataclass
-#     class State:
-#         is_cancelled: bool
+@async_test
+async def test_events_with_sleep(t: WorkflowTest):
+    @dataclass
+    class State:
+        is_cancelled: bool
 
-#         def update(self, *_):
-#             self.is_cancelled = True
+        def update(self, *_):
+            self.is_cancelled = True
 
-#     @workflow()
-#     async def event_workflow(c: Context):
-#         r1 = await c.save(lambda: "A")
-#         payload = await c.event("sayHello")
+    @workflow()
+    async def event_workflow(c: Context):
+        r1 = await c.save(lambda: "A")
+        payload = await c.receive("sayHello")
+        await c.sleep(timedelta(seconds=10))
+        s = State(False)
+        c.handle("cancel", lambda _: s.update())
+        if await c.ensure(lambda: s.is_cancelled):
+            r3 = await c.save(lambda: f"{payload} B {r1}")
+        return r3
 
-#         s = State(False)
-#         c.register("cancel", s.update)
-#         if await c.wait_on(lambda: s.is_cancelled):
-#             r3 = await c.save(lambda: f"{payload} B {r1}")
-#         return r3
+    backend = FSBackend("./logs")
+    s = t.step(backend)
+    s = await s.events(
+        {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}
+    ).exec_workflow(event_workflow)
 
-#     backend = FSBackend("./logs")
-#     s = t.step(backend)
-#     s = await s.events(
-#         {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}
-#     ).exec_workflow(event_workflow, 10)
-
-#     assert s.w_output == "Hello from outside! B A"
+    assert s.w_output == "Hello from outside! B A"
 
 
 # @async_test

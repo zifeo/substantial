@@ -129,7 +129,7 @@ class Run:
             # FIXME need to specify the delta
             print(f"Interrupted: {interrupt.hint}")
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
+                self.queue, self.run_id, schedule + timedelta(seconds=10), None
             )
         except DelayMode as delay:
             print(f"Delay: {delay.hint}")
@@ -159,7 +159,7 @@ class Run:
                 )
             )
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=10), None
+                self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
             )
             raise
 

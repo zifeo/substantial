@@ -60,7 +60,6 @@ class FSBackend(Backend):
     ) -> None:
         q = self.root / "schedules" / queue
 
-        waiting_schedule = None
         if q.exists():
             # Note: new schedule should always overwrite replays (but not scheduled events)
             # This is for keeping the run consistent,

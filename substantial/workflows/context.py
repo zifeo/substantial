@@ -91,9 +91,9 @@ class Context:
             else:
                 # resolved mode
                 print(f"Reused {saved.value} for id#{save_id}")
-                return saved.value
+                return json.loads(saved.value)
 
-    def handle(self, event_name: str, cb: Callable):
+    def handle(self, event_name: str, cb: Callable[[Any], Any]):
         for record in self.events:
             if record.is_set("send") and event_name == record.send.name:
                 payload = json.loads(record.send.value)
@@ -136,7 +136,7 @@ class Context:
 
     async def receive(self, event_name: str):
         """
-        Register a new event that can be triggered from outside the workflow
+        Wait for events emitted from outside the workflow
         """
         proxy = {}
         self.handle(event_name, lambda payload: proxy.update(val=payload))
