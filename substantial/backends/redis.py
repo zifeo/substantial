@@ -33,7 +33,7 @@ class RedisBackend(Backend):
 
     async def append_metadata(self, run_id: str, schedule: datetime, content: str):
         base_key = "_".join(["runs", run_id, "logs"]) # queue
-        sched_key = "_".join[run_id, schedule.isoformat()]
+        sched_key = "_".join([run_id, schedule.isoformat()])
         # TODO: make this transactional?
         self.redis.lpush(base_key, sched_key)
         self.redis.set(sched_key, content)
@@ -74,8 +74,8 @@ class RedisBackend(Backend):
         )
 
     async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
-        q_key = "_".join(["schedules", queue])
-        ret = self.redis.get("_".join([q_key, schedule, run_id]))
+        # q_key = "_".join(["schedules", queue])
+        ret = self.redis.get("_".join([schedule.isoformat(), run_id]))
         if ret is None:
             raise Exception(f"run not found: {run_id}")
         return None if ret == "" else Event().from_json(ret)
