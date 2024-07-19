@@ -108,7 +108,6 @@ async def test_events_with_sleep(t: WorkflowTest):
         RedisBackend(host="localhost", port=6380, password="password")
     ]
     for backend in backends:
-        backend = FSBackend("./logs")
         s = t.step(backend)
         s = await s.events(
             {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}

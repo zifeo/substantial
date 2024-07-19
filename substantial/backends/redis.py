@@ -39,12 +39,13 @@ class RedisBackend(Backend):
         self.redis.register_script("""
             local base_key = KEYS[1]
             local sched_key = KEYS[2]
-            local content = KEYS[3]
+            local content = ARGV[1]
 
             redis.call("LPUSH", base_key, sched_key)
             redis.call("ZREM", sched_key, content)
         """)(
-            keys=[base_key, sched_key, content]
+            keys=[base_key, sched_key],
+            args=[content]
         )
 
     async def next_run(self, queue: str, excludes: list[str])  -> Union[Tuple[str, datetime], None]:
@@ -79,24 +80,22 @@ class RedisBackend(Backend):
 
         self.redis.register_script("""
             local q_key = KEYS[1]
-            local run_id = KEYS[2]
-            local sched_ref = KEYS[3]
-            local sched_key = KEYS[4]
-            local content = KEYS[5]
+            local sched_ref = KEYS[2]
+            local sched_key = KEYS[3]
             local sched_score = tonumber(ARGV[1])
+            local run_id = ARGV[2]
+            local content = ARGV[3]
 
             redis.call("ZADD", q_key, 0, sched_ref)
             redis.call("ZADD", sched_ref, sched_score, run_id)
             redis.call("SET", sched_key, content)
         """)(
-            keys=[
-                q_key,
+            keys=[q_key, sched_ref, sched_key],
+            args=[
+                sched_score,
                 run_id,
-                sched_ref,
-                sched_key,
                 "" if content is None else content.to_json()
-            ],
-            args=[sched_score]
+            ]
         )
 
     async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
@@ -113,15 +112,16 @@ class RedisBackend(Backend):
 
         self.redis.register_script("""
             local q_key = KEYS[1]
-            local run_id = KEYS[2]
-            local sched_ref = KEYS[3]
-            local sched_key = KEYS[4]
+            local sched_ref = KEYS[2]
+            local sched_key = KEYS[3]
+            local run_id = ARGV[1]
 
             redis.call("ZREM", q_key, sched_ref)
             redis.call("ZREM", sched_ref, run_id)
             redis.call("DEL", sched_key)
         """)(
-            keys=[q_key, run_id, sched_ref, sched_key]
+            keys=[q_key, sched_ref, sched_key],
+            args=[run_id]
         )
 
         print(f"closed {run_id}")
