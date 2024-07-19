@@ -35,9 +35,17 @@ class RedisBackend(Backend):
     async def append_metadata(self, run_id: str, schedule: datetime, content: str):
         base_key = "_".join(["runs", run_id, "logs"]) # queue
         sched_key = "_".join([run_id, schedule.isoformat()])
-        # TODO: make this transactional?
-        self.redis.lpush(base_key, sched_key)
-        self.redis.set(sched_key, content)
+
+        self.redis.register_script("""
+            local base_key = KEYS[1]
+            local sched_key = KEYS[2]
+            local content = KEYS[3]
+
+            redis.call("LPUSH", base_key, sched_key)
+            redis.call("ZREM", sched_key, content)
+        """)(
+            keys=[base_key, sched_key, content]
+        )
 
     async def next_run(self, queue: str, excludes: list[str])  -> Union[Tuple[str, datetime], None]:
         q_key = "_".join(["schedules", queue])  # priority queue
@@ -66,14 +74,29 @@ class RedisBackend(Backend):
                         await self.close_schedule(queue, run_id, planned_date)
 
         sched_ref = schedule.isoformat()
+        sched_score = 1 / schedule.timestamp()
         sched_key = "_".join([sched_ref, run_id])
 
-        # TODO: batch as one trip + make transactional
-        self.redis.zadd(q_key, { sched_ref: 0 })
-        self.redis.zadd(sched_ref, { run_id: 1 / schedule.timestamp() })
-        self.redis.set( 
-            sched_key, 
-            "" if content is None else content.to_json()
+        self.redis.register_script("""
+            local q_key = KEYS[1]
+            local run_id = KEYS[2]
+            local sched_ref = KEYS[3]
+            local sched_key = KEYS[4]
+            local content = KEYS[5]
+            local sched_score = tonumber(ARGV[1])
+
+            redis.call("ZADD", q_key, 0, sched_ref)
+            redis.call("ZADD", sched_ref, sched_score, run_id)
+            redis.call("SET", sched_key, content)
+        """)(
+            keys=[
+                q_key,
+                run_id,
+                sched_ref,
+                sched_key,
+                "" if content is None else content.to_json()
+            ],
+            args=[sched_score]
         )
 
     async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
@@ -88,12 +111,20 @@ class RedisBackend(Backend):
         sched_ref = schedule.isoformat()
         sched_key = "_".join([sched_ref, run_id])
 
-        # TODO: make transactional
-        self.redis.zrem(q_key, sched_ref)
-        self.redis.zrem(sched_ref, run_id)
-        self.redis.delete(sched_key)
+        self.redis.register_script("""
+            local q_key = KEYS[1]
+            local run_id = KEYS[2]
+            local sched_ref = KEYS[3]
+            local sched_key = KEYS[4]
 
-        print(f"closed {sched_ref} refered within queue {q_key}")
+            redis.call("ZREM", q_key, sched_ref)
+            redis.call("ZREM", sched_ref, run_id)
+            redis.call("DEL", sched_key)
+        """)(
+            keys=[q_key, run_id, sched_ref, sched_key]
+        )
+
+        print(f"closed {run_id}")
 
     # TODO
     async def active_leases(self, lease_seconds: int) -> List[str]:
