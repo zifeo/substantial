@@ -12,6 +12,7 @@ from substantial.protos.events import Event, Records
 class RedisBackend(Backend):
     def __init__(self, host: str, port: int, **kwargs):
         self.redis = redis.Redis(host=host, port=port, decode_responses=True, **kwargs)
+        self.redis.flushall()
 
     async def read_events(self, run_id: str) -> Union[Records, None]:
         key = "_".join(["runs", run_id, "events"])
@@ -55,40 +56,44 @@ class RedisBackend(Backend):
         q_key = "_".join(["schedules", queue])  # priority queue
 
         # avoid having a bunch of replays happening
-        for sched in self.redis.zrange(q_key, 0, -1):
-            for planned_key in self.redis.zrange(sched, 0, -1):
+        for sched_ref in self.redis.zrange(q_key, 0, -1):
+            for planned_key in self.redis.zrange(sched_ref, 0, -1):
                 _dt, planned_id = planned_key.split("_") 
-                planned_date = datetime.fromisoformat(sched)
+                planned_date = datetime.fromisoformat(sched_ref)
                 if planned_id == run_id and planned_date <= schedule:
                     event = await self.read_schedule(queue, run_id, planned_date)
                     if event is None: # event => None == scheduled replays..
                         await self.close_schedule(queue, run_id, planned_date)
 
-        sched_key = schedule.isoformat()
+        sched_ref = schedule.isoformat()
+        sched_key = "_".join([sched_ref, run_id])
+
         # TODO: batch as one trip + make transactional
-        self.redis.zadd(q_key, { sched_key: 0 })
-        self.redis.zadd(sched_key, { run_id: schedule.timestamp() })
-        self.redis.set(
-            "_".join([sched_key, run_id]), 
+        self.redis.zadd(q_key, { sched_ref: 0 })
+        self.redis.zadd(sched_ref, { run_id: 1 / schedule.timestamp() })
+        self.redis.set( 
+            sched_key, 
             "" if content is None else content.to_json()
         )
 
     async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
-        # q_key = "_".join(["schedules", queue])
-        ret = self.redis.get("_".join([schedule.isoformat(), run_id]))
+        sched_key = "_".join([schedule.isoformat(), run_id])
+        ret = self.redis.get(sched_key)
         if ret is None:
-            raise Exception(f"run not found: {run_id}")
+            raise Exception(f"run not found: {sched_key}")
         return None if ret == "" else Event().from_json(ret)
 
     async def close_schedule(self, queue: str, run_id: str, schedule: datetime) -> None:
         q_key = "_".join(["schedules", queue])
-        key = "_".join([schedule.isoformat(), run_id])
+        sched_ref = schedule.isoformat()
+        sched_key = "_".join([sched_ref, run_id])
 
         # TODO: make transactional
-        self.redis.zrem(q_key, key)
-        self.redis.delete(key)
+        self.redis.zrem(q_key, sched_ref)
+        self.redis.zrem(sched_ref, run_id)
+        self.redis.delete(sched_key)
 
-        print(f"closed {key} refered within queue {q_key}")
+        print(f"closed {sched_ref} refered within queue {q_key}")
 
     # TODO
     async def active_leases(self, lease_seconds: int) -> List[str]:

@@ -3,6 +3,7 @@ from datetime import timedelta
 import json
 import pytest
 from substantial.backends.fs import FSBackend
+from substantial.backends.redis import RedisBackend
 from substantial.types import RetryStrategy
 from substantial.workflows.workflow import workflow
 from substantial.workflows.context import Context
@@ -97,6 +98,33 @@ async def test_events_with_sleep(t: WorkflowTest):
         return r3
 
     backend = FSBackend("./logs")
+    s = t.step(backend)
+    s = await s.events(
+        {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}
+    ).exec_workflow(event_workflow)
+
+    assert s.w_output == "Hello from outside! B A"
+
+@async_test
+async def test_redis(t: WorkflowTest):
+    @dataclass
+    class State:
+        is_cancelled: bool
+        def update(self):
+            self.is_cancelled = True
+
+    @workflow()
+    async def event_workflow(c: Context):
+        r1 = await c.save(lambda: "A")
+        payload = await c.receive("sayHello")
+        await c.sleep(timedelta(seconds=10))
+        s = State(False)
+        c.handle("cancel", lambda _: s.update())
+        if await c.ensure(lambda: s.is_cancelled):
+            r3 = await c.save(lambda: f"{payload} B {r1}")
+        return r3
+
+    backend = RedisBackend(host="localhost", port=6380, password="password")
     s = t.step(backend)
     s = await s.events(
         {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}
