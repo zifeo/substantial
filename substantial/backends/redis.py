@@ -12,7 +12,7 @@ from substantial.protos.events import Event, Records
 class RedisBackend(Backend):
     def __init__(self, host: str, port: int, **kwargs):
         self.redis = redis.Redis(host=host, port=port, decode_responses=True, **kwargs)
-        self.redis.flushall()
+        # self.redis.flushall()
 
     async def read_events(self, run_id: str) -> Union[Records, None]:
         key = "_".join(["runs", run_id, "events"])
