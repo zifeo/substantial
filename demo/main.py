@@ -7,8 +7,8 @@ from workflows import example_simple
 
 
 async def example():
-    backend = FSBackend("./logs")
-    # backend = RedisBackend("localhost", 6380, password="password")
+    # backend = FSBackend("./logs")
+    backend = RedisBackend(host="localhost", port=6380, password="password")
     substantial = Conductor(backend)
     substantial.register(example_simple)
 
