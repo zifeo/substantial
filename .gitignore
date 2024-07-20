@@ -1,6 +1,3 @@
-logs/*
-!logs/example
-
 .DS_Store
 **/.terraform
 **/.terraform/*
@@ -37,3 +34,4 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+logs

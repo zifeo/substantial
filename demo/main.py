@@ -1,34 +1,40 @@
-# Equiv. server + worker
 import asyncio
-from substantial.conductor import SubstantialConductor, EventEmitter
+from substantial import Conductor
+from substantial.backends.fs import FSBackend
 
-from workflows import example_retry, example_simple
+from substantial.backends.redis import RedisBackend
+from workflows import example_simple
 
-w = example_simple
 
-async def same_thread_example():
-    substantial = SubstantialConductor()
-    substantial.register(w)
+async def example():
+    # backend = FSBackend("./logs")
+    backend = RedisBackend(host="localhost", port=6380, password="password")
+    substantial = Conductor(backend)
+    substantial.register(example_simple)
 
-    workflow_run = w()
+    agent = substantial.run()
 
-    handle = await substantial.start(workflow_run)
-
-    workflow_output, _ = await asyncio.gather(
-        substantial.run(),
-        event_timeline(EventEmitter(handle))
+    w = await substantial.start(
+        example_simple,
     )
 
-    print("Final output", workflow_output)
-
-
-async def event_timeline(emitter: EventEmitter):
-    await asyncio.sleep(3) # just pick a big enough delay (we have sleep(1) on the example workflow)
+    await asyncio.sleep(3)
     print("Sending...")
-    print(await emitter.send("do_print", "'sent from app'"))
+    print(await w.send("do_print", "'sent from app'"))
 
     await asyncio.sleep(5)
     print("Cancelling...")
-    print(await emitter.send("cancel"))
+    print(await w.send("cancel"))
 
-asyncio.run(same_thread_example())
+    output = await w.result()
+    print("Final output", output)
+
+    # should be put on schedule, but ignored (don't trigger `Stop` flagged run)
+    await asyncio.sleep(0.5)
+    print(await w.send("after stop", "one"))
+
+    agent.cancel()
+    await agent
+
+
+asyncio.run(example())

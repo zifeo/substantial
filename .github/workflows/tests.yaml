@@ -35,4 +35,6 @@ jobs:
         run: poetry install
 
       - name: Run tests
-        run: poetry run pytest tests -o log_cli=true -vv
+        run: |
+          docker compose -f dev/redis.compose.yaml up -d --remove-orphans
+          poetry run pytest tests -o log_cli=true -vv --full-trace

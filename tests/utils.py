@@ -1,36 +1,38 @@
 import asyncio
 from dataclasses import dataclass
-from enum import Enum
+import os
 import time
-from typing import Dict, List, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import pytest
 import uvloop
 
-from substantial.conductor import EventEmitter, Recorder, SubstantialConductor
-from substantial.types import Log
-from substantial.workflow import Workflow
-
-class LogFilter(str, Enum):
-    Events = "events"
-    Runs = "runs"
-
-@dataclass
-class EventSend:
-    event_name: str
-    payload: Union[any, None] = None
+from substantial.backends.backend import Backend
+from substantial.conductor import Conductor
+from substantial.workflows.workflow import Workflow
+from substantial.protos.events import Event, Records
 
 class StepError(Exception):
     def __init__(self, step: str, message) -> None:
         super().__init__(f"'{step}': {message}")
 
+@dataclass
+class EventSend:
+    event_name: str
+    payload: Optional[Any] = None
+
+
 class WorkflowTest:
+    # test config
     name: str
     event_timeline: Dict[float, EventSend]
-    handle: Union[str, None] = None
-    workflow_output: Union[any, None] = None
     timed_out: bool = False
     expect_timed_out: bool = False
+    # workflow
+    backend: Optional[Backend] = None
+    w_run_id: Optional[str] = None
+    w_output: Optional[Any] = None
+    w_records: Optional[Records] = None
 
     def __init__(self) -> None:
         self.event_timeline = dict()
@@ -38,49 +40,50 @@ class WorkflowTest:
     def error(self, message: str):
         return StepError(self.name, message)
 
-    def step(self, name: str | None = None):
-        """ Prepare a new test scope """
+    def step(self, backend: Backend, name: str | None = None):
+        """Prepare a new test scope"""
         runner = WorkflowTest()
+        runner.backend = backend
         runner.name = name or "<unnamed>"
         return runner
 
     def events(self, event_timeline: Dict[float, EventSend]):
         self.event_timeline = event_timeline
         return self
-
-    def get_logs(self, filter: LogFilter):
-        if filter == LogFilter.Runs:
-            return Recorder.get_recorded_runs(self.handle)
-        elif filter == LogFilter.Events:
-            return Recorder.get_recorded_events(self.handle)
-        else:
-            raise Exception(f"Unsupported filter {filter}")
+    
+    def check_has_run(self):
+        assert self.backend is not None
+        assert self.w_run_id is not None
+        assert self.w_records is not None
 
     def logs_data_equal(
         self,
-        filter: LogFilter,
-        other: List[Log] | List[any],
+        other: List[Event],
     ):
-        res = []
-        if self.handle is None:
-            raise self.error("No workflow has been run prior the call")
+        self.check_has_run()
 
-        res = self.get_logs(filter)
-
-        if len(res) == 0 and len(other) == 0:
+        proto_events = self.w_records.events
+        if len(proto_events) == 0 and len(other) == 0:
             return self
-        if len(other) == 0:
-            raise Exception(f"Cannot compare empty logs to logs of size {len(res)}")
-        if isinstance(res[0], Log):
-            res = [log.data.payload for log in res]
-        if isinstance(other[0], Log):
-            other = [log.data.payload for log in other]
-        assert res == other
+
+        tf_events = []
+        for proto_event in proto_events:
+            d = proto_event.to_dict()
+            d.pop("at", None)
+            tf_events.append(d)
+
+        tf_other = []
+        for proto_event in other:
+            d = proto_event.to_dict()
+            d.pop("at", None)
+            tf_other.append(d)
+
+        assert tf_events == tf_other
 
         return self
 
     def expects_timeout(self):
-        self.timed_out_expected = True
+        self.expect_timed_out = True
         return self
 
     async def exec_workflow(
@@ -88,58 +91,67 @@ class WorkflowTest:
         workflow: Workflow,
         timeout_secs: Union[float, None] = 120
     ):
-        substantial = SubstantialConductor()
+        assert self.backend is not None
+
+        substantial = Conductor(self.backend)
         substantial.register(workflow)
 
-        workflow_run = workflow()
-        handle = workflow_run.handle
-        _ = await substantial.start(workflow_run)
+        w = await substantial.start(workflow) # the actual workflow run
+        self.w_run_id = True
 
-        emitter = EventEmitter(handle)
         async def event_timeline():
-            # 0 ======== t1 ===== t2 ======== t3 ======== .. ===>
-            #   <========>
-            #     t1 - 0  <=======>
-            #               t2 -t1
             time_prev = 0
-            for (t, event) in self.event_timeline.items():
+            for t, event in self.event_timeline.items():
                 delta_time = t - time_prev
                 time_prev = t
                 await asyncio.sleep(delta_time)
-                await emitter.send(event.event_name, event.payload)
+                await w.send(event.event_name, event.payload)
+        
+        async def resolve_output():
+            return [await w.result()]
+
+        # event poller task
+        agent_task = substantial.run()
 
         try:
-            workflow_output, _ = await asyncio.gather(
-                asyncio.wait_for(substantial.run(), timeout_secs), # wrapped in a task
-                event_timeline()
+            done, pending = await asyncio.wait(
+                [
+                    asyncio.create_task(event_timeline()),
+                    asyncio.create_task(resolve_output()),
+                ],
+                timeout=timeout_secs
             )
 
-            self.workflow_output = workflow_output
+            if len(pending) > 0:
+                raise TimeoutError(f"{timeout_secs}s exceeded")
+
+            self.w_records = await self.backend.read_events(w.run_id)
+            while len(done) > 0: # done set has random order
+                item = await done.pop()
+                if isinstance(item, list):
+                    self.w_output = item[0]
+                    break
+
         except TimeoutError:
             self.timed_out = True
-            if not self.timed_out_expected:
+            if not self.expect_timed_out:
                 raise
         except:
             raise
+        finally:
+            agent_task.cancel()
 
-        self.handle = handle
         return self
 
-    # async def replay(self, count: int):
-    #     pass
-    # Not sure about the feasability since 
-    # replay is hidden inside the backend's workflow queue and is is not reachable from outside
-    # though it can be simulated with events
-
-
-def make_sync(fn: any) -> any:
+def make_sync(fn: Any) -> Any:
     # Naive impl will run it in the ongoing event loop
     # return asyncio.run(fn())
     def syncified():
         with asyncio.Runner(loop_factory=uvloop.new_event_loop) as runner:
             ret = runner.run(fn())
         return ret
+
     return syncified
 
 
-asyncio_fun = pytest.mark.asyncio(scope="function")
+async_test = pytest.mark.asyncio(scope="function")

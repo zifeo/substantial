@@ -15,10 +15,12 @@ asyncio = "^3.4.3"
 uvloop = "^0.19.0"
 aioprocessing = { version = "2.0.1", extras = ["dill"] }
 pydantic = "2.7.3"
+redis = "5.0.7"
 # dill = "0.3.8"
+betterproto = {git = "https://github.com/danielgtaylor/python-betterproto", extras = ["compiler"]}
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.2.0"
+pytest = "^8.2.2"
 pytest-asyncio = "^0.23.7"
 
 [build-system]
