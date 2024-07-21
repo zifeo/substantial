@@ -66,13 +66,3 @@ TODO
 `continue_using(workflow, *args, **kwargs)` - stop the current workflow and pass the context to a new one.
 
 `compact()` - a key can be defined on all the primitives to avoid the infinitely growing log issue. This function will keep only the last occurrence of each of the keys.
-
-## Roadmap
-
-- add ctrl-c handling and crash process in dev (otherwise we may skip the error)
-- finish refactor
-- tests basic cases
-- ghjk
-- implement the rest of the readme interface (except the advances ones)
-- s3 and redis backend
-- child workflow
