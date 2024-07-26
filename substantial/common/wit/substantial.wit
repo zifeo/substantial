@@ -1,7 +1,24 @@
-// wit/host.wit
-package example:host;
+package metatype:substantial;
 
-world host {
-  export run: func();
-  export set-redis: func(host: string, port: u32, password: option<string>);
+// TODO:
+// 1. partition into interfaces
+// 2. make sure all date related stuff are written in rust
+// 3. Backend in guest rust (with libs from host)
+//   - issue being that libs that uses network will be async, which does not work with wasm import
+//     - a trick can be done though,
+//       since it's non-blokcing tricks like
+//             while(!promiseResolvedOrError) { Atomic.wait(100ms); }
+//       might work for forcing sync
+world substantial {
+  // retrieve latest save from a record list in json
+  export process-save: func(events: string);
+
+  // check if a sleep is in progress by comparing dates against the current time
+  export process-sleep: func(events: string);
+
+  // use a global map run-id => u32  
+  export next-id: func(run-id: string);
+
+  // import print: func(msg: string);
+  // import eprint: func(msg: string);
 }

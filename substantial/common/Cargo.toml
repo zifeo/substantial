@@ -8,3 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.28.0"
+prost = "0.13"
+
+[build-dependencies]
+prost-build = "0.13"
