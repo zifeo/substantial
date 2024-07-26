@@ -1,0 +1,7 @@
+// wit/host.wit
+package example:host;
+
+world host {
+  export run: func();
+  export set-redis: func(host: string, port: u32, password: option<string>);
+}
