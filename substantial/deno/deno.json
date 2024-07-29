@@ -1,0 +1,5 @@
+{
+    "imports": {
+      "redis": "npm:redis@4.6.15"
+    }
+}

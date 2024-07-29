@@ -2,17 +2,19 @@ set -eux
 
 BTYPE=debug
 TARGET=wasm32-unknown-unknown
-RAW_OUTPUT=./substantial/common/target/$TARGET/$BTYPE/common.wasm
-OUTPUT=./substantial/common/target/$TARGET/$BTYPE/common-component.wasm
+RAW_OUTPUT=target/$TARGET/$BTYPE/common.wasm
+OUTPUT=target/$TARGET/$BTYPE/substantial.wasm
 
 # make sure the rust plugin is added using setup.sh
-protoc -I . --rust_out=./substantial/common/src/protocol protocol/*
+protoc -I . --rust_out=substantial/common/src/protocol protocol/*
 
-cd substantial/common
 cargo build --target $TARGET
-cd ../..
 
 wasm-tools component new $RAW_OUTPUT -o $OUTPUT
 
-jco transpile $OUTPUT -o ./substantial/deno/gen
+rm -Rf ./substantial/deno/gen
+mkdir ./substantial/deno/gen
+jco transpile $OUTPUT -o ./substantial/deno/gen --map metatype:substantial/host=../host/host.mjs
+deno run -A dev/fix-declarations.ts
+
 python -m wasmtime.bindgen $OUTPUT --out-dir ./substantial/python/gen

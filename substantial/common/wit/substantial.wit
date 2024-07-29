@@ -1,24 +1,61 @@
 package metatype:substantial;
 
-// TODO:
-// 1. partition into interfaces
-// 2. make sure all date related stuff are written in rust
-// 3. Backend in guest rust (with libs from host)
-//   - issue being that libs that uses network will be async, which does not work with wasm import
-//     - a trick can be done though,
-//       since it's non-blokcing tricks like
-//             while(!promiseResolvedOrError) { Atomic.wait(100ms); }
-//       might work for forcing sync
+interface host {
+  print: func(message: string);
+  eprint: func(message: string);
+  indirect-call: func(callee: string, args: list<string>);
+}
+
+interface utils {
+  // get-id: func(callee: string, args-id: string) -> string;
+  host-result: func(id: string, json-data: string);
+  host-error: func(id: string, json-data: string);
+}
+
+interface backend {
+  type datetime = string;
+
+  // TODO: use list<u8> repr for protoc
+  record records {
+    repr: string
+  }
+
+  record metadata {
+    repr: string
+  }
+
+  record event {
+    repr: string
+  }
+
+  enum bakend-type {
+    fs,
+    redis
+  }
+
+  // run related
+  read-events: func(backend: bakend-type, run-id: string) -> option<records>;
+  write-events: func(backend: bakend-type, run-id: string, content: records);
+  read-all-metadata: func(backend: bakend-type, run-id: string) -> list<metadata>;
+
+  append-metadata: func(backend: bakend-type, run-id: string, schedule: datetime, content: string);
+  add-schedule: func(
+    backend: bakend-type, queue: string, run-id: string, schedule: datetime, content: option<event>
+  );
+
+  read-schedule: func(backend: bakend-type, queue: string, run-id: string, schedule: datetime) -> option<event>;
+  close-schedule: func(backend: bakend-type, queue: string, run-id: string, schedule: datetime);
+
+  // agent related
+  // next-run(backend: bakend-type, queue: string, excludes: list[string]) -> Union[Tuple[string, datetime], None]:
+  // active-leases(backend: bakend-type, lease-seconds: int) -> List[string]:
+  // acquire-lease(backend: bakend-type, run-id: string, lease-seconds: int) -> bool:
+  // renew-lease(backend: bakend-type, run-id: string, lease-seconds: int) -> bool:
+  // remove-lease(backend: bakend-type, run-id: string, lease-seconds: int) -> None:
+}
+
 world substantial {
-  // retrieve latest save from a record list in json
-  export process-save: func(events: string);
-
-  // check if a sleep is in progress by comparing dates against the current time
-  export process-sleep: func(events: string);
-
-  // use a global map run-id => u32  
-  export next-id: func(run-id: string);
-
-  // import print: func(msg: string);
-  // import eprint: func(msg: string);
+  export backend;
+  export utils;
+  import host;
 }

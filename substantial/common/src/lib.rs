@@ -1,19 +1,12 @@
-wit_bindgen::generate!({ world: "substantial" });
+mod backends;
+mod host;
+mod utils;
 
-struct Substantial;
-
-impl Guest for Substantial {
-  fn process_save(events: String) {
-    unreachable!();
-  }
-
-  fn process_sleep(events: String) {
-    unreachable!();
-  }
-
-  fn next_id(ctx_id: String) {
-    unreachable!();
-  }
+pub mod wit {
+    wit_bindgen::generate!({ world: "substantial" });
+    use crate::Substantial;
+    pub use exports::metatype::substantial::{backend, utils};
+    export!(Substantial);
 }
 
-export!(Substantial);
+pub struct Substantial;
