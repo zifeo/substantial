@@ -5,6 +5,9 @@
 // await backend.readEvents("fs", "run_id");
 
 
-import { backend } from "./gen/substantial.js";
+import { utils } from "./gen/substantial.js";
+import { resolve } from "./promises.ts";
 
-backend.readEvents("fs", "run_id");
+
+const res = await resolve(utils.concatThenUppercase(["one", "two", "three"]));
+console.log(res);

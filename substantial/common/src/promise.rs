@@ -42,6 +42,16 @@ impl From<Promise> for PromisedResult {
     }
 }
 
+#[macro_export]
+macro_rules! downcast {
+    ($value:expr, $type:ty) => {{
+        match $value.downcast::<$type>() {
+            Ok(v) => Ok(v),
+            Err(_) => Err(format!("Cannot cast into {}", stringify!($type))),
+        }
+    }};
+}
+
 impl Promise {
     pub fn map<F, T>(self, f: F) -> Self
     where
@@ -51,7 +61,7 @@ impl Promise {
         PENDING.with_borrow_mut(|m| {
             m.entry(self.ref_guest).and_modify(|v| {
                 v.push(Box::new(move |input: Box<dyn Any>| -> Box<dyn Any> {
-                    let input = input.downcast::<T>().expect("Fatal: type does not match");
+                    let input = downcast!(input, T).expect("Fatal: type does not match");
                     let output = f(*input);
                     Box::new(output)
                 }));
@@ -60,10 +70,13 @@ impl Promise {
         })
     }
 
-    pub fn resolve<T>(id: u32, input: Box<dyn Any>) -> Box<dyn Any> {
+    pub fn resolve(id: u32, input: Box<dyn Any>) -> Result<Box<dyn Any>, String> {
         PENDING.with_borrow_mut(|m| {
-            let chain = m.get_mut(&id).unwrap();
-            chain.iter().fold(input, |prev, f| f(prev))
+            let chain = m
+                .get_mut(&id)
+                .ok_or_else(|| format!("Fatal: pending promise id={id} not found"))?;
+            let ret = chain.iter().fold(input, |prev, f| f(prev));
+            Ok(ret)
         })
     }
 }

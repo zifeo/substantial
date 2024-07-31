@@ -17,7 +17,7 @@ interface utils {
     ref-guest: u32 
   }
   // top-call-output is awaited from host side
-  evaluate-guest: func(calls: promised-result, top-call-output: string) -> string;
+  evaluate-guest: func(calls: promised-result, top-call-output: string) -> result<string, string>;
 
   // use case example
   concat-then-uppercase: func(items: list<string>) -> promised-result;
