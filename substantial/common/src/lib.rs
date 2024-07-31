@@ -1,5 +1,6 @@
 mod backends;
 mod host;
+mod promise;
 mod utils;
 
 pub mod wit {

@@ -1,5 +1,3 @@
-import { utils } from "../gen/substantial.js";
-
 export function print(message) {
     console.log(message);
 }
@@ -8,22 +6,21 @@ export function eprint(message) {
     console.error(message);
 }
 
-export function indirectCall(callee, args) {
-    const definitions = {
-        concat(items) {
-            return new Promise((resolve, _reject) => {
-                setTimeout(() => {
-                    resolve("dsadsasadsadas")
-                }, 1000);
-            });
-        }
-    };
-    setTimeout(() => {
-        utils.hostResult(callee, args.join(""))
-    }, 5000);
+export const globalTasks = {};
+function define(name, args, asyncFn) {
+    if (globalTasks[name]) {
+        throw new Error(`fatal: another task of the same name (${name}) is pending`);
+    }
+    globalTasks[name] = { asyncFn, args };
+    return { refHost: name };
+}
 
-
-    // definitions[callee](args)
-    //     .then((res) => { console.log("S"); utils.hostResult(callee, JSON.stringify(res)) })
-    //     .catch((err) => { console.log("S"); utils.hostError(callee, JSON.stringify(err)) } );
+export function concat(items) {
+    return define("concat", [items], (items) => {
+        return new Promise((resolve, _reject) => {
+            setTimeout(() => {
+                resolve(items.join(""))
+            }, 1000);
+        })
+    });
 }

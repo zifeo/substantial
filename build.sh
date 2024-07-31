@@ -14,6 +14,7 @@ wasm-tools component new $RAW_OUTPUT -o $OUTPUT
 
 rm -Rf ./substantial/deno/gen
 mkdir ./substantial/deno/gen
+# jco transpile $OUTPUT -o ./substantial/deno/gen --map metatype:substantial/host=./host/host.mjs --js --instantiation=async
 jco transpile $OUTPUT -o ./substantial/deno/gen --map metatype:substantial/host=../host/host.mjs
 deno run -A dev/fix-declarations.ts
 

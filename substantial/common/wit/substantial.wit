@@ -3,13 +3,24 @@ package metatype:substantial;
 interface host {
   print: func(message: string);
   eprint: func(message: string);
-  indirect-call: func(callee: string, args: list<string>);
+
+  record promise {
+    ref-host: string
+  }
+
+  concat: func(items: list<string>) -> promise;
 }
 
 interface utils {
-  // get-id: func(callee: string, args-id: string) -> string;
-  host-result: func(id: string, json-data: string);
-  host-error: func(id: string, json-data: string);
+  record promised-result {
+    ref-host: string,
+    ref-guest: u32 
+  }
+  // top-call-output is awaited from host side
+  evaluate-guest: func(calls: promised-result, top-call-output: string) -> string;
+
+  // use case example
+  concat-then-uppercase: func(items: list<string>) -> promised-result;
 }
 
 interface backend {

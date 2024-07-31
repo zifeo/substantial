@@ -1,16 +1,7 @@
-use crate::wit::metatype::substantial::host::{self, eprint};
-use std::{thread::sleep, time::Duration};
-
-use crate::utils::RESULTS;
-
-fn resolve_result(id: &str) -> Result<String, String> {
-    loop {
-        if let Some(value) = RESULTS.with_borrow(|r| r.get(id).cloned()) {
-            return value;
-        }
-        //sleep(Duration::from_secs(1)); // RuntimeError: unreachable
-    }
-}
+use crate::{
+    promise::Promise,
+    wit::metatype::substantial::host::{self},
+};
 
 pub struct Host;
 
@@ -23,15 +14,7 @@ impl Host {
         host::eprint(&message)
     }
 
-    pub fn concat(items: Vec<String>) -> String {
-        host::print("calling..");
-        host::indirect_call("concat", &items);
-        host::print("hosted..");
-
-        match resolve_result("concat") {
-            Ok(r) => host::print(&r),
-            Err(e) => host::eprint(&e),
-        }
-        "".to_owned()
+    pub fn concat(items: Vec<String>) -> Promise {
+        host::concat(&items).into()
     }
 }
