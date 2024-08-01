@@ -1,10 +1,4 @@
-use std::{
-    any::Any,
-    borrow::{Borrow, BorrowMut},
-    cell::RefCell,
-    collections::HashMap,
-    rc::Rc,
-};
+use std::{any::Any, cell::RefCell, collections::HashMap};
 
 use crate::wit::{metatype::substantial::host, utils::PromisedResult};
 
@@ -70,12 +64,15 @@ impl Promise {
         })
     }
 
-    pub fn resolve(id: u32, input: Box<dyn Any>) -> Result<Box<dyn Any>, String> {
+    pub fn resolve(chain: PromisedResult, input: Box<dyn Any>) -> Result<Box<dyn Any>, String> {
         PENDING.with_borrow_mut(|m| {
+            let id = chain.ref_guest;
             let chain = m
                 .get_mut(&id)
                 .ok_or_else(|| format!("Fatal: pending promise id={id} not found"))?;
             let ret = chain.iter().fold(input, |prev, f| f(prev));
+            // cleanup
+            m.remove(&id);
             Ok(ret)
         })
     }

@@ -16,10 +16,11 @@ interface utils {
     ref-host: string,
     ref-guest: u32 
   }
-  // top-call-output is awaited from host side
-  evaluate-guest: func(calls: promised-result, top-call-output: string) -> result<string, string>;
 
-  // use case example
+  // should never be used explicitly
+  evaluate-guest: func(chain: promised-result, first-result: string) -> result<string, string>;
+
+  // use case example of a function that uses async host functions
   concat-then-uppercase: func(items: list<string>) -> promised-result;
 }
 

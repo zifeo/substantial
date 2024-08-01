@@ -8,27 +8,27 @@ impl crate::wit::utils::Guest for crate::Substantial {
         // notice how rust (guest) has no idea what Host::concat evaluates to
         Host::concat(items)
             .map(|r: String| r.to_uppercase())
-            .map(|r| format!("{r}A"))
-            .map(|r| format!("{r}B"))
+            .map(|r| format!("{r} A"))
+            .map(|r| format!("{r} B"))
             .into()
     }
 
     // should never be used explicitly
-    fn evaluate_guest(promised: PromisedResult, first_output: String) -> Result<String, String> {
+    fn evaluate_guest(chain: PromisedResult, first_output: String) -> Result<String, String> {
         let output =
             serde_json::from_str::<serde_json::Value>(&first_output).map_err(|e| e.to_string())?;
 
         match output {
             Value::Bool(value) => {
-                let ret = Promise::resolve(promised.ref_guest, Box::new(value))?;
+                let ret = Promise::resolve(chain, Box::new(value))?;
                 serde_json::to_string(&downcast!(ret, bool))
             }
             Value::Number(value) => {
-                let ret = Promise::resolve(promised.ref_guest, Box::new(value))?;
+                let ret = Promise::resolve(chain, Box::new(value))?;
                 serde_json::to_string(&downcast!(ret, f64))
             }
             Value::String(value) => {
-                let ret = Promise::resolve(promised.ref_guest, Box::new(value))?;
+                let ret = Promise::resolve(chain, Box::new(value))?;
                 serde_json::to_string(&downcast!(ret, String))
             }
             Value::Array(_) | Value::Null | Value::Object(_) => {
