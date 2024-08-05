@@ -7,11 +7,13 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.86"
+chrono = "0.4.38"
+tokio = { version = "1.39.2", features = ["full"] }
+
 pyo3 = { version = "0.22.2", features = ["serde"] }
+pyo3-asyncio = { version = "0.13", features = ["testing", "attributes", "async-std-runtime"] }
 serde-pyobject = "0.4.0"
+
 serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.122"
-tokio = { version = "1.39.2", features = ["full"] }
 protobuf = "3.5.0"
-chrono = "0.4.38"
-pyo3-asyncio = { version = "0.13", features = ["testing", "attributes", "async-std-runtime"] }

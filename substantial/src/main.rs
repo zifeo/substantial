@@ -1,21 +1,21 @@
-use pyo3::prelude::*;
-use pyo3::types::IntoPyDict;
+use std::path::PathBuf;
+
+use runtimes::{python::PythonRunner, WorkflowRunner};
 
 mod backends;
 mod protocol;
 mod runtimes;
 
-fn main() -> PyResult<()> {
-    pyo3::prepare_freethreaded_python();
-    Python::with_gil(|py| {
-        let sys = py.import_bound("sys")?;
-        let version: String = sys.getattr("version")?.extract()?;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let mut runner = PythonRunner { workdir: None };
+    runner.init().await?;
 
-        let locals = [("os", py.import_bound("os")?)].into_py_dict_bound(py);
-        let code = "os.getenv('USER') or os.getenv('USERNAME') or 'Unknown'";
-        let user: String = py.eval_bound(code, None, Some(&locals))?.extract()?;
+    let file = PathBuf::from("../demos/workflow.py");
 
-        println!("Hello {}, I'm Python {}", user, version);
-        Ok(())
-    })
+    let wf_result = runner.run_workflow(&file, "example").await?;
+
+    println!("Workflow result {wf_result}");
+
+    Ok(())
 }
