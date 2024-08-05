@@ -23,6 +23,7 @@ jobs:
 
       - name: Setup venv 
         run: |
+          cd python
           poetry config virtualenvs.create true --local
           poetry config virtualenvs.in-project true --local
 
@@ -32,9 +33,12 @@ jobs:
           key: venv-${{ hashFiles('poetry.lock') }}
 
       - name: Install the project dependencies
-        run: poetry install
+        run: |
+          cd python          
+          poetry install
 
       - name: Run tests
         run: |
           docker compose -f dev/redis.compose.yaml up -d --remove-orphans
+          cd python
           poetry run pytest tests -o log_cli=true -vv --full-trace
