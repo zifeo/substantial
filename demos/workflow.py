@@ -1,13 +1,12 @@
-# from substantial import Context
+from substantial import Context
 
-def example(c):
-    return c.save(1)
+async def example(c: Context):
+    a = await c.save(lambda: plus_one(1))
+    b = c.func("pow", {"a":1, "b": 2})
+    c = c.receive("thing")
+    return f"{a} :: {b} :: {c}"
 
-# async def main(c: Context):
-#     a = await c.save(lambda: 1)
-#     b = await c.save(lambda: plus_one(a))
-#     return a + b
-
-# def plus_one(x):
-#     return x + 1
-
+async def plus_one(x):
+    import asyncio
+    await asyncio.sleep(1)
+    return x + 1

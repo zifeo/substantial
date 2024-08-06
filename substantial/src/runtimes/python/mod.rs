@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Ok};
-use definitions::substantial;
+use definitions::*;
 use pyo3::prelude::*;
 use serde_json::Value;
 use serde_pyobject::from_pyobject;
@@ -10,7 +10,7 @@ pub mod definitions;
 
 macro_rules! debug_sys {
     ($py: expr) => {
-        let sys = $py.import_bound("sys")?;
+        let sys = $py.import("sys")?;
         let version: String = sys.getattr("version")?.extract()?;
         let path: Vec<String> = sys.getattr("path")?.extract()?;
         println!("Python {version}\n{path:?}\n");
@@ -43,14 +43,14 @@ impl super::WorkflowRunner for PythonRunner {
             debug_sys!(py);
 
             // setup loop
-            let asyncio = py.import_bound("asyncio")?;
+            let asyncio = py.import("asyncio")?;
             let policy = asyncio.getattr("get_event_loop_policy")?.call0()?;
             let ev_loop = policy.call_method0("new_event_loop")?;
-            asyncio.call_method1("set_event_loop", (ev_loop.clone(),))?;
+            asyncio.call_method1("set_event_loop", (ev_loop,))?;
 
             // setup module
             let wf_entry_point = workflow_file.file_stem().unwrap().to_str().unwrap();
-            let wf_mod = py.import_bound(wf_entry_point)?;
+            let wf_mod = py.import(wf_entry_point)?;
 
             // call workflow
             let context = definitions::Context;

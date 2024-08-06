@@ -1,4 +1,7 @@
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyString},
+};
 
 // submodules issues
 // https://github.com/PyO3/pyo3/discussions/3591
@@ -7,8 +10,11 @@ use pyo3::prelude::*;
 // better async
 // https://github.com/PyO3/pyo3/issues/1632
 
+// decorators
+// https://github.com/PyO3/pyo3/discussions/3537
+
 #[pymodule]
-pub fn substantial(m: Bound<PyModule>) -> PyResult<()> {
+pub fn substantial(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Context>()?;
     Ok(())
 }
@@ -18,7 +24,7 @@ pub struct Context;
 
 #[pymethods]
 impl Context {
-    fn save(&self, lambda: Bound<PyAny>) -> PyResult<i32> /*PyResult<&'_ Bound<'_, PyAny>>*/ {
+    fn save(&self, py: Python, lambda: &PyAny) -> PyResult<Py<PyAny>> {
         // save(lambda: coro(..) | value)
         if !lambda.is_callable() {
             return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
@@ -26,10 +32,27 @@ impl Context {
                 lambda
             )));
         }
-        // FIXME: wrong lifetime, make global? => who should own it?
-        // let coro_or_val = lambda.call0()?.as_ref();
-        // Ok(coro_or_val)
-        // ALT: write Context in python but each method will call a rust function
-        Ok(1234)
+
+        // TODO: better way to increase ref count
+        // Object is owned by py, which is (impossible?) to do on 0.22.0
+        let coro_or_val = lambda.call0()?.to_object(py);
+
+        // let inspect = py.import("inspect")?;
+        // let out: bool = inspect
+        //     .call_method1("iscoroutinefunction", (coro_or_val.as_ref(py),))?
+        //     .extract()?;
+        // println!("out {out:?}");
+
+        Ok(coro_or_val)
+    }
+
+    fn receive(&self, py: Python, event_name: String) -> PyResult<Py<PyAny>> {
+        let foo = PyString::new(py, &event_name);
+        Ok(foo.to_object(py))
+    }
+
+    fn func(&self, py: Python, fn_name: String, args: &PyDict) -> PyResult<Py<PyAny>> {
+        let foo = PyString::new(py, &format!("{fn_name} {args:?}"));
+        Ok(foo.to_object(py))
     }
 }
