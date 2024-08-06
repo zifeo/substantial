@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Borrow,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Ok};
 use definitions::*;
@@ -10,7 +13,7 @@ pub mod definitions;
 
 macro_rules! debug_sys {
     ($py: expr) => {
-        let sys = $py.import("sys")?;
+        let sys = $py.import_bound("sys")?;
         let version: String = sys.getattr("version")?.extract()?;
         let path: Vec<String> = sys.getattr("path")?.extract()?;
         println!("Python {version}\n{path:?}\n");
@@ -43,14 +46,14 @@ impl super::WorkflowRunner for PythonRunner {
             debug_sys!(py);
 
             // setup loop
-            let asyncio = py.import("asyncio")?;
+            let asyncio = py.import_bound("asyncio")?;
             let policy = asyncio.getattr("get_event_loop_policy")?.call0()?;
             let ev_loop = policy.call_method0("new_event_loop")?;
-            asyncio.call_method1("set_event_loop", (ev_loop,))?;
+            asyncio.call_method1("set_event_loop", (ev_loop.borrow(),))?;
 
             // setup module
             let wf_entry_point = workflow_file.file_stem().unwrap().to_str().unwrap();
-            let wf_mod = py.import(wf_entry_point)?;
+            let wf_mod = py.import_bound(wf_entry_point)?;
 
             // call workflow
             let context = definitions::Context;
@@ -58,7 +61,6 @@ impl super::WorkflowRunner for PythonRunner {
             let output = ev_loop.call_method1("run_until_complete", (coro,))?;
 
             from_pyobject(output).map_err(|e| e.into())
-            // serde_json::to_value(&output.to_string()).map_err(|e| e.into())
         })
     }
 
