@@ -1,6 +1,5 @@
 import asyncio
 from substantial import Conductor
-from substantial.backends.fs import FSBackend
 
 from substantial.backends.redis import RedisBackend
 from workflows import example_simple

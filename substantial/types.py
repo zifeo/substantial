@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 import inspect
 
 import json
@@ -22,9 +22,11 @@ class RetryMode(BaseException):
         self.hint = hint or ""
         self.delta = delta
 
+
 class RetryFail(BaseException):
     def __init__(self, error_message: str) -> None:
         self.error_message = error_message
+
 
 class DelayMode(BaseException):
     def __init__(self, hint: Union[str, None] = None) -> None:
@@ -100,7 +102,7 @@ class ValueEval:
                     if self.timeout is None
                     else max(0.0001, self.timeout - elapsed_after_spawn)
                 )
-                ret =  await asyncio.wait_for(op, timeout)
+                ret = await asyncio.wait_for(op, timeout)
             elif not inspect.isfunction(op):
                 after_spawn = time.time()
                 elapsed_after_spawn = after_spawn - before_spawn
