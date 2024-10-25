@@ -18,8 +18,17 @@ Substantial is designed around a replay mechanism that reconstructs the function
 ## Getting started
 
 ```
-poetry install
+# pypi
+pip install substantial
+poetry add substantial
 
+# remote master
+pip install --upgrade git+https://github.com/zifeo/substantial.git
+poetry add git+https://github.com/zifeo/substantial.git
+
+# local repo/dev
+poetry install
+pre-commit install
 protoc -I . --python_betterproto_out=. protocol/*
 ```
 
