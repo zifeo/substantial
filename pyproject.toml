@@ -1,16 +1,31 @@
 [tool.poetry]
 name = "substantial"
-version = "0.1.0"
-description = ""
+version = "0.0.1"
+description = "Brokerless durable execution for Python."
 authors = []
+license = "MPL-2.0"
 readme = "README.md"
-packages = [
-    { include = "demo" },
-    { include = "substantial" }
+include = [
+    "dataconf", "pyproject.toml"
+]
+classifiers = [
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12"
+]
+keywords = [
+    "durable",
+    "execution",
+    "redis",
+    "s3",
+    "filesystem",
 ]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.9"
 asyncio = "^3.4.3"
 uvloop = "^0.21.0"
 aioprocessing = { version = "2.0.1", extras = ["dill"] }
@@ -21,6 +36,15 @@ betterproto = { version = "2.0.0b7", extras = ["compiler"]}
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"
 pytest-asyncio = "^0.23.7"
+commitizen = ">=3.29.0"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "3.3.0"
+tag_format = "v$major.$minor.$patch$prerelease"
+version_files = [
+    "pyproject.toml:version",
+]
 
 [build-system]
 requires = ["poetry-core"]
