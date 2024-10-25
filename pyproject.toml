@@ -33,7 +33,7 @@ betterproto = { version = "2.0.0b7", extras = ["compiler"]}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"
-pytest-asyncio = "^0.23.7"
+pytest-asyncio = ">=0.23.7,<0.25.0"
 commitizen = ">=3.29.0"
 
 [tool.commitizen]
