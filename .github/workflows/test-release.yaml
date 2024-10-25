@@ -13,6 +13,8 @@ jobs:
       python-matrix: '["3.10", "3.11", "3.12"]'
       poetry-version: "1.8.3"
       python-version: "3.12"
+      compose: "dev/redis.compose.yaml"
+      pytest-args: "-o log_cli=true -vv --full-trace"
       publish-pypi: true
     secrets:
       pypi-token: ${{ secrets.PYPI_TOKEN }}

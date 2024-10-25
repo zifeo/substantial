@@ -1,5 +1,7 @@
 # Substantial
 
+[![PyPI version](https://badge.fury.io/py/substantial.svg)](https://badge.fury.io/py/substantial)
+
 Brokerless durable execution for Python.
 
 > Substantial is part of the
