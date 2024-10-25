@@ -47,14 +47,11 @@ class Run:
         # FIXME change in in bytes later
         await self.backend.add_schedule(self.queue, self.run_id, now, event)
 
-    async def send(self, name, value = None):
+    async def send(self, name, value=None):
         now = datetime.now()
         event = events.Event(
             at=now,
-            send=events.Send(
-                name=name,
-                value=json.dumps(value)
-            ),
+            send=events.Send(name=name, value=json.dumps(value)),
         )
 
         print("send", event)
@@ -62,7 +59,7 @@ class Run:
 
     async def result(self):
         while True:
-            events_records = await self.backend.read_events(self.run_id) # can be none?
+            events_records = await self.backend.read_events(self.run_id)  # can be none?
             if events_records is None:
                 await asyncio.sleep(1)
                 continue
@@ -84,11 +81,7 @@ class Run:
         # fetch previous events
         records = await self.backend.read_events(self.run_id)
 
-        events_records = (
-            []
-            if records is None
-            else records.events
-        )
+        events_records = [] if records is None else records.events
 
         # new on each replay
         metadata_records = [
@@ -120,10 +113,10 @@ class Run:
                 ret = await workflow(ctx, **ctx.events[0].start.kwargs.to_dict())
                 # Alt impl: ctx.events.append(..)
                 await self.backend.add_schedule(
-                    self.queue, self.run_id, schedule + timedelta(seconds=0.5),
-                    events.Event(
-                        stop=events.Stop(ok=json.dumps(ret))
-                    )
+                    self.queue,
+                    self.run_id,
+                    schedule + timedelta(seconds=0.5),
+                    events.Event(stop=events.Stop(ok=json.dumps(ret))),
                 )
         except Interrupt as interrupt:
             # FIXME need to specify the delta
@@ -137,16 +130,16 @@ class Run:
                 self.queue, self.run_id, schedule + timedelta(seconds=0.5), None
             )
         except RetryMode as retry:
-            # should be max(0, schedule + retry.delta - **dur_next_lease_avail_if_exp** - **poll_interv**)  
+            # should be max(0, schedule + retry.delta - **dur_next_lease_avail_if_exp** - **poll_interv**)
             await self.backend.add_schedule(
                 self.queue, self.run_id, schedule + retry.delta, None
             )
         except RetryFail as fail:
             await self.backend.add_schedule(
-                self.queue, self.run_id, schedule + timedelta(seconds=0.5),
-                events.Event(
-                    stop=events.Stop(err=json.dumps(fail.error_message))
-                )
+                self.queue,
+                self.run_id,
+                schedule + timedelta(seconds=0.5),
+                events.Event(stop=events.Stop(err=json.dumps(fail.error_message))),
             )
         except CancelWorkflow as cancel:
             # TODO: save cancel events
@@ -182,7 +175,7 @@ class Run:
 def execution_has_stopped(records: List[events.Event]):
     # Expected timeline shape:
     #       == Start == .. == Stop == Start == .. == Stop ==
-    # Corrupted: 
+    # Corrupted:
     #   1. Start before closing old:
     #       == Start == Start .. == Stop == ..
     #   2. Stop before start:

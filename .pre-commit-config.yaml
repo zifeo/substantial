@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v5.0.0
     hooks:
       - id: check-added-large-files
         args:
@@ -14,20 +14,20 @@ repos:
       - id: check-merge-conflict
       - id: end-of-file-fixer
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.5.0"
+    rev: "v0.7.1"
     hooks:
       - id: ruff
         args:
           - --fix
       - id: ruff-format
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: v3.27.0
+    rev: v3.30.0
     hooks:
       - id: commitizen
         stages:
           - commit-msg
   - repo: https://github.com/yoheimuta/protolint
-    rev: v0.50.2
+    rev: v0.50.5
     hooks:
       - id: protolint
         args:

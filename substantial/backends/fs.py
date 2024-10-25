@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import List, Tuple, Union
 from uuid import uuid4
 from substantial.backends.backend import Backend
-from substantial.protos.metadata import Metadata
 from substantial.protos.events import Event, Records
 
 
@@ -44,9 +43,11 @@ class FSBackend(Backend):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
 
-    async def next_run(self, queue: str, excludes: list[str])  -> Union[Tuple[str, datetime], None]:
+    async def next_run(
+        self, queue: str, excludes: list[str]
+    ) -> Union[Tuple[str, datetime], None]:
         f = self.root / "schedules" / queue
-        excludes_set = set(excludes) # Note: lease related
+        excludes_set = set(excludes)  # Note: lease related
 
         for schedule in sorted(f.iterdir()):
             for run_id in schedule.iterdir():
@@ -74,17 +75,16 @@ class FSBackend(Backend):
                     planned_date = datetime.fromisoformat(sched.name)
                     if planned.name == run_id and planned_date <= schedule:
                         event = await self.read_schedule(queue, run_id, planned_date)
-                        if event is None: # event => None == scheduled replays..
+                        if event is None:  # event => None == scheduled replays..
                             await self.close_schedule(queue, run_id, planned_date)
 
         f1 = q / schedule.isoformat() / run_id
         f1.parent.mkdir(parents=True, exist_ok=False)
-        f1.write_text(
-            "" if content is None
-            else content.to_json()
-        )
+        f1.write_text("" if content is None else content.to_json())
 
-    async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
+    async def read_schedule(
+        self, queue: str, run_id: str, schedule: datetime
+    ) -> Union[Event, None]:
         f = self.root / "schedules" / queue / schedule.isoformat() / run_id
         if not f.exists():
             raise Exception(f"run not found: {f}")

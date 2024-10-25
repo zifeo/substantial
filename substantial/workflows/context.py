@@ -1,11 +1,8 @@
-import asyncio
-from dataclasses import dataclass
 import json
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
-from datetime import datetime, timedelta, timezone, tzinfo
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
+from datetime import datetime, timedelta, timezone
 
 from substantial.protos import events, metadata
-from betterproto.lib.google.protobuf import Value
 
 if TYPE_CHECKING:
     from substantial.workflows.run import Run
@@ -101,7 +98,6 @@ class Context:
                 return ret
         return None
 
-
     async def ensure(self, f: Callable[[], bool]):
         """Wait for `condition()` to be True"""
         result = f()
@@ -113,9 +109,9 @@ class Context:
 
     async def sleep(self, duration: timedelta) -> Any:
         sleep_id = self.__next_id()
-        sleep_records = list(filter(
-            lambda e: e.is_set("sleep") and sleep_id == e.sleep.id, self.events
-        ))
+        sleep_records = list(
+            filter(lambda e: e.is_set("sleep") and sleep_id == e.sleep.id, self.events)
+        )
 
         now = datetime.now(tz=timezone.utc)
         if len(sleep_records) == 0:

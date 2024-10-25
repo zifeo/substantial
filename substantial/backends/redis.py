@@ -5,7 +5,6 @@ from uuid import uuid4
 
 import redis
 from substantial.backends.backend import Backend
-from substantial.protos.metadata import Metadata
 from substantial.protos.events import Event, Records
 
 
@@ -24,7 +23,7 @@ class RedisBackend(Backend):
         self.redis.set(key, content.to_json(indent=4))
 
     async def read_all_metadata(self, run_id: str) -> List[str]:
-        base_key = "_".join(["runs", run_id, "logs"]) # queue
+        base_key = "_".join(["runs", run_id, "logs"])  # queue
         ret = []
         for schedule in self.redis.lrange(base_key, 0, -1):
             log = self.redis.get("_".join[run_id, schedule])
@@ -33,7 +32,7 @@ class RedisBackend(Backend):
         return ret
 
     async def append_metadata(self, run_id: str, schedule: datetime, content: str):
-        base_key = "_".join(["runs", run_id, "logs"]) # queue
+        base_key = "_".join(["runs", run_id, "logs"])  # queue
         sched_key = "_".join([run_id, schedule.isoformat()])
 
         self.redis.register_script("""
@@ -43,12 +42,11 @@ class RedisBackend(Backend):
 
             redis.call("LPUSH", base_key, sched_key)
             redis.call("ZREM", sched_key, content)
-        """)(
-            keys=[base_key, sched_key],
-            args=[content]
-        )
+        """)(keys=[base_key, sched_key], args=[content])
 
-    async def next_run(self, queue: str, excludes: list[str])  -> Union[Tuple[str, datetime], None]:
+    async def next_run(
+        self, queue: str, excludes: list[str]
+    ) -> Union[Tuple[str, datetime], None]:
         q_key = "_".join(["schedules", queue])  # priority queue
         excludes_set = set(excludes)
 
@@ -67,11 +65,11 @@ class RedisBackend(Backend):
         # avoid having a bunch of replays happening
         for sched_ref in self.redis.zrange(q_key, 0, -1):
             for planned_key in self.redis.zrange(sched_ref, 0, -1):
-                _dt, planned_id = planned_key.split("_") 
+                _dt, planned_id = planned_key.split("_")
                 planned_date = datetime.fromisoformat(sched_ref)
                 if planned_id == run_id and planned_date <= schedule:
                     event = await self.read_schedule(queue, run_id, planned_date)
-                    if event is None: # event => None == scheduled replays..
+                    if event is None:  # event => None == scheduled replays..
                         await self.close_schedule(queue, run_id, planned_date)
 
         sched_ref = schedule.isoformat()
@@ -91,14 +89,12 @@ class RedisBackend(Backend):
             redis.call("SET", sched_key, content)
         """)(
             keys=[q_key, sched_ref, sched_key],
-            args=[
-                sched_score,
-                run_id,
-                "" if content is None else content.to_json()
-            ]
+            args=[sched_score, run_id, "" if content is None else content.to_json()],
         )
 
-    async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
+    async def read_schedule(
+        self, queue: str, run_id: str, schedule: datetime
+    ) -> Union[Event, None]:
         sched_key = "_".join([schedule.isoformat(), run_id])
         ret = self.redis.get(sched_key)
         if ret is None:
@@ -119,10 +115,7 @@ class RedisBackend(Backend):
             redis.call("ZREM", q_key, sched_ref)
             redis.call("ZREM", sched_ref, run_id)
             redis.call("DEL", sched_key)
-        """)(
-            keys=[q_key, sched_ref, sched_key],
-            args=[run_id]
-        )
+        """)(keys=[q_key, sched_ref, sched_key], args=[run_id])
 
         print(f"closed {run_id}")
 

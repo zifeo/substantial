@@ -1,8 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-import os
-import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pytest
 import uvloop
@@ -12,9 +10,11 @@ from substantial.conductor import Conductor
 from substantial.workflows.workflow import Workflow
 from substantial.protos.events import Event, Records
 
+
 class StepError(Exception):
     def __init__(self, step: str, message) -> None:
         super().__init__(f"'{step}': {message}")
+
 
 @dataclass
 class EventSend:
@@ -50,7 +50,7 @@ class WorkflowTest:
     def events(self, event_timeline: Dict[float, EventSend]):
         self.event_timeline = event_timeline
         return self
-    
+
     def check_has_run(self):
         assert self.backend is not None
         assert self.w_run_id is not None
@@ -87,16 +87,14 @@ class WorkflowTest:
         return self
 
     async def exec_workflow(
-        self,
-        workflow: Workflow,
-        timeout_secs: Union[float, None] = 120
+        self, workflow: Workflow, timeout_secs: Union[float, None] = 120
     ):
         assert self.backend is not None
 
         substantial = Conductor(self.backend)
         substantial.register(workflow)
 
-        w = await substantial.start(workflow) # the actual workflow run
+        w = await substantial.start(workflow)  # the actual workflow run
         self.w_run_id = True
 
         async def event_timeline():
@@ -106,7 +104,7 @@ class WorkflowTest:
                 time_prev = t
                 await asyncio.sleep(delta_time)
                 await w.send(event.event_name, event.payload)
-        
+
         async def resolve_output():
             return [await w.result()]
 
@@ -119,14 +117,14 @@ class WorkflowTest:
                     asyncio.create_task(event_timeline()),
                     asyncio.create_task(resolve_output()),
                 ],
-                timeout=timeout_secs
+                timeout=timeout_secs,
             )
 
             if len(pending) > 0:
                 raise TimeoutError(f"{timeout_secs}s exceeded")
 
             self.w_records = await self.backend.read_events(w.run_id)
-            while len(done) > 0: # done set has random order
+            while len(done) > 0:  # done set has random order
                 item = await done.pop()
                 if isinstance(item, list):
                     self.w_output = item[0]
@@ -142,6 +140,7 @@ class WorkflowTest:
             agent_task.cancel()
 
         return self
+
 
 def make_sync(fn: Any) -> Any:
     # Naive impl will run it in the ongoing event loop

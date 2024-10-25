@@ -37,7 +37,7 @@ async def test_simple_all_backends(t: WorkflowTest):
 
     backends = [
         FSBackend("./logs"),
-        RedisBackend(host="localhost", port=6380, password="password")
+        RedisBackend(host="localhost", port=6380, password="password"),
     ]
     for backend in backends:
         s = await t.step(backend).exec_workflow(simple_workflow, 20)
@@ -48,8 +48,9 @@ async def test_simple_all_backends(t: WorkflowTest):
             Event(save=Save(1, json.dumps("A"), -1)),
             Event(save=Save(2, json.dumps("B A"), -1)),
             Event(save=Save(3, json.dumps("C B A"), -1)),
-            Event(stop=Stop(ok=json.dumps("C B A")))
+            Event(stop=Stop(ok=json.dumps("C B A"))),
         ]
+
 
 @async_test
 async def test_failing_workflow_with_retry(t: WorkflowTest):
@@ -71,24 +72,26 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
 
     backends = [
         FSBackend("./logs"),
-        RedisBackend(host="localhost", port=6380, password="password")
+        RedisBackend(host="localhost", port=6380, password="password"),
     ]
     for backend in backends:
         s = t.step(backend)
         with pytest.raises(Exception) as info:
             s = await s.exec_workflow(failing_workflow)
-        
+
         assert info.value.args[0] == "Exception: UNREACHABLE"
         assert len(s.w_records.events) >= retries + 1
         assert s.w_records.events[-1] == Event(
             stop=Stop(err=json.dumps("Exception: UNREACHABLE"))
         )
 
+
 @async_test
 async def test_events_with_sleep(t: WorkflowTest):
     @dataclass
     class State:
         is_cancelled: bool
+
         def update(self):
             self.is_cancelled = True
 
@@ -105,7 +108,7 @@ async def test_events_with_sleep(t: WorkflowTest):
 
     backends = [
         FSBackend("./logs"),
-        RedisBackend(host="localhost", port=6380, password="password")
+        RedisBackend(host="localhost", port=6380, password="password"),
     ]
     for backend in backends:
         s = t.step(backend)
@@ -114,5 +117,6 @@ async def test_events_with_sleep(t: WorkflowTest):
         ).exec_workflow(event_workflow)
 
         assert s.w_output == "Hello from outside! B A"
+
 
 # TODO: test concurrent

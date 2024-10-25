@@ -16,7 +16,9 @@ class Backend:
     async def read_all_metadata(self, run_id: str) -> List[Metadata]:
         raise NotImplementedError()
 
-    async def append_metadata(self, run_id: str, schedule: datetime, content: str) -> None:
+    async def append_metadata(
+        self, run_id: str, schedule: datetime, content: str
+    ) -> None:
         raise NotImplementedError()
 
     async def add_schedule(
@@ -24,7 +26,9 @@ class Backend:
     ) -> None:
         raise NotImplementedError()
 
-    async def read_schedule(self, queue: str, run_id: str, schedule: datetime) -> Union[Event, None]:
+    async def read_schedule(
+        self, queue: str, run_id: str, schedule: datetime
+    ) -> Union[Event, None]:
         raise NotImplementedError()
 
     async def close_schedule(self, queue: str, run_id: str, schedule: datetime) -> None:
@@ -32,7 +36,9 @@ class Backend:
 
     # agent related
 
-    async def next_run(self, queue: str, excludes: list[str]) -> Union[Tuple[str, datetime], None]:
+    async def next_run(
+        self, queue: str, excludes: list[str]
+    ) -> Union[Tuple[str, datetime], None]:
         raise NotImplementedError()
 
     async def active_leases(self, lease_seconds: int) -> List[str]:
