@@ -2,7 +2,7 @@ import asyncio
 from substantial import Conductor
 
 from substantial.backends.redis import RedisBackend
-from workflows import example_simple
+from demo.main_ws import example_simple
 
 
 async def example():

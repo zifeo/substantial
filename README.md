@@ -37,13 +37,21 @@ protoc -I . --python_betterproto_out=. protocol/*
 ### Workflow
 
 ```py
+from dataclasses import dataclass
+from datetime import timedelta
+import random
+from substantial import workflow, Context
+
+
 def roulette():
-    if random.random() < 1/6:
+    if random.random() < 1 / 6:
         raise Exception("shot!")
     return 100
 
+
 def multiply(a, b):
     return a * b
+
 
 @dataclass
 class State:
@@ -63,10 +71,10 @@ async def example(c: Context):
     n = await c.receive("by")
     res = await c.save(lambda: multiply(res, n))
 
-    s = State(is_cancelled=False)
-    c.handle("cancel", lambda: s.update())
+    s = State(cancelled=False)
+    c.handle("cancel", lambda _: s.update())
 
-    await c.ensure(lambda: s.cancelled):
+    await c.ensure(lambda: s.cancelled)
     return res
 ```
 
@@ -75,33 +83,44 @@ async def example(c: Context):
 Brokerless means that there is no active broker and all the scheduling is solely organized around files/key values. Substantial currently supports Redis, local files and s3-compatible object storages.
 
 ```py
-backend = FSBackend("./logs")
-substantial = Conductor(backend)
-substantial.register(example)
+import asyncio
+from substantial import Conductor
+from substantial.backends.fs import FSBackend
+from demo.readme_ws import example
 
-# run the agent in the background
-agent = substantial.run()
 
-# start the workflow
-w = await substantial.start(example)
+async def main():
+    backend = FSBackend("./demo/logs/readme")
+    substantial = Conductor(backend)
+    substantial.register(example)
 
-await asyncio.sleep(3)
-print(await w.send("by", 2))
+    # run the agent in the background
+    agent = substantial.run()
 
-await asyncio.sleep(5)
-print(await w.send("cancel"))
+    # start the workflow
+    w = await substantial.start(example)
 
-output = await w.result()
-print("Final output", output) # 100
+    await asyncio.sleep(3)
+    print(await w.send("by", 2))
 
-# stop the agent
-agent.cancel()
-await agent
+    await asyncio.sleep(5)
+    print(await w.send("cancel"))
+
+    output = await w.result()
+    print("Final output", output)  # 100
+
+    # stop the agent
+    agent.cancel()
+    await agent
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ## API
 
-_Note_: not all features are implemented/completed yet.
+_Note: not all features are implemented/completed yet._
 
 ### Primitives
 
