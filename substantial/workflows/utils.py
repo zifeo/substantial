@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import random
 import uuid
+import logging
 
 
 class Utils:
@@ -13,10 +14,9 @@ class Utils:
         return random.randint(a, b)
 
     @staticmethod
-    def uuid4() -> str:
-        return str(uuid.uuid4())
+    def uuid4() -> uuid.UUID:
+        return uuid.uuid4()
 
     @staticmethod
-    def log(message: str) -> None:
-        timestamp = Utils.now()
-        print(f"[{timestamp}] {message}")
+    def log(level, msg, *args, **kwargs) -> None:
+        logging.log(level, msg, *args, **kwargs)
