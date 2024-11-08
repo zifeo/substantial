@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional
 from datetime import datetime, timedelta, timezone
 
 from substantial.protos import events, metadata
+from substantial.workflows.utils import Utils
 
 if TYPE_CHECKING:
     from substantial.workflows.run import Run
@@ -22,12 +23,14 @@ class Context:
         run: "Run",
         metadata: List[metadata.Metadata],
         events: List[events.Event],
+        utils: Utils,
     ):
         self.run = run
         # self.metadata = metadata
         # FIXME only events should be required, metadata is only for the run, not the context
         self.events = events
         self.__id = 0
+        self.utils = Utils()
 
     def __next_id(self):
         # FIXME: maybe use lambda hash instead? but how portable that would be?
