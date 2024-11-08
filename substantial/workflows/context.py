@@ -23,7 +23,6 @@ class Context:
         run: "Run",
         metadata: List[metadata.Metadata],
         events: List[events.Event],
-        utils: Utils,
     ):
         self.run = run
         # self.metadata = metadata
