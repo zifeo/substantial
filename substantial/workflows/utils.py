@@ -1,21 +1,23 @@
-from datetime import datetime, timezone
 import random
 import uuid
 import logging
+from datetime import datetime, timezone
+
+from substantial.workflows.context import Context
 
 
 class Utils:
-    @staticmethod
-    def now() -> str:
-        return datetime.now(tz=timezone.utc).isoformat()
+    def __init__(self, ctx: Context):
+        self.ctx = ctx
 
-    @staticmethod
-    def random(a: int, b: int) -> int:
-        return random.randint(a, b)
+    def now(self) -> str:
+        return self.ctx.save(lambda: datetime.now(tz=timezone.utc).isoformat())
 
-    @staticmethod
-    def uuid4() -> uuid.UUID:
-        return uuid.uuid4()
+    def random(self, a: int, b: int) -> int:
+        return self.ctx.save(lambda: random.randint(a, b))
+
+    def uuid4(self) -> uuid.UUID:
+        return self.ctx.save(lambda: uuid.uuid4())
 
     @staticmethod
     def log(level, msg, *args, **kwargs) -> None:

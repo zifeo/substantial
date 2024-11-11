@@ -29,7 +29,7 @@ class Context:
         # FIXME only events should be required, metadata is only for the run, not the context
         self.events = events
         self.__id = 0
-        self.utils = Utils()
+        self.utils = Utils(self)
 
     def __next_id(self):
         # FIXME: maybe use lambda hash instead? but how portable that would be?
