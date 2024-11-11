@@ -27,6 +27,9 @@ class Conductor:
 
         run_id = f"{workflow.id}-{uuid4()}"
         run = Run(run_id, queue, self.backend)
+
+        await self.backend.write_workflow_link(workflow.id, run_id)
+
         await run.start(kwargs)
         return run
 

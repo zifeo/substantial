@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from datetime import timedelta
 import json
+from typing import List
 import pytest
+from substantial.backends.backend import Backend
 from substantial.backends.fs import FSBackend
 from substantial.backends.redis import RedisBackend
 from substantial.types import RetryStrategy
@@ -106,7 +108,7 @@ async def test_events_with_sleep(t: WorkflowTest):
             r3 = await c.save(lambda: f"{payload} B {r1}")
         return r3
 
-    backends = [
+    backends: List[Backend] = [
         FSBackend("./logs"),
         RedisBackend(host="localhost", port=6380, password="password"),
     ]
@@ -117,6 +119,20 @@ async def test_events_with_sleep(t: WorkflowTest):
         ).exec_workflow(event_workflow)
 
         assert s.w_output == "Hello from outside! B A"
+
+        related_runs = await backend.read_workflow_links(event_workflow.id)
+        assert s.w_run_id in related_runs
+
+
+# @async_test
+# async def test_backend_methods(t: WorkflowTest):
+#     backends: List[Backend] = [
+#         FSBackend("./logs"),
+#         RedisBackend(host="localhost", port=6380, password="password"),
+#     ]
+#     for backend in backends:
+#         await backend.write_workflow_link("test_example", "test_example_uuid_one")
+#         await backend.write_workflow_link("test_example", "test_example_uuid_two")
 
 
 # TODO: test concurrent

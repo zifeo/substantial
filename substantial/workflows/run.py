@@ -80,7 +80,6 @@ class Run:
 
         # fetch previous events
         records = await self.backend.read_events(self.run_id)
-
         events_records = [] if records is None else records.events
 
         # new on each replay
@@ -90,13 +89,13 @@ class Run:
 
         stopped_run = execution_has_stopped(events_records)
 
-        # when there is a new event in schedule
         if schedule is not None:
-            # Note: if stopped_run == True, incoming events are still consumed and closed
             new_event = await self.backend.read_schedule(
                 self.queue, self.run_id, schedule
             )
-            if new_event is not None and not stopped_run:
+            if new_event is None:
+                await self.backend.close_schedule(self.queue, self.run_id, schedule)
+            elif not stopped_run:
                 events_records.append(new_event)
         else:
             schedule = start_at
@@ -186,14 +185,16 @@ def execution_has_stopped(records: List[events.Event]):
         if rec.is_set("start"):
             if life >= 1:
                 raise Exception(
-                    "potentially corrupted logs, another run occured yet previous has not stopped"
+                    "potentially corrupted logs, another run occured yet previous has not stopped",
+                    records,
                 )
             life += 1
             has_stopped = False
         elif rec.is_set("stop"):
             if life <= 0:
                 raise Exception(
-                    "potentially corrupted logs, attempt stopping already closed run, or run with a missing start"
+                    "potentially corrupted logs, attempt stopping already closed run, or run with a missing start",
+                    records,
                 )
             life -= 1
             has_stopped = True

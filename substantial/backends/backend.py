@@ -5,20 +5,26 @@ from substantial.protos.metadata import Metadata
 
 
 class Backend:
-    # run related
-
-    async def read_events(self, run_id: str) -> Union[Records, None]:
-        raise NotImplementedError()
-
-    async def write_events(self, run_id: str, content: Records) -> None:
-        raise NotImplementedError()
-
+    # metadata related
     async def read_all_metadata(self, run_id: str) -> List[Metadata]:
         raise NotImplementedError()
 
     async def append_metadata(
         self, run_id: str, schedule: datetime, content: str
     ) -> None:
+        raise NotImplementedError()
+
+    async def write_workflow_link(self, workflow_name: str, run_id: str) -> None:
+        raise NotImplementedError()
+
+    async def read_workflow_links(self, workflow_name: str) -> List[str]:
+        raise NotImplementedError()
+
+    # run related
+    async def read_events(self, run_id: str) -> Union[Records, None]:
+        raise NotImplementedError()
+
+    async def write_events(self, run_id: str, content: Records) -> None:
         raise NotImplementedError()
 
     async def add_schedule(

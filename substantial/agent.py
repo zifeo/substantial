@@ -30,6 +30,7 @@ class Agent:
         active_leases = await self.backend.active_leases(lease_seconds)
         next_run = await self.backend.next_run(self.queue, active_leases)
         print("run_id", next_run)
+        print("active leases", active_leases)
 
         if next_run is None:
             print("no runs")
