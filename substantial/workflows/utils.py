@@ -3,7 +3,7 @@ import uuid
 import logging
 from datetime import datetime, timezone
 
-from substantial.workflows.context import Context
+from .context import Context
 
 
 class Utils:
