@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, timezone
 import json
 import pytest
 from substantial.backends.fs import FSBackend
@@ -119,4 +119,49 @@ async def test_events_with_sleep(t: WorkflowTest):
         assert s.w_output == "Hello from outside! B A"
 
 
-# TODO: test concurrent
+@async_test
+async def test_utils_now(t: WorkflowTest):
+    @workflow()
+    async def utils_now_workflow(c: Context):
+        return await c.utils.now()
+
+    backends = [
+        FSBackend("./logs"),
+        RedisBackend(host="localhost", port=6380, password="passwod"),
+    ]
+
+    for backend in backends:
+        s = await t.step(backend).exec_workflow(utils_now_workflow, 20)
+        assert isinstance(s.w_output, timezone)
+
+
+@async_test
+async def test_utils_random(t: WorkflowTest):
+    @workflow()
+    async def utils_random_workflow(c: Context):
+        return await c.utils.random(1, 10)
+
+    backends = [
+        FSBackend("./logs"),
+        RedisBackend(host="localhost", port=6380, password="password"),
+    ]
+    for backend in backends:
+        s = await t.step(backend).exec_workflow(utils_random_workflow, 20)
+        assert isinstance(s.w_output, int)
+        assert 1 <= s.w_output <= 10
+
+
+@async_test
+async def test_utils_uuid4(t: WorkflowTest):
+    @workflow()
+    async def utils_uuid4_workflow(c: Context):
+        return await c.utils.uuid4()
+
+    backends = [
+        FSBackend("./logs"),
+        RedisBackend(host="localhost", port=6380, password="password"),
+    ]
+    for backend in backends:
+        s = await t.step(backend).exec_workflow(utils_uuid4_workflow, 20)
+        assert isinstance(s.w_output, str)
+        assert len(s.w_output) == 36

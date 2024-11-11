@@ -152,16 +152,16 @@ class Context:
 
 class Utils:
     def __init__(self, ctx: Context):
-        self.ctx = ctx
+        self.__ctx = ctx
 
-    def now(self) -> str:
-        return self.ctx.save(lambda: datetime.now(tz=timezone.utc).isoformat())
+    async def now(self, tz: Optional[timezone] = None) -> datetime:
+        return await self.__ctx.save(lambda: datetime.now(tz))
 
-    def random(self, a: int, b: int) -> int:
-        return self.ctx.save(lambda: random.randint(a, b))
+    async def random(self, a: int, b: int) -> int:
+        return await self.__ctx.save(lambda: random.randint(a, b))
 
-    def uuid4(self) -> uuid.UUID:
-        return self.ctx.save(lambda: uuid.uuid4())
+    async def uuid4(self) -> uuid.UUID:
+        return await self.__ctx.save(lambda: uuid.uuid4())
 
     @staticmethod
     def log(level, msg, *args, **kwargs) -> None:
