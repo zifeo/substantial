@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import List, Tuple, Union
 
 import redis
@@ -214,7 +214,7 @@ class RedisBackend(Backend):
         while len(lua_ret) >= 2:
             lease_ref, exp_time = lua_ret.pop(0), lua_ret.pop(0)
             exp_time = datetime.fromisoformat(exp_time)
-            if exp_time > datetime.now(tz=timezone.utc):
+            if exp_time > datetime.now():
                 run_id = self._parts(lease_ref)[-1]
                 active_lease_ids.append(run_id)
 
@@ -245,7 +245,8 @@ class RedisBackend(Backend):
                 not_held = True
 
         if not_held:
-            lease_exp = datetime.now(tz=timezone.utc) + timedelta(seconds=lease_seconds)
+            now = datetime.now()
+            lease_exp = now + timedelta(seconds=lease_seconds)
             lease_exp = lease_exp.isoformat()
             self.redis.register_script("""
                 local all_leases_key = KEYS[1]
@@ -261,7 +262,7 @@ class RedisBackend(Backend):
 
     async def renew_lease(self, run_id: str, lease_seconds: int) -> bool:
         lease_ref = self._key("lease", run_id)
-        new_lease_exp = datetime.now(tz=timezone.utc) + timedelta(seconds=lease_seconds)
+        new_lease_exp = datetime.now() + timedelta(seconds=lease_seconds)
 
         lua_ret = self.redis.register_script("""
             local lease_ref = KEYS[1]

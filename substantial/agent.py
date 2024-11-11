@@ -67,5 +67,4 @@ class Agent:
         pending.cancel()
         with suppress(asyncio.CancelledError):
             await pending
-
-        await self.backend.remove_lease(run_id, lease_seconds)
+            await self.backend.remove_lease(run_id, lease_seconds)
