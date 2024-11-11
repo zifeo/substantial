@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import timedelta, timezone
+from datetime import timedelta
 import json
 import pytest
 from substantial.backends.fs import FSBackend
@@ -127,12 +127,12 @@ async def test_utils_now(t: WorkflowTest):
 
     backends = [
         FSBackend("./logs"),
-        RedisBackend(host="localhost", port=6380, password="passwod"),
+        RedisBackend(host="localhost", port=6380, password="password"),
     ]
 
     for backend in backends:
-        s = await t.step(backend).exec_workflow(utils_now_workflow)
-        assert isinstance(s.w_output, timezone)
+        s = await t.step(backend).exec_workflow(utils_now_workflow, 20)
+        assert isinstance(s.w_output, str)
 
 
 @async_test
@@ -146,7 +146,7 @@ async def test_utils_random(t: WorkflowTest):
         RedisBackend(host="localhost", port=6380, password="password"),
     ]
     for backend in backends:
-        s = await t.step(backend).exec_workflow(utils_random_workflow)
+        s = await t.step(backend).exec_workflow(utils_random_workflow, 20)
         assert isinstance(s.w_output, int)
         assert 1 <= s.w_output <= 10
 
@@ -162,6 +162,6 @@ async def test_utils_uuid4(t: WorkflowTest):
         RedisBackend(host="localhost", port=6380, password="password"),
     ]
     for backend in backends:
-        s = await t.step(backend).exec_workflow(utils_uuid4_workflow)
+        s = await t.step(backend).exec_workflow(utils_uuid4_workflow, 20)
         assert isinstance(s.w_output, str)
         assert len(s.w_output) == 36

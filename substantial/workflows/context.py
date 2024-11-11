@@ -155,13 +155,15 @@ class Utils:
         self.__ctx = ctx
 
     async def now(self, tz: Optional[timezone] = None) -> datetime:
-        return await self.__ctx.save(lambda: datetime.now(tz))
+        # to str because datetime is not serializable
+        return await self.__ctx.save(lambda: datetime.now(tz).__str__())
 
     async def random(self, a: int, b: int) -> int:
         return await self.__ctx.save(lambda: random.randint(a, b))
 
     async def uuid4(self) -> uuid.UUID:
-        return await self.__ctx.save(lambda: uuid.uuid4())
+        # same with uuid object
+        return await self.__ctx.save(lambda: str(uuid.uuid4()))
 
     @staticmethod
     def log(level, msg, *args, **kwargs) -> None:
