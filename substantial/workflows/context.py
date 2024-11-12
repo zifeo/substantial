@@ -154,16 +154,18 @@ class Utils:
     def __init__(self, ctx: Context):
         self.__ctx = ctx
 
-    async def now(self, tz: Optional[timezone] = None) -> str:
-        # to str because datetime is not serializable
-        return await self.__ctx.save(lambda: datetime.now(tz).isoformat())
+    async def now(self, tz: Optional[timezone] = None) -> datetime:
+        now = datetime.now(tz)
+        await self.__ctx.save(lambda: now.isoformat())
+        return now
 
     async def random(self, a: int, b: int) -> int:
         return await self.__ctx.save(lambda: random.randint(a, b))
 
-    async def uuid4(self) -> str:
-        # same with uuid object
-        return await self.__ctx.save(lambda: str(uuid.uuid4()))
+    async def uuid4(self) -> uuid.UUID:
+        unique_id = uuid.uuid4()
+        await self.__ctx.save(lambda: str(unique_id))
+        return unique_id
 
     @staticmethod
     def log(level, msg, *args, **kwargs) -> None:

@@ -126,7 +126,7 @@ async def test_utils_methods(t: WorkflowTest):
         current_time = await c.utils.now()
         rand_value = await c.utils.random(1, 100)
         unique_id = await c.utils.uuid4()
-        return current_time, rand_value, unique_id
+        return str(current_time), rand_value, str(unique_id)
 
     backends = [
         FSBackend("./logs"),
