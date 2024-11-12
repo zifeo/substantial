@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, datetime
 import json
 import pytest
 from substantial.backends.fs import FSBackend
@@ -120,10 +120,13 @@ async def test_events_with_sleep(t: WorkflowTest):
 
 
 @async_test
-async def test_utils_now(t: WorkflowTest):
+async def test_utils_methods(t: WorkflowTest):
     @workflow()
-    async def utils_now_workflow(c: Context):
-        return await c.utils.now()
+    async def utils_workflow(c: Context):
+        current_time = await c.utils.now()
+        rand_value = await c.utils.random(1, 100)
+        unique_id = await c.utils.uuid4()
+        return current_time, rand_value, unique_id
 
     backends = [
         FSBackend("./logs"),
@@ -131,37 +134,19 @@ async def test_utils_now(t: WorkflowTest):
     ]
 
     for backend in backends:
-        s = await t.step(backend).exec_workflow(utils_now_workflow, 20)
-        assert isinstance(s.w_output, str)
+        start_time = datetime.now()
+        s = await t.step(backend).exec_workflow(utils_workflow)
+        end_time = datetime.now()
 
+        assert isinstance(s.w_output, list)
+        current_time, rand_value, unique_id = s.w_output
 
-@async_test
-async def test_utils_random(t: WorkflowTest):
-    @workflow()
-    async def utils_random_workflow(c: Context):
-        return await c.utils.random(1, 10)
+        assert isinstance(current_time, str)
+        now_output = datetime.fromisoformat(current_time)
+        assert start_time <= now_output <= end_time
 
-    backends = [
-        FSBackend("./logs"),
-        RedisBackend(host="localhost", port=6380, password="password"),
-    ]
-    for backend in backends:
-        s = await t.step(backend).exec_workflow(utils_random_workflow, 20)
-        assert isinstance(s.w_output, int)
-        assert 1 <= s.w_output <= 10
+        assert isinstance(rand_value, int)
+        assert 1 <= rand_value <= 100
 
-
-@async_test
-async def test_utils_uuid4(t: WorkflowTest):
-    @workflow()
-    async def utils_uuid4_workflow(c: Context):
-        return await c.utils.uuid4()
-
-    backends = [
-        FSBackend("./logs"),
-        RedisBackend(host="localhost", port=6380, password="password"),
-    ]
-    for backend in backends:
-        s = await t.step(backend).exec_workflow(utils_uuid4_workflow, 20)
-        assert isinstance(s.w_output, str)
-        assert len(s.w_output) == 36
+        assert isinstance(unique_id, str)
+        assert len(unique_id) == 36

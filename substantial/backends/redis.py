@@ -22,6 +22,9 @@ class RedisBackend(Backend):
         key = "_".join(["runs", run_id, "events"])
         self.redis.set(key, content.to_json(indent=4))
 
+    async def flush(self) -> None:
+        self.redis.flush()
+
     async def read_all_metadata(self, run_id: str) -> List[str]:
         base_key = "_".join(["runs", run_id, "logs"])  # queue
         ret = []
