@@ -124,7 +124,7 @@ async def test_utils_methods(t: WorkflowTest):
     @workflow()
     async def utils_workflow(c: Context):
         current_time = await c.utils.now()
-        rand_value = await c.utils.random(1, 100)
+        rand_value = await c.utils.random(1, 10)
         unique_id = await c.utils.uuid4()
         return str(current_time), rand_value, str(unique_id)
 
@@ -134,19 +134,22 @@ async def test_utils_methods(t: WorkflowTest):
     ]
 
     for backend in backends:
-        start_time = datetime.now()
         s = await t.step(backend).exec_workflow(utils_workflow)
-        end_time = datetime.now()
 
-        assert isinstance(s.w_output, list)
         current_time, rand_value, unique_id = s.w_output
 
-        assert isinstance(current_time, str)
+        assert len(s.w_records.events) > 0
+
+        saved_value_now, saved_value_rand, saved_value_uuid = [
+            json.loads(event.save.value)
+            for event in s.w_records.events
+            if event.is_set("save")
+        ]
+
         now_output = datetime.fromisoformat(current_time)
-        assert start_time <= now_output <= end_time
+        saved_datetime = datetime.fromisoformat(saved_value_now)
+        assert now_output == saved_datetime
 
-        assert isinstance(rand_value, int)
-        assert 1 <= rand_value <= 100
+        assert int(saved_value_rand) == rand_value
 
-        assert isinstance(unique_id, str)
-        assert len(unique_id) == 36
+        assert saved_value_uuid == unique_id
