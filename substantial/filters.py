@@ -159,17 +159,3 @@ def eval_condition(result: Result, filter: Dict[str, any]) -> bool:
             raise ValueError(f"Unknown operator: {op}")
 
     return True
-
-
-# l = [Ok(1), Ok(2), Ok(3), Ok(4), Ok("A"), Err("error")]
-
-# apply_filter(l, {
-#     "or": [
-#         { "eq": Ok(1) },
-#         { "gte": Ok(4) },
-#         { "not": { "not": {"eq": Ok(2) } } }, # same as { "eq": Ok(2) }
-#         { "in": Err("err") }
-#     ]
-# })
-
-# [Ok(value=1), Ok(value=2), Ok(value=3)]
