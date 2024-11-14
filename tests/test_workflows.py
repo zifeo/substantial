@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import timedelta, datetime
+from datetime import timedelta
 import json
 import pytest
 from substantial.backends.fs import FSBackend
@@ -119,14 +119,34 @@ async def test_events_with_sleep(t: WorkflowTest):
         assert s.w_output == "Hello from outside! B A"
 
 
+current_time = None
+rand_value = None
+unique_id = None
+
+
 @async_test
 async def test_utils_methods(t: WorkflowTest):
+    def is_durable(a: any, b: any):
+        if a != b:
+            raise Exception(f"not durable: {a} != {b}")
+        pass
+
     @workflow()
-    async def utils_workflow(c: Context):
-        current_time = await c.utils.now()
-        rand_value = await c.utils.random(1, 10)
-        unique_id = await c.utils.uuid4()
-        return str(current_time), rand_value, str(unique_id)
+    async def utils_workflow(context: Context):
+        global current_time, rand_value, unique_id
+        a = await context.utils.now()
+        b = await context.utils.random(1, 10)
+        c = await context.utils.uuid4()
+        if current_time is None and rand_value is None and unique_id is None:
+            current_time = a
+            rand_value = b
+            unique_id = c
+        else:
+            is_durable(a, current_time)
+            is_durable(b, rand_value)
+            is_durable(c, unique_id)
+        context.sleep(timedelta(1))
+        return str(a), b, str(c)
 
     backends = [
         FSBackend("./logs"),
@@ -134,22 +154,4 @@ async def test_utils_methods(t: WorkflowTest):
     ]
 
     for backend in backends:
-        s = await t.step(backend).exec_workflow(utils_workflow)
-
-        current_time, rand_value, unique_id = s.w_output
-
-        assert len(s.w_records.events) > 0
-
-        saved_value_now, saved_value_rand, saved_value_uuid = [
-            json.loads(event.save.value)
-            for event in s.w_records.events
-            if event.is_set("save")
-        ]
-
-        now_output = datetime.fromisoformat(current_time)
-        saved_datetime = datetime.fromisoformat(saved_value_now)
-        assert now_output == saved_datetime
-
-        assert int(saved_value_rand) == rand_value
-
-        assert saved_value_uuid == unique_id
+        await t.step(backend).exec_workflow(utils_workflow)
