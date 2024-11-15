@@ -119,14 +119,17 @@ def eval_expr(s_result: SearchResult, filter: Dict[str, any]) -> bool:
         # node operators
         if op == "and" or op == "or":
             if isinstance(value, list):
+                if None in value:
+                    raise ValueError(f"'{op}' operand cannot be None")
+
                 f = all if op == "and" else any
                 if not f(eval_expr(s_result, sub_f) for sub_f in value):
                     return False
             else:
                 raise ValueError(f"'{op}' expects a list, got {type(value)} instead")
         elif op == "not":
-            if isinstance(value, list):
-                raise ValueError("'not' expects a dict, got a list instead")
+            if value is None or isinstance(value, list):
+                raise ValueError(f"'not' expects a dict, got a {type(value)} instead")
             if eval_expr(s_result, value):
                 return False
         # special values

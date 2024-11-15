@@ -46,6 +46,7 @@ def fnested():
                 "and": [
                     {"in": Err("fatal")},
                     {"not": {"eq": Err("error: example")}},
+                    {"not": {"eq": None}},
                 ]
             },
             {"eq": Ok(1)},
@@ -77,14 +78,27 @@ async def test_errors(search_results):
             lambda r: eval_expr(r, {"bad_op": {"in": "..."}}), search_results
         )
         _ = list(results)
-
     assert bad_op.value.args[0] == "Unknown terminal operator: bad_op"
 
     with pytest.raises(ValueError) as bad_input:
         results = filter(lambda r: eval_expr(r, {"and": {"in": "..."}}), search_results)
         _ = list(results)
-
     assert bad_input.value.args[0] == "'and' expects a list, got <class 'dict'> instead"
+
+    with pytest.raises(ValueError) as bad_operand:
+        results = filter(
+            lambda r: eval_expr(r, {"or": [{"eq": "valid"}, None]}), search_results
+        )
+        _ = list(results)
+    assert bad_operand.value.args[0] == "'or' operand cannot be None"
+
+    with pytest.raises(ValueError) as bad_operand:
+        results = filter(lambda r: eval_expr(r, {"not": None}), search_results)
+        _ = list(results)
+    assert (
+        bad_operand.value.args[0]
+        == "'not' expects a dict, got a <class 'NoneType'> instead"
+    )
 
 
 @async_test
