@@ -124,15 +124,4 @@ async def test_events_with_sleep(t: WorkflowTest):
         assert s.w_run_id in related_runs
 
 
-# @async_test
-# async def test_backend_methods(t: WorkflowTest):
-#     backends: List[Backend] = [
-#         FSBackend("./logs"),
-#         RedisBackend(host="localhost", port=6380, password="password"),
-#     ]
-#     for backend in backends:
-#         await backend.write_workflow_link("test_example", "test_example_uuid_one")
-#         await backend.write_workflow_link("test_example", "test_example_uuid_two")
-
-
 # TODO: test concurrent

@@ -5,7 +5,7 @@ from substantial.backends.redis import RedisBackend
 
 # from substantial.backends.fs import FSBackend
 from demo.main_ws import example_simple
-from substantial.filters import Err, Ok
+from substantial.filters import Err
 
 
 async def example():
@@ -46,7 +46,7 @@ async def example():
             {
                 "or": [
                     {"in": Err("fatal")},
-                    {"and": [{"in": Ok("B A")}, {"not": {"not": {"in": Ok("D")}}}]},
+                    {"and": [{"in": "B A"}, {"not": {"not": {"in": "D"}}}]},
                 ]
             },
         )

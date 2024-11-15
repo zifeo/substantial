@@ -29,12 +29,6 @@ class SearchResult:
     ended_at: Union[datetime, None]
 
 
-def unlift(v: any) -> any:
-    if isinstance(v, Ok) or isinstance(v, Err):
-        return v.value
-    return v
-
-
 class WorkflowFilter:
     def __init__(self, conductor: "Conductor"):
         self.conductor = conductor
@@ -90,72 +84,99 @@ class WorkflowFilter:
         filtered = []
 
         for sresult in results:
-            if eval_condition(sresult.result, query):
+            if eval_expr(sresult, query):
                 filtered.append(sresult)
 
         return filtered
 
 
+def unlift_r(v: any) -> any:
+    if isinstance(v, Ok) or isinstance(v, Err):
+        return v.value
+    return v
+
+
+def is_result(v: any):
+    return isinstance(v, Ok) or isinstance(v, Err) or v is None
+
+
 def same(a: Result, b: Result):
-    if not (isinstance(a, Ok) or isinstance(a, Err) or a is None):
+    if not is_result(a):
         raise ValueError(f"{a} term is not of type Ok, Err or None")
 
-    if not (isinstance(b, Ok) or isinstance(b, Err) or b is None):
+    if not is_result(b):
         raise ValueError(f"{b} term is not of type Ok, Err or None")
 
     if not isinstance(a, type(b)):
+        # Err != Ok
         return False
 
-    return isinstance(unlift(a), type(unlift(b)))
+    return isinstance(unlift_r(a), type(unlift_r(b)))
 
 
-def eval_condition(result: Result, filter: Dict[str, any]) -> bool:
+def eval_expr(s_result: SearchResult, filter: Dict[str, any]) -> bool:
     for op, value in filter.items():
-        # operators
-        if op == "and":
+        # node operators
+        if op == "and" or op == "or":
             if isinstance(value, list):
-                if not all(eval_condition(result, sub_f) for sub_f in value):
+                f = all if op == "and" else any
+                if not f(eval_expr(s_result, sub_f) for sub_f in value):
                     return False
             else:
-                raise ValueError(f"and expects a list, got {type(value)} instead")
-        elif op == "or":
-            if isinstance(value, list):
-                if not any(eval_condition(result, sub_f) for sub_f in value):
-                    return False
-            else:
-                raise ValueError(f"or expects a list, got {type(value)} instead")
+                raise ValueError(f"'{op}' expects a list, got {type(value)} instead")
         elif op == "not":
             if isinstance(value, list):
-                raise ValueError("not expects a dict, got a list instead")
-
-            if eval_condition(result, value):
+                raise ValueError("'not' expects a dict, got a list instead")
+            if eval_expr(s_result, value):
                 return False
-        # special
-        # TODO: started_at, ended_at (lte?, gte?, eq, ..)
-        # term
-        elif op == "eq":
-            if not (same(result, value) and unlift(result) == unlift(value)):
+        # special values
+        elif op == "started_at" or op == "ended_at":
+            discr = s_result.started_at if op == "started_at" else s_result.ended_at
+            term = SearchResult(s_result.run_id, None, None, None)
+            if discr is not None:
+                term.result = Ok(discr)
+            return eval_term(term, filter[op])
+        # terminal operators
+        else:
+            if not eval_term(s_result, filter):
+                return False
+
+    return True
+
+
+def eval_term(s_result: SearchResult, filter: Dict[str, any]) -> bool:
+    result = s_result.result
+    for op, term in filter.items():
+        if not is_result(term):
+            # Allow { "op": x } -> { "op" == Ok(x) }
+            term = Ok(term)
+
+        if op == "eq":
+            if not (same(result, term) and unlift_r(result) == unlift_r(term)):
                 return False
         elif op == "gt":
-            if not (same(result, value) and unlift(result) > unlift(value)):
+            if not (same(result, term) and unlift_r(result) > unlift_r(term)):
                 return False
         elif op == "gte":
-            if not (same(result, value) and unlift(result) >= unlift(value)):
+            if not (same(result, term) and unlift_r(result) >= unlift_r(term)):
                 return False
         elif op == "lt":
-            if not (same(result, value) and unlift(result) < unlift(value)):
+            if not (same(result, term) and unlift_r(result) < unlift_r(term)):
                 return False
         elif op == "lte":
-            if not (same(result, value) and unlift(value) <= unlift(value)):
+            if not (same(result, term) and unlift_r(term) <= unlift_r(term)):
                 return False
         elif op == "in":
+            u_tmp = unlift_r(result)
+            if isinstance(u_tmp, datetime):
+                result = Ok(str(u_tmp))
             if not (
-                same(result, value)
-                and isinstance(unlift(result), str)
-                and unlift(value) in unlift(result)
+                same(result, term)
+                and isinstance(unlift_r(result), str)
+                and str(unlift_r(term)) in str(unlift_r(result))
             ):
                 return False
         else:
-            raise ValueError(f"Unknown operator: {op}")
+            raise ValueError(f"Unknown terminal operator: {op}")
 
     return True
