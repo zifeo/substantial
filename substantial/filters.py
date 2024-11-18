@@ -151,7 +151,7 @@ def eval_term(s_result: SearchResult, filter: Dict[str, any]) -> bool:
     result = s_result.result
     for op, term in filter.items():
         if not is_result(term):
-            # Allow { "op": x } -> { "op" == Ok(x) }
+            # Allow { "op": x } -> { "op": Ok(x) }
             term = Ok(term)
 
         if op == "eq":
@@ -169,17 +169,40 @@ def eval_term(s_result: SearchResult, filter: Dict[str, any]) -> bool:
         elif op == "lte":
             if not (same(result, term) and unlift_r(term) <= unlift_r(term)):
                 return False
-        elif op == "in":
+        elif op == "in" or op == "contains":
             u_tmp = unlift_r(result)
             if isinstance(u_tmp, datetime):
                 result = Ok(str(u_tmp))
-            if not (
-                same(result, term)
-                and isinstance(unlift_r(result), str)
-                and str(unlift_r(term)) in str(unlift_r(result))
-            ):
+            # Examples:
+            # r=[1,2] contains t=1 or r=1 in t=[1,2]
+            # t='h' in r='hello' or r='hello' contains t='h'
+            val, container = (term, result) if op == "contains" else (result, term)
+            val, container = unlift_r(val), unlift_r(container)
+
+            if not generic_includes(val, container):
                 return False
         else:
-            raise ValueError(f"Unknown terminal operator: {op}")
+            raise ValueError(
+                f"Unknown terminal operator: {op}, must be eq, gt, gte, lt, lte, in or contains"
+            )
 
     return True
+
+
+def generic_includes(val, container):
+    try:
+        if not (
+            isinstance(container, list)
+            or isinstance(container, dict)
+            or (isinstance(val, str) and isinstance(container, str))
+        ):
+            return False
+        if isinstance(val, dict) and isinstance(container, dict):
+            # { x: {a: 3} } in { x: {a: 3}, y: 4 } => True
+            for k, v in val.items():
+                if k not in container or v != container.get(k):
+                    return False
+            return True
+        return val in container
+    except Exception:
+        return False

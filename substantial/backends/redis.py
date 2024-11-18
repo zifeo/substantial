@@ -28,20 +28,14 @@ class RedisBackend(Backend):
                 f"Invalid key '{key}': required prefix '{self.base_prefix}' not present"
             )
 
-        return key[len(self.base_prefix) :].split(self.separator)
+        offset = len(self.base_prefix + self.separator)
+        return key[offset:].split(self.separator)
 
     # Backend
 
     async def read_events(self, run_id: str) -> Union[Records, None]:
         event_key = self._key("runs", run_id, "events")
-        val: str | None = self.redis.register_script("""
-            local event_key = KEYS[1]
-            if redis.call("EXISTS", event_key) == 1 then
-                return redis.call("GET", event_key)
-            else
-                return nil
-            end
-        """)(keys=[event_key])
+        val = self.redis.get(event_key)
 
         return None if val is None else Records().from_json(val)
 
@@ -51,25 +45,17 @@ class RedisBackend(Backend):
 
     async def read_all_metadata(self, run_id: str) -> List[str]:
         log_key = self._key("runs", run_id, "logs")
-        logs = self.redis.register_script("""
-            local log_key = KEYS[1]
-            local run_id = ARGV[1]
-
-            local sched_keys = redis.call("LRANGE", log_key, 0, -1)
-            local logs = {}
-            for _, sched_key in ipairs(sched_keys) do
-                if string.find(sched_key, run_id) ~= nil then
-                    local content = redis.call("GET", sched_key)
-                    table.insert(logs, content)
-                end
-            end
-
-            return logs
-        """)(keys=[log_key], args=[run_id])
-
+        sched_keys = self.redis.lrange(log_key, 0, -1)
+        logs = self.redis.mget(sched_keys)
         return logs
 
     async def append_metadata(self, run_id: str, schedule: datetime, content: str):
+        """
+        Mental model:
+            * runs:/{run_id}:/logs => List keys {run_id}:/{schedule_isoformat}
+                - Deref key => metadata content
+        """
+
         log_key = self._key("runs", run_id, "logs")  # queue
         sched_key = self._key(run_id, schedule.isoformat())
 
@@ -87,6 +73,12 @@ class RedisBackend(Backend):
         return self.redis.zrange(links_key, 0, -1)
 
     async def write_workflow_link(self, workflow_name: str, run_id: str) -> None:
+        """
+        Mental model:
+            * links:/runs:/{workflow_name} => List run_id
+                - Used by read_workflow_link
+        """
+
         links_key = self._key("links", "runs", workflow_name)
         self.redis.zadd(links_key, {run_id: 0})
 
@@ -130,10 +122,21 @@ class RedisBackend(Backend):
     async def add_schedule(
         self, queue: str, run_id: str, schedule: datetime, content: Union[Event, None]
     ) -> None:
+        """
+        Mental model:
+            * schedules:/{queue} => List sched_ref (ref_:/{run_id}:/{schedule_isoformat})
+                - sched_ref => Ordered list of run_id
+                - Used by next_run
+                - Freed by close_schedule
+            * {schedule_isoformat}/{run_id} => schedule payload (e.g. send, start, stop)
+                - Used by read_schedule
+                - Freed by close_schedule
+        """
+
         q_key = self._key("schedules", queue)  # priority queue
 
         non_prefixed_sched_ref = schedule.isoformat()
-        sched_score = 1.0 / schedule.timestamp()
+        sched_score = schedule.timestamp()
         sched_key = self._key(non_prefixed_sched_ref, run_id)
         sched_ref = self._key("ref_", run_id, non_prefixed_sched_ref)
 
@@ -157,19 +160,10 @@ class RedisBackend(Backend):
         self, queue: str, run_id: str, schedule: datetime
     ) -> Union[Event, None]:
         sched_key = self._key(schedule.isoformat(), run_id)
-
-        lua_ret = self.redis.register_script("""
-            local sched_key = KEYS[1]
-            if redis.call("EXISTS", sched_key) == 1 then
-                return redis.call("GET", sched_key)
-            else
-                return nil
-            end
-        """)(keys=[sched_key])
-
-        if lua_ret is None:
+        ret = self.redis.get(sched_key)
+        if ret is None:
             raise Exception(f"schedule not found: {sched_key}")
-        return None if lua_ret == "" else Event().from_json(lua_ret)
+        return None if ret == "" else Event().from_json(ret)
 
     async def close_schedule(self, queue: str, run_id: str, schedule: datetime) -> None:
         q_key = self._key("schedules", queue)
@@ -221,6 +215,14 @@ class RedisBackend(Backend):
         return active_lease_ids
 
     async def acquire_lease(self, run_id: str, lease_seconds: int) -> bool:
+        """
+        Mental model:
+            * leases => Ordered lease refs (format: lease:/{run_id})
+                - Deref lease ref => lease expiration (isoformat date string)
+                - Could be overwritten by renew_lease (must exist before renew)
+                - Freed by remove_lease
+        """
+
         all_leases_key = self._key("leases")
         lease_ref = self._key("lease", run_id)
 

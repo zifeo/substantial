@@ -10,6 +10,7 @@ def search_results():
         Ok(1),
         Ok(2),
         Ok(3),
+        Ok(["one", "two"]),
         None,
         Ok(4),
         Err("fatal: example"),
@@ -44,7 +45,7 @@ def fnested():
         "or": [
             {
                 "and": [
-                    {"in": Err("fatal")},
+                    {"contains": Err("fatal")},
                     {"not": {"eq": Err("error: example")}},
                     {"not": {"eq": None}},
                 ]
@@ -75,13 +76,18 @@ async def test_unfinished(search_results):
 async def test_errors(search_results):
     with pytest.raises(ValueError) as bad_op:
         results = filter(
-            lambda r: eval_expr(r, {"bad_op": {"in": "..."}}), search_results
+            lambda r: eval_expr(r, {"bad_op": {"contains": "..."}}), search_results
         )
         _ = list(results)
-    assert bad_op.value.args[0] == "Unknown terminal operator: bad_op"
+    assert (
+        bad_op.value.args[0]
+        == "Unknown terminal operator: bad_op, must be eq, gt, gte, lt, lte, in or contains"
+    )
 
     with pytest.raises(ValueError) as bad_input:
-        results = filter(lambda r: eval_expr(r, {"and": {"in": "..."}}), search_results)
+        results = filter(
+            lambda r: eval_expr(r, {"and": {"contains": "..."}}), search_results
+        )
         _ = list(results)
     assert bad_input.value.args[0] == "'and' expects a list, got <class 'dict'> instead"
 
@@ -121,11 +127,25 @@ async def test_dates(search_results, after_d):
         lambda r: eval_expr(r, after_d(datetime(2024, 1, 5))), search_results
     )
     results = list(map(unlift_s, results))
-    assert results == [Err(value="fatal: example"), Ok(5), Err("error: example")]
+    assert results == [Ok(5), Err("error: example")]
 
     # string YYYY-MM-DD HH:MM:SS
     results = filter(
-        lambda r: eval_expr(r, {"started_at": {"in": "01-01 00:"}}), search_results
+        lambda r: eval_expr(r, {"started_at": {"contains": "01-01 00:"}}),
+        search_results,
     )
     results = list(map(unlift_s, results))
     assert results == [Ok(1)]
+
+
+@async_test
+async def test_contains_vs_in(search_results):
+    results = filter(
+        lambda r: eval_expr(
+            r, {"or": [{"contains": Err("fatal")}, {"in": [1, 4]}, {"contains": "two"}]}
+        ),
+        search_results,
+    )
+    results = list(map(unlift_s, results))
+
+    assert results == [Ok(1), Ok(["one", "two"]), Ok(4), Err("fatal: example")]
