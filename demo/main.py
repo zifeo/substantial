@@ -46,7 +46,7 @@ async def example():
             {
                 "or": [
                     {"in": Err("fatal")},
-                    {"and": [{"in": "B A"}, {"not": {"not": {"in": "D"}}}]},
+                    {"and": [{"contains": "B A"}, {"not": {"not": {"contains": "D"}}}]},
                 ]
             },
         )
