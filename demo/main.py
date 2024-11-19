@@ -2,7 +2,10 @@ import asyncio
 from substantial import Conductor
 
 from substantial.backends.redis import RedisBackend
+
+# from substantial.backends.fs import FSBackend
 from demo.main_ws import example_simple
+from substantial.filters import Err
 
 
 async def example():
@@ -34,6 +37,22 @@ async def example():
 
     agent.cancel()
     await agent
+
+    # filter runs feature overview
+    results = [
+        s.result
+        for s in await substantial.filters.search(
+            example_simple,
+            {
+                "or": [
+                    {"in": Err("fatal")},
+                    {"and": [{"contains": "B A"}, {"not": {"not": {"contains": "D"}}}]},
+                ]
+            },
+        )
+    ]
+
+    print(len(results), results)
 
 
 asyncio.run(example())

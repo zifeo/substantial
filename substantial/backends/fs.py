@@ -43,6 +43,18 @@ class FSBackend(Backend):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content)
 
+    async def read_workflow_links(self, workflow_name: str) -> List[str]:
+        f = self.root / "links" / "runs" / workflow_name
+        ret = []
+        for run_id in sorted(f.iterdir()):
+            ret.append(run_id.name)
+        return ret
+
+    async def write_workflow_link(self, workflow_name: str, run_id: str) -> None:
+        f = self.root / "links" / "runs" / workflow_name / run_id
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(run_id)
+
     async def next_run(
         self, queue: str, excludes: list[str]
     ) -> Union[Tuple[str, datetime], None]:

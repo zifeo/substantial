@@ -4,6 +4,7 @@ from uuid import uuid4
 from substantial.agent import Agent
 from substantial.backends.backend import Backend
 from substantial.workflows import Store
+from substantial.filters import WorkflowFilter
 from substantial.workflows.run import Run
 from substantial.workflows.workflow import Workflow
 import aioprocessing
@@ -12,6 +13,7 @@ import aioprocessing
 class Conductor:
     def __init__(self, backend: Backend):
         self.backend = backend
+        self.filters = WorkflowFilter(self)
 
     def register(self, workflow: Workflow):
         Store.register(workflow)
@@ -27,6 +29,9 @@ class Conductor:
 
         run_id = f"{workflow.id}-{uuid4()}"
         run = Run(run_id, queue, self.backend)
+
+        await self.backend.write_workflow_link(workflow.id, run_id)
+
         await run.start(kwargs)
         return run
 
