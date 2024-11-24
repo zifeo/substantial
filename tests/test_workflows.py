@@ -133,27 +133,30 @@ async def test_events_with_sleep(t: WorkflowTest):
         assert s.w_run_id in related_runs
 
 
-current_time = None
-rand_value = None
-unique_id = None
+@pytest.fixture
+def utils_state():
+    return {"current_time": None, "rand_value": None, "unique_id": None}
 
 
 @async_test
-async def test_utils_methods(t: WorkflowTest):
+async def test_utils_methods(t: WorkflowTest, utils_state):
     @workflow()
     async def utils_workflow(context: Context):
-        global current_time, rand_value, unique_id
         a = await context.utils.now()
         b = await context.utils.random(1, 10)
         c = await context.utils.uuid4()
-        if current_time is None and rand_value is None and unique_id is None:
-            current_time = a
-            rand_value = b
-            unique_id = c
+        if (
+            utils_state["current_time"] is None
+            and utils_state["rand_value"] is None
+            and utils_state["unique_id"] is None
+        ):
+            utils_state["current_time"] = a
+            utils_state["rand_value"] = b
+            utils_state["unique_id"] = c
         else:
-            assert a == current_time
-            assert b == rand_value
-            assert c == unique_id
+            assert a == utils_state["current_time"]
+            assert b == utils_state["rand_value"]
+            assert c == utils_state["unique_id"]
 
         context.sleep(timedelta(1))
         return a, b, c
