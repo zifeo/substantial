@@ -43,9 +43,6 @@ class RedisBackend(Backend):
         key = self._key("runs", run_id, "events")
         self.redis.set(key, content.to_json(indent=4))
 
-    async def flush(self) -> None:
-        self.redis.flush()
-
     async def read_all_metadata(self, run_id: str) -> List[str]:
         log_key = self._key("runs", run_id, "logs")
         sched_keys = self.redis.lrange(log_key, 0, -1)
