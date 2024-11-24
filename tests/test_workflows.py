@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 from datetime import timedelta
-import json
+
+import orjson as json
 import pytest
 from substantial.backends.fs import FSBackend
 from substantial.backends.redis import RedisBackend
+
 from substantial.types import RetryStrategy
 from substantial.workflows.workflow import workflow
 from substantial.workflows.context import Context
@@ -44,7 +46,10 @@ async def test_simple_all_backends(t: WorkflowTest):
         assert s.w_output == "C B A"
         assert len(s.w_records.events) > 0
         assert s.w_records.events == [
-            Event(start=Start(kwargs=protobuf.Struct({})), at=s.w_records.events[0].at),
+            Event(
+                start=Start(kwargs=protobuf.Struct({})),
+                at=s.w_records.events[0].at,
+            ),
             Event(save=Save(1, json.dumps("A"), -1)),
             Event(save=Save(2, json.dumps("B A"), -1)),
             Event(save=Save(3, json.dumps("C B A"), -1)),
@@ -65,7 +70,9 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
         r1 = await c.save(
             lambda: failing_op(),
             retry_strategy=RetryStrategy(
-                max_retries=retries, initial_backoff_interval=1, max_backoff_interval=5
+                max_retries=retries,
+                initial_backoff_interval=1,
+                max_backoff_interval=5,
             ),
         )
         return r1
@@ -113,7 +120,10 @@ async def test_events_with_sleep(t: WorkflowTest):
     for backend in backends:
         s = t.step(backend)
         s = await s.events(
-            {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}
+            {
+                1: EventSend("sayHello", "Hello from outside!"),
+                6: EventSend("cancel"),
+            }
         ).exec_workflow(event_workflow)
 
         assert s.w_output == "Hello from outside! B A"
@@ -126,11 +136,6 @@ unique_id = None
 
 @async_test
 async def test_utils_methods(t: WorkflowTest):
-    def is_durable(a: any, b: any):
-        if a != b:
-            raise Exception(f"not durable: {a} != {b}")
-        pass
-
     @workflow()
     async def utils_workflow(context: Context):
         global current_time, rand_value, unique_id
@@ -142,11 +147,12 @@ async def test_utils_methods(t: WorkflowTest):
             rand_value = b
             unique_id = c
         else:
-            is_durable(a, current_time)
-            is_durable(b, rand_value)
-            is_durable(c, unique_id)
+            assert a == current_time
+            assert b == rand_value
+            assert c == unique_id
+
         context.sleep(timedelta(1))
-        return str(a), b, str(c)
+        return a, b, c
 
     backends = [
         FSBackend("./logs"),
@@ -154,4 +160,8 @@ async def test_utils_methods(t: WorkflowTest):
     ]
 
     for backend in backends:
-        await t.step(backend).exec_workflow(utils_workflow)
+        s = await t.step(backend).exec_workflow(utils_workflow)
+        _, rand, uuid = s.w_output
+
+        assert 1 <= rand <= 10
+        assert len(str(uuid)) == 36

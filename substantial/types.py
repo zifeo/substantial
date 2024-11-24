@@ -2,7 +2,8 @@ import asyncio
 from datetime import timedelta
 import inspect
 
-import json
+import orjson as json
+
 import time
 from typing import Any, Callable, Union
 from pydantic.dataclasses import dataclass
@@ -63,7 +64,10 @@ class RetryStrategy:
         elif low is not None and high is None:
             self.max_backoff_interval = low + 10
         elif low is None and high is not None:
-            self.initial_backoff_interval = max(0, self.max_backoff_interval - 10)
+            self.initial_backoff_interval = max(
+                0,
+                self.max_backoff_interval - 10,
+            )
 
     def linear(self, retries_left: int) -> timedelta:
         """Scaled timeout in seconds"""
@@ -121,7 +125,11 @@ class ValueEval:
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:
-                save = events.Save(save_id, json.dumps(None), counter + 1)
+                save = events.Save(
+                    save_id,
+                    json.dumps(None),
+                    counter + 1,
+                )
                 ctx.source(events.Event(save=save))
 
                 delta = strategy.linear(retries_left)

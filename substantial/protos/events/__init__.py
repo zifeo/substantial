@@ -19,7 +19,7 @@ class Start(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class Save(betterproto.Message):
     id: int = betterproto.uint32_field(1)
-    value: str = betterproto.string_field(2)
+    value: bytes = betterproto.bytes_field(2)
     counter: int = betterproto.int32_field(3)
 
 
@@ -33,13 +33,13 @@ class Sleep(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class Send(betterproto.Message):
     name: str = betterproto.string_field(1)
-    value: str = betterproto.string_field(2)
+    value: bytes = betterproto.bytes_field(2)
 
 
 @dataclass(eq=False, repr=False)
 class Stop(betterproto.Message):
-    ok: str = betterproto.string_field(1, group="result")
-    err: str = betterproto.string_field(2, group="result")
+    ok: bytes = betterproto.bytes_field(1, group="result")
+    err: bytes = betterproto.bytes_field(2, group="result")
 
 
 @dataclass(eq=False, repr=False)

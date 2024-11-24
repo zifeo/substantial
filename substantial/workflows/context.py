@@ -1,4 +1,3 @@
-import json
 import random
 import uuid
 import logging
@@ -6,6 +5,8 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional
 from datetime import datetime, timedelta, timezone
 
 from substantial.protos import events, metadata
+from substantial.workflows.parser import parse
+
 
 if TYPE_CHECKING:
     from substantial.workflows.run import Run
@@ -92,12 +93,12 @@ class Context:
             else:
                 # resolved mode
                 print(f"Reused {saved.value} for id#{save_id}")
-                return json.loads(saved.value)
+                return parse(saved.value)
 
     def handle(self, event_name: str, cb: Callable[[Any], Any]):
         for record in self.events:
             if record.is_set("send") and event_name == record.send.name:
-                payload = json.loads(record.send.value)
+                payload = parse(record.send.value)
                 ret = cb(payload)
                 return ret
         return None
@@ -155,15 +156,15 @@ class Utils:
         self.__ctx = ctx
 
     async def now(self, tz: Optional[timezone] = None) -> datetime:
-        now = await self.__ctx.save(lambda: datetime.now(tz).isoformat())
-        return datetime.fromisoformat(now)
+        now = await self.__ctx.save(lambda: datetime.now(tz))
+        return now
 
     async def random(self, a: int, b: int) -> int:
         return await self.__ctx.save(lambda: random.randint(a, b))
 
     async def uuid4(self) -> uuid.UUID:
-        serialized_uuid = await self.__ctx.save(lambda: str(uuid.uuid4()))
-        return uuid.UUID(serialized_uuid)
+        serialized_uuid = await self.__ctx.save(lambda: uuid.uuid4())
+        return serialized_uuid
 
     @staticmethod
     def log(level, msg, *args, **kwargs) -> None:

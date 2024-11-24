@@ -11,7 +11,7 @@ message Start {
 
 message Save {
   uint32 id = 1;
-  string value = 2;
+  bytes value = 2;
   int32 counter = 3;
 }
 
@@ -23,13 +23,13 @@ message Sleep {
 
 message Send {
   string name = 1;
-  string value = 2;
+  bytes value = 2;
 }
 
 message Stop {
   oneof result {
-    string ok = 1;
-    string err = 2;
+    bytes ok = 1;
+    bytes err = 2;
   }
 }
 
