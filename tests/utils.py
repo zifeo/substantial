@@ -95,7 +95,7 @@ class WorkflowTest:
         substantial.register(workflow)
 
         w = await substantial.start(workflow)  # the actual workflow run
-        self.w_run_id = True
+        self.w_run_id = w.run_id
 
         async def event_timeline():
             time_prev = 0
