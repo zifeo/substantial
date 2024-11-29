@@ -49,12 +49,19 @@ class Context:
         self,
         f: Callable,
         *,
-        # compensate_with
+        compensate_with: Optional[Callable[[], Any]] = None,
         timeout: Optional[timedelta] = None,
         retry_strategy: Optional[RetryStrategy] = None,
+        max_compensation_attempts: int = 3,
     ) -> Any:
         timeout_secs = timeout.total_seconds() if timeout is not None else None
-        evaluator = ValueEval(f, timeout_secs, retry_strategy)
+        evaluator = ValueEval(
+            f,
+            timeout_secs,
+            retry_strategy,
+            compensate_with,
+            max_compensation_attempts,
+        )
         save_id = self.__next_id()
 
         saved = None

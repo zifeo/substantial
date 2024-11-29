@@ -5,7 +5,7 @@ import inspect
 import orjson as json
 
 import time
-from typing import Any, Callable, Union
+from typing import Any, Callable, Union, Optional
 from pydantic.dataclasses import dataclass
 
 from substantial.protos import events
@@ -80,10 +80,28 @@ class RetryStrategy:
 
 
 @dataclass
+class CompensationStrategy:
+    compensate_fn: Optional[Callable[[], Any]] = None
+    max_compensation_attemps: int = 3
+
+
+class CompensationFailed(BaseException):
+    def __init__(
+        self,
+        original_error: Exception,
+        compensation_error: Optional[Exception] = None,
+    ):
+        self.original_error = original_error
+        self.compensation_error = compensation_error
+
+
+@dataclass
 class ValueEval:
     lambda_fn: Callable[[], Any]
     timeout: Union[int, None]
     retry_strategy: Union[RetryStrategy, None]
+    compensate_fn: Optional[Callable[[], Any]] = None
+    max_compensation_attempts: int = 3
 
     async def exec(self, ctx, save_id, counter) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
@@ -122,6 +140,29 @@ class ValueEval:
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
+            if self.compensate_fn:
+                compesation_attemps = 0
+                while compesation_attemps < self.max_compensation_attempts:
+                    try:
+                        compensation_result = self.compensate_fn()
+                        ctx.source(
+                            events.Event(
+                                compensation=events.Compensation(
+                                    save_id=save_id,
+                                    error=str(e),
+                                    compensation_result=json.dumps(
+                                        compensation_result,
+                                    ),
+                                )
+                            )
+                        )
+                        return compensation_result
+                    except Exception as compensation_error:
+                        compesation_attemps += 1
+
+                        if compesation_attemps >= self.max_compensation_attempts:
+                            raise CompensationFailed(e, compensation_error)
+
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:

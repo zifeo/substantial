@@ -158,7 +158,7 @@ async def test_utils_methods(t: WorkflowTest, utils_state):
             assert b == utils_state["rand_value"]
             assert c == utils_state["unique_id"]
 
-        context.sleep(timedelta(1))
+        await context.sleep(timedelta(seconds=1))
         return a, b, c
 
     backends = [
@@ -172,3 +172,29 @@ async def test_utils_methods(t: WorkflowTest, utils_state):
 
         assert 1 <= rand <= 10
         assert len(str(uuid)) == 36
+
+
+@async_test
+async def test_compensation(t: WorkflowTest):
+    @workflow()
+    async def compensation_workflow(c: Context):
+        def risky_operation():
+            raise Exception("Operation Error")
+
+        def compensation_action():
+            return "Compensate"
+
+        return await c.save(
+            risky_operation,
+            compensate_with=compensation_action,
+        )
+
+    backends = [
+        FSBackend("./logs"),
+        RedisBackend(host="localhost", port=6380, password="password"),
+    ]
+
+    for backend in backends:
+        s = t.step(backend)
+        s = await s.exec_workflow(compensation_workflow)
+        assert s.w_output == "Compensate"

@@ -24,6 +24,13 @@ class Save(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class Compensation(betterproto.Message):
+    save_id: int = betterproto.uint32_field(1)
+    error: str = betterproto.string_field(2)
+    compensation_result: bytes = betterproto.bytes_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class Sleep(betterproto.Message):
     id: int = betterproto.uint32_field(1)
     start: datetime = betterproto.message_field(2)
@@ -50,6 +57,7 @@ class Event(betterproto.Message):
     sleep: "Sleep" = betterproto.message_field(12, group="of")
     send: "Send" = betterproto.message_field(13, group="of")
     stop: "Stop" = betterproto.message_field(14, group="of")
+    compensation: "Compensation" = betterproto.message_field(15, group="of")
 
 
 @dataclass(eq=False, repr=False)
