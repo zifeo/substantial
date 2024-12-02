@@ -57,7 +57,7 @@ class Event(betterproto.Message):
     sleep: "Sleep" = betterproto.message_field(12, group="of")
     send: "Send" = betterproto.message_field(13, group="of")
     stop: "Stop" = betterproto.message_field(14, group="of")
-    compensation: "Compensation" = betterproto.message_field(15, group="of")
+    compensation: "Compensation" = betterproto.message_field(15)
 
 
 @dataclass(eq=False, repr=False)

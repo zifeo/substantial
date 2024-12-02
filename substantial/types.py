@@ -98,7 +98,7 @@ class CompensationFailed(BaseException):
 @dataclass
 class ValueEval:
     lambda_fn: Callable[[], Any]
-    timeout: Union[int, None]
+    timeout: Union[float, None]
     retry_strategy: Union[RetryStrategy, None]
     compensate_fn: Optional[Callable[[], Any]] = None
     max_compensation_attempts: int = 3
@@ -111,9 +111,7 @@ class ValueEval:
         try:
             # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
             before_spawn = time.time()
-            op = (
-                self.lambda_fn()
-            )  # this does not account the case when lambda_fn() is not async
+            op = self.lambda_fn()
 
             ret = None
             if inspect.iscoroutine(op):
@@ -141,10 +139,12 @@ class ValueEval:
             return ret
         except Exception as e:
             if self.compensate_fn:
-                compesation_attemps = 0
-                while compesation_attemps < self.max_compensation_attempts:
+                compensation_attempts = 0
+                while compensation_attempts < self.max_compensation_attempts:
                     try:
                         compensation_result = self.compensate_fn()
+                        if inspect.iscoroutine(compensation_result):
+                            compensation_result = await compensation_result
                         ctx.source(
                             events.Event(
                                 compensation=events.Compensation(
@@ -158,9 +158,8 @@ class ValueEval:
                         )
                         return compensation_result
                     except Exception as compensation_error:
-                        compesation_attemps += 1
-
-                        if compesation_attemps >= self.max_compensation_attempts:
+                        compensation_attempts += 1
+                        if compensation_attempts >= self.max_compensation_attempts:
                             raise CompensationFailed(e, compensation_error)
 
             counter = counter or 1

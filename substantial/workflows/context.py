@@ -1,7 +1,8 @@
 import random
 import uuid
 import logging
-from typing import TYPE_CHECKING, Any, Callable, List, Optional
+import orjson as json
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type
 from datetime import datetime, timedelta, timezone
 
 from substantial.protos import events, metadata
@@ -49,6 +50,7 @@ class Context:
         self,
         f: Callable,
         *,
+        expected_type: Optional[Type] = None,
         compensate_with: Optional[Callable[[], Any]] = None,
         timeout: Optional[timedelta] = None,
         retry_strategy: Optional[RetryStrategy] = None,
@@ -89,18 +91,19 @@ class Context:
 
         if saved is None:
             val = await evaluator.exec(self, save_id, None)
-            print(f"Computed id#{save_id}, {val}")
-            return val
+            parsed_val = parse(json.dumps(val), expected_type)
+            print(f"Computed id#{save_id}, {parsed_val}")
+            return parsed_val
         else:
             if saved.counter != -1:
                 # retry mode (after replay)
-                print(f"Retry id#{save_id}, counter={saved.counter}")
                 val = await evaluator.exec(self, save_id, saved.counter)
-                return val
+                parsed_val = parse(json.dumps(val), expected_type)
+                return parsed_val
             else:
                 # resolved mode
                 print(f"Reused {saved.value} for id#{save_id}")
-                return parse(saved.value)
+                return parse(saved.value, expected_type)
 
     def handle(self, event_name: str, cb: Callable[[Any], Any]):
         for record in self.events:
@@ -122,7 +125,10 @@ class Context:
     async def sleep(self, duration: timedelta) -> Any:
         sleep_id = self.__next_id()
         sleep_records = list(
-            filter(lambda e: e.is_set("sleep") and sleep_id == e.sleep.id, self.events)
+            filter(
+                lambda e: e.is_set("sleep") and sleep_id == e.sleep.id,
+                self.events,
+            )
         )
 
         now = datetime.now(tz=timezone.utc)
@@ -163,14 +169,16 @@ class Utils:
         self.__ctx = ctx
 
     async def now(self, tz: Optional[timezone] = None) -> datetime:
-        now = await self.__ctx.save(lambda: datetime.now(tz))
+        now = await self.__ctx.save(lambda: datetime.now(tz), expected_type=datetime)
         return now
 
     async def random(self, a: int, b: int) -> int:
         return await self.__ctx.save(lambda: random.randint(a, b))
 
     async def uuid4(self) -> uuid.UUID:
-        serialized_uuid = await self.__ctx.save(lambda: uuid.uuid4())
+        serialized_uuid = await self.__ctx.save(
+            lambda: uuid.uuid4(), expected_type=uuid.UUID
+        )
         return serialized_uuid
 
     @staticmethod

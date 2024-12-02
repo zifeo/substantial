@@ -38,7 +38,6 @@ message Stop {
     bytes err = 2;
   }
 }
-
 message Event {
   google.protobuf.Timestamp at = 1;
   oneof of {
@@ -47,8 +46,8 @@ message Event {
     Sleep sleep = 12;
     Send send = 13;
     Stop stop = 14;
-    Compensation compensation = 15;
   }
+  Compensation compensation = 15;
 };
 
 message Records {

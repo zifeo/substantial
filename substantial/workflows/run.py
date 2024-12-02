@@ -19,8 +19,6 @@ from substantial.types import (
     RetryMode,
 )
 
-from substantial.workflows.parser import parse
-
 import betterproto.lib.google.protobuf as protobuf
 
 
@@ -77,7 +75,7 @@ class Run:
                 if record.stop.is_set("err"):
                     raise Exception(json.loads(record.stop.err))
 
-                return parse(record.stop.ok)
+                return json.loads(record.stop.ok)
 
             await asyncio.sleep(1)
 

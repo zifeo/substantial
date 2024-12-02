@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, datetime
 import orjson as json
 from typing import List
 import pytest
@@ -112,7 +112,7 @@ async def test_events_with_sleep(t: WorkflowTest):
         c.handle("cancel", lambda _: s.update())
         if await c.ensure(lambda: s.is_cancelled):
             r3 = await c.save(lambda: f"{payload} B {r1}")
-        return r3
+            return r3
 
     backends: List[Backend] = [
         FSBackend("./logs"),
@@ -145,6 +145,7 @@ async def test_utils_methods(t: WorkflowTest, utils_state):
         a = await context.utils.now()
         b = await context.utils.random(1, 10)
         c = await context.utils.uuid4()
+        x = await context.save(lambda: "2024-11-29T13:52:08.859245")
         if (
             utils_state["current_time"] is None
             and utils_state["rand_value"] is None
@@ -157,9 +158,11 @@ async def test_utils_methods(t: WorkflowTest, utils_state):
             assert a == utils_state["current_time"]
             assert b == utils_state["rand_value"]
             assert c == utils_state["unique_id"]
+            assert isinstance(a, datetime)
+            assert isinstance(x, str)
 
         await context.sleep(timedelta(seconds=1))
-        return a, b, c
+        return a, b, c, x
 
     backends = [
         FSBackend("./logs"),
@@ -168,7 +171,7 @@ async def test_utils_methods(t: WorkflowTest, utils_state):
 
     for backend in backends:
         s = await t.step(backend).exec_workflow(utils_workflow)
-        _, rand, uuid = s.w_output
+        now, rand, uuid, x = s.w_output
 
         assert 1 <= rand <= 10
         assert len(str(uuid)) == 36
