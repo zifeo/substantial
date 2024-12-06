@@ -5,7 +5,7 @@ import inspect
 import orjson as json
 
 import time
-from typing import Any, Callable, Union, Optional
+from typing import Any, Callable, Union, Optional, List
 from pydantic.dataclasses import dataclass
 
 from substantial.protos import events
@@ -103,7 +103,13 @@ class ValueEval:
     compensate_fn: Optional[Callable[[], Any]] = None
     max_compensation_attempts: int = 3
 
-    async def exec(self, ctx, save_id, counter) -> Any:
+    async def exec(
+        self,
+        ctx,
+        save_id,
+        counter,
+        compensation_stack: List[Callable[[], Any]] = [],
+    ) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3, initial_backoff_interval=0, max_backoff_interval=10
         )
@@ -112,6 +118,10 @@ class ValueEval:
             # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
             before_spawn = time.time()
             op = self.lambda_fn()
+
+            # if there is compessation, we need to add it to the stack
+            if self.compensate_fn:
+                compensation_stack.append(self.compensate_fn)
 
             ret = None
             if inspect.iscoroutine(op):
@@ -131,37 +141,32 @@ class ValueEval:
                 ret = op
             else:
                 raise Exception(
-                    f"Expected value or coroutine object, got {type(op)} instead"
+                    f"Expected value or coroutielf.ne object, got {type(op)} instead"
                 )
 
             save = events.Save(save_id, json.dumps(ret), -1)
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
-            if self.compensate_fn:
-                compensation_attempts = 0
-                while compensation_attempts < self.max_compensation_attempts:
-                    try:
-                        compensation_result = self.compensate_fn()
-                        if inspect.iscoroutine(compensation_result):
-                            compensation_result = await compensation_result
-                        ctx.source(
-                            events.Event(
-                                compensation=events.Compensation(
-                                    save_id=save_id,
-                                    error=str(e),
-                                    compensation_result=json.dumps(
-                                        compensation_result,
-                                    ),
-                                )
+            if len(compensation_stack):
+                compensation_stack.reverse()
+                for compensation_fn in compensation_stack:
+                    compensation_result = compensation_fn()
+                    if inspect.iscoroutine(compensation_result):
+                        compensation_result = await compensation_result
+                    ctx.source(
+                        events.Event(
+                            compesantion=events.Compensation(
+                                save_id=save_id,
+                                error=str(e),
+                                compensation_result=json.dumps(
+                                    compensation_result,
+                                ),
                             )
                         )
-                        return compensation_result
-                    except Exception as compensation_error:
-                        compensation_attempts += 1
-                        if compensation_attempts >= self.max_compensation_attempts:
-                            raise CompensationFailed(e, compensation_error)
+                    )
 
+                raise e
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:

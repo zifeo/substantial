@@ -177,20 +177,35 @@ async def test_utils_methods(t: WorkflowTest, utils_state):
         assert len(str(uuid)) == 36
 
 
+@pytest.fixture
+def account_balance():
+    return {"account": 1000}
+
+
 @async_test
-async def test_compensation(t: WorkflowTest):
+async def test_banking_compensation(t: WorkflowTest, account_balance):
+    def risky_transaction():
+        raise Exception("Transaction failed")
+
     @workflow()
-    async def compensation_workflow(c: Context):
-        def risky_operation():
-            raise Exception("Operation Error")
+    async def banking_workflow(c: Context):
+        def credit_account(value: int) -> int:
+            return account_balance["account"] - value
 
-        def compensation_action():
-            return "Compensate"
+        def debit_account(value: int) -> int:
+            return account_balance["account"] + value
 
-        return await c.save(
-            risky_operation,
-            compensate_with=compensation_action,
-        )
+        c.save(debit_account(4), compensate_with=credit_account(4))
+        c.save(debit_account(10), compensate_with=credit_account(10))
+        c.save(
+            lambda: [
+                debit_account(2),
+                risky_transaction(),
+            ],
+            compensate_with=credit_account(2),
+        )  # should fail here and start compensate, and rollback(compensate all preveiws steps in LIFO)
+        c.save(debit_account(100), compensate_with=credit_account(100))
+        return account_balance
 
     backends = [
         FSBackend("./logs"),
@@ -198,6 +213,5 @@ async def test_compensation(t: WorkflowTest):
     ]
 
     for backend in backends:
-        s = t.step(backend)
-        s = await s.exec_workflow(compensation_workflow)
-        assert s.w_output == "Compensate"
+        await t.step(backend).exec_workflow(banking_workflow)
+        assert account_balance == {"account": 1000}

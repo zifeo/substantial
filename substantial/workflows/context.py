@@ -169,7 +169,10 @@ class Utils:
         self.__ctx = ctx
 
     async def now(self, tz: Optional[timezone] = None) -> datetime:
-        now = await self.__ctx.save(lambda: datetime.now(tz), expected_type=datetime)
+        now = await self.__ctx.save(
+            lambda: datetime.now(tz),
+            expected_type=datetime,
+        )
         return now
 
     async def random(self, a: int, b: int) -> int:
