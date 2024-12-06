@@ -1,6 +1,7 @@
 import asyncio
+import orjson as json
+
 from datetime import datetime, timedelta
-import json
 from typing import List
 
 from substantial.backends.backend import Backend
@@ -51,7 +52,10 @@ class Run:
         now = datetime.now()
         event = events.Event(
             at=now,
-            send=events.Send(name=name, value=json.dumps(value)),
+            send=events.Send(
+                name=name,
+                value=json.dumps(value),
+            ),
         )
 
         print("send", event)
@@ -115,7 +119,11 @@ class Run:
                     self.queue,
                     self.run_id,
                     schedule + timedelta(seconds=0.5),
-                    events.Event(stop=events.Stop(ok=json.dumps(ret))),
+                    events.Event(
+                        stop=events.Stop(
+                            ok=json.dumps(ret),
+                        )
+                    ),
                 )
         except Interrupt as interrupt:
             # FIXME need to specify the delta
@@ -138,7 +146,11 @@ class Run:
                 self.queue,
                 self.run_id,
                 schedule + timedelta(seconds=0.5),
-                events.Event(stop=events.Stop(err=json.dumps(fail.error_message))),
+                events.Event(
+                    stop=events.Stop(
+                        err=json.dumps(fail.error_message),
+                    )
+                ),
             )
         except CancelWorkflow as cancel:
             # TODO: save cancel events

@@ -2,9 +2,10 @@ import asyncio
 from datetime import timedelta
 import inspect
 
-import json
+import orjson as json
+
 import time
-from typing import Any, Callable, Union
+from typing import Any, Callable, Union, Optional, List
 from pydantic.dataclasses import dataclass
 
 from substantial.protos import events
@@ -63,7 +64,10 @@ class RetryStrategy:
         elif low is not None and high is None:
             self.max_backoff_interval = low + 10
         elif low is None and high is not None:
-            self.initial_backoff_interval = max(0, self.max_backoff_interval - 10)
+            self.initial_backoff_interval = max(
+                0,
+                self.max_backoff_interval - 10,
+            )
 
     def linear(self, retries_left: int) -> timedelta:
         """Scaled timeout in seconds"""
@@ -76,12 +80,36 @@ class RetryStrategy:
 
 
 @dataclass
+class CompensationStrategy:
+    compensate_fn: Optional[Callable[[], Any]] = None
+    max_compensation_attemps: int = 3
+
+
+class CompensationFailed(BaseException):
+    def __init__(
+        self,
+        original_error: Exception,
+        compensation_error: Optional[Exception] = None,
+    ):
+        self.original_error = original_error
+        self.compensation_error = compensation_error
+
+
+@dataclass
 class ValueEval:
     lambda_fn: Callable[[], Any]
-    timeout: Union[int, None]
+    timeout: Union[float, None]
     retry_strategy: Union[RetryStrategy, None]
+    compensate_fn: Optional[Callable[[], Any]] = None
+    max_compensation_attempts: int = 3
 
-    async def exec(self, ctx, save_id, counter) -> Any:
+    async def exec(
+        self,
+        ctx,
+        save_id,
+        counter,
+        compensation_stack: List[Callable[[], Any]] = [],
+    ) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3, initial_backoff_interval=0, max_backoff_interval=10
         )
@@ -89,9 +117,11 @@ class ValueEval:
         try:
             # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
             before_spawn = time.time()
-            op = (
-                self.lambda_fn()
-            )  # this does not account the case when lambda_fn() is not async
+            op = self.lambda_fn()
+
+            # if there is compessation, we need to add it to the stack
+            if self.compensate_fn:
+                compensation_stack.append(self.compensate_fn)
 
             ret = None
             if inspect.iscoroutine(op):
@@ -111,17 +141,40 @@ class ValueEval:
                 ret = op
             else:
                 raise Exception(
-                    f"Expected value or coroutine object, got {type(op)} instead"
+                    f"Expected value or coroutielf.ne object, got {type(op)} instead"
                 )
 
             save = events.Save(save_id, json.dumps(ret), -1)
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
+            if len(compensation_stack):
+                compensation_stack.reverse()
+                for compensation_fn in compensation_stack:
+                    compensation_result = compensation_fn()
+                    if inspect.iscoroutine(compensation_result):
+                        compensation_result = await compensation_result
+                    ctx.source(
+                        events.Event(
+                            compesantion=events.Compensation(
+                                save_id=save_id,
+                                error=str(e),
+                                compensation_result=json.dumps(
+                                    compensation_result,
+                                ),
+                            )
+                        )
+                    )
+
+                raise e
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:
-                save = events.Save(save_id, json.dumps(None), counter + 1)
+                save = events.Save(
+                    save_id,
+                    json.dumps(None),
+                    counter + 1,
+                )
                 ctx.source(events.Event(save=save))
 
                 delta = strategy.linear(retries_left)
