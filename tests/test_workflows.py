@@ -197,6 +197,7 @@ async def test_banking_compensation(t: WorkflowTest, account_balance):
 
         c.save(debit_account(4), compensate_with=credit_account(4))
         c.save(debit_account(10), compensate_with=credit_account(10))
+        await c.sleep(timedelta(seconds=10))
         c.save(
             lambda: [
                 debit_account(2),
