@@ -34,6 +34,7 @@ class Context:
         self.events = events
         self.__id = 0
         self.utils = Utils(self)
+        self.compensation_stack: List[Callable[[], Any]] = []
 
     def __next_id(self):
         # FIXME: maybe use lambda hash instead? but how portable that would be?
@@ -62,6 +63,7 @@ class Context:
             timeout_secs,
             retry_strategy,
             compensate_with,
+            self.compensation_stack,
             max_compensation_attempts,
         )
         save_id = self.__next_id()
@@ -91,9 +93,8 @@ class Context:
 
         if saved is None:
             val = await evaluator.exec(self, save_id, None)
-            parsed_val = parse(json.dumps(val), expected_type)
-            print(f"Computed id#{save_id}, {parsed_val}")
-            return parsed_val
+            print(f"Computed id#{save_id}, {val}")
+            return val
         else:
             if saved.counter != -1:
                 # retry mode (after replay)

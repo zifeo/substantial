@@ -101,6 +101,7 @@ class ValueEval:
     timeout: Union[float, None]
     retry_strategy: Union[RetryStrategy, None]
     compensate_fn: Optional[Callable[[], Any]]
+    compensation_stack: List[Callable[[], Any]]
     max_compensation_attempts: int = 3
 
     async def exec(
@@ -108,11 +109,7 @@ class ValueEval:
         ctx,
         save_id,
         counter,
-        compensation_stack: Optional[List[Callable[[], Any]]] = None,
     ) -> Any:
-        if compensation_stack is None:
-            compensation_stack = []
-
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3, initial_backoff_interval=0, max_backoff_interval=10
         )
@@ -120,7 +117,7 @@ class ValueEval:
         try:
             # if there is compessation, we need to add it to the stack
             if self.compensate_fn:
-                compensation_stack.append(self.compensate_fn)
+                self.compensation_stack.append(self.compensate_fn)
 
             # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
             before_spawn = time.time()
@@ -151,9 +148,9 @@ class ValueEval:
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
-            if compensation_stack and len(compensation_stack):
-                compensation_stack.reverse()
-                for compensation_fn in compensation_stack:
+            if self.compensation_stack and len(self.compensation_stack):
+                self.compensation_stack.reverse()
+                for compensation_fn in self.compensation_stack:
                     try:
                         compensation_result = compensation_fn()
                         if inspect.iscoroutine(compensation_result):
@@ -171,8 +168,6 @@ class ValueEval:
                         )
                     except Exception as compensation_error:
                         raise CompensationFailed(e, compensation_error)
-
-                raise CancelWorkflow(f"Compensation completed for error: {e}")
 
             counter = counter or 1
             retries_left = strategy.max_retries - counter
