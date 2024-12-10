@@ -108,7 +108,7 @@ class ValueEval:
         ctx,
         save_id,
         counter,
-        compensation_stack: List[Callable[[], Any]] = [],
+        compensation_stack: Optional[List[Callable[[], Any]]] = None,
     ) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3, initial_backoff_interval=0, max_backoff_interval=10
