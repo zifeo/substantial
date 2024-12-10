@@ -147,7 +147,7 @@ class ValueEval:
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
-            compensation_stack = ctx.compensation_stack
+            compensation_stack = ctx.compensation_stack.copy()
             if compensation_stack and len(compensation_stack):
                 compensation_stack.reverse()
                 for compensation_fn in compensation_stack:
