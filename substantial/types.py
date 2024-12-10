@@ -50,6 +50,7 @@ class RetryStrategy:
     max_retries: int
     initial_backoff_interval: Union[int, None]
     max_backoff_interval: Union[int, None]
+    compensate_on_first_fail: bool = False
 
     def __post_init__(self):
         if self.max_retries < 1:
@@ -147,27 +148,11 @@ class ValueEval:
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
-            compensation_stack = ctx.compensation_stack.copy()
-            if compensation_stack and len(compensation_stack):
-                compensation_stack.reverse()
-                for compensation_fn in compensation_stack:
-                    try:
-                        compensation_result = compensation_fn()
-                        if inspect.iscoroutine(compensation_result):
-                            compensation_result = await compensation_result
-                        ctx.source(
-                            events.Event(
-                                compensation=events.Compensation(
-                                    save_id=save_id,
-                                    error=str(e),
-                                    compensation_result=json.dumps(
-                                        compensation_result,
-                                    ),
-                                )
-                            )
-                        )
-                    except Exception as compensation_error:
-                        raise CompensationFailed(e, compensation_error)
+            if strategy.compensate_on_first_fail:
+                await self._trigger_compensation(ctx, save_id, e)
+                # should be same as save fn without compensate fn ?
+                message = f"{type(e).__name__}: {e}"
+                raise RetryFail(message)
 
             counter = counter or 1
             retries_left = strategy.max_retries - counter
@@ -182,8 +167,32 @@ class ValueEval:
                 delta = strategy.linear(retries_left)
                 raise RetryMode(delta)
             else:
+                await self._trigger_compensation(ctx, save_id, e)
                 message = f"{type(e).__name__}: {e}"
                 raise RetryFail(message)
+
+    async def _trigger_compensation(self, ctx, save_id, error):
+        compensation_stack = ctx.compensation_stack.copy()
+        if compensation_stack and len(compensation_stack):
+            compensation_stack.reverse()
+            for compensation_fn in compensation_stack:
+                try:
+                    compensation_result = compensation_fn()
+                    if inspect.iscoroutine(compensation_result):
+                        compensation_result = await compensation_result
+                    ctx.source(
+                        events.Event(
+                            compensation=events.Compensation(
+                                save_id=save_id,
+                                error=str(error),
+                                compensation_result=json.dumps(
+                                    compensation_result,
+                                ),
+                            )
+                        )
+                    )
+                except Exception as compensation_error:
+                    raise CompensationFailed(error, compensation_error)
 
 
 Empty: Any = object()
