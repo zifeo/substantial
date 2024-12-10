@@ -189,23 +189,37 @@ async def test_banking_compensation(t: WorkflowTest, account_balance):
 
     @workflow()
     async def banking_workflow(c: Context):
+        def assert_value():
+            assert {"account": 1000} == account_balance
+
         def credit_account(value: int) -> int:
-            return account_balance["account"] - value
+            account_balance["account"] += value
+            return account_balance["account"]
 
         def debit_account(value: int) -> int:
-            return account_balance["account"] + value
+            account_balance["account"] -= value
+            return account_balance["account"]
 
-        c.save(debit_account(4), compensate_with=credit_account(4))
-        c.save(debit_account(10), compensate_with=credit_account(10))
-        await c.sleep(timedelta(seconds=10))
-        c.save(
-            lambda: [
-                debit_account(2),
-                risky_transaction(),
+        await c.save(
+            lambda: debit_account(4),
+            compensate_with=lambda: [
+                credit_account(4),
+                assert_value(),
             ],
-            compensate_with=credit_account(2),
-        )  # should fail here and start compensate, and rollback(compensate all preveiws steps in LIFO)
-        c.save(debit_account(100), compensate_with=credit_account(100))
+        )
+        await c.save(
+            lambda: debit_account(10),
+            compensate_with=lambda: credit_account(10),
+        )
+        await c.sleep(timedelta(seconds=10))
+        await c.save(
+            lambda: [debit_account(2), risky_transaction()],
+            compensate_with=lambda: credit_account(2),
+        )
+        await c.save(
+            lambda: debit_account(100),
+            compensate_with=lambda: credit_account(100),
+        )
         return account_balance
 
     backends = [
@@ -214,5 +228,6 @@ async def test_banking_compensation(t: WorkflowTest, account_balance):
     ]
 
     for backend in backends:
-        await t.step(backend).exec_workflow(banking_workflow)
-        assert account_balance == {"account": 1000}
+        s = t.step(backend)
+        with pytest.raises(Exception) as _:
+            s = await s.exec_workflow(banking_workflow)

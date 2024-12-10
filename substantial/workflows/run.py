@@ -98,7 +98,11 @@ class Run:
                 self.queue, self.run_id, schedule
             )
             if new_event is None:
-                await self.backend.close_schedule(self.queue, self.run_id, schedule)
+                await self.backend.close_schedule(
+                    self.queue,
+                    self.run_id,
+                    schedule,
+                )
             elif not stopped_run:
                 events_records.append(new_event)
         else:
@@ -113,7 +117,10 @@ class Run:
 
         try:
             if not stopped_run:
-                ret = await workflow(ctx, **ctx.events[0].start.kwargs.to_dict())
+                ret = await workflow(
+                    ctx,
+                    **ctx.events[0].start.kwargs.to_dict(),
+                )
                 # Alt impl: ctx.events.append(..)
                 await self.backend.add_schedule(
                     self.queue,

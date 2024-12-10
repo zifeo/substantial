@@ -100,7 +100,7 @@ class ValueEval:
     lambda_fn: Callable[[], Any]
     timeout: Union[float, None]
     retry_strategy: Union[RetryStrategy, None]
-    compensate_fn: Optional[Callable[[], Any]] = None
+    compensate_fn: Optional[Callable[[], Any]]
     max_compensation_attempts: int = 3
 
     async def exec(
@@ -115,13 +115,13 @@ class ValueEval:
         )
 
         try:
-            # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
-            before_spawn = time.time()
-            op = self.lambda_fn()
-
             # if there is compessation, we need to add it to the stack
             if self.compensate_fn:
                 compensation_stack.append(self.compensate_fn)
+
+            # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
+            before_spawn = time.time()
+            op = self.lambda_fn()
 
             ret = None
             if inspect.iscoroutine(op):
@@ -151,22 +151,26 @@ class ValueEval:
             if len(compensation_stack):
                 compensation_stack.reverse()
                 for compensation_fn in compensation_stack:
-                    compensation_result = compensation_fn()
-                    if inspect.iscoroutine(compensation_result):
-                        compensation_result = await compensation_result
-                    ctx.source(
-                        events.Event(
-                            compesantion=events.Compensation(
-                                save_id=save_id,
-                                error=str(e),
-                                compensation_result=json.dumps(
-                                    compensation_result,
-                                ),
+                    try:
+                        compensation_result = compensation_fn()
+                        if inspect.iscoroutine(compensation_result):
+                            compensation_result = await compensation_result
+                        ctx.source(
+                            events.Event(
+                                compensation=events.Compensation(
+                                    save_id=save_id,
+                                    error=str(e),
+                                    compensation_result=json.dumps(
+                                        compensation_result,
+                                    ),
+                                )
                             )
                         )
-                    )
+                    except Exception as compensation_error:
+                        raise CompensationFailed(e, compensation_error)
 
-                raise e
+                raise CancelWorkflow(f"Compensation completed for error: {e}")
+
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:
