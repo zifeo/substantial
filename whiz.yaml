@@ -15,5 +15,7 @@ setup:
 async-test:
   workdir: "."
   command: |
+    rm ./logs -r
+    redis-cli -h 127.0.0.1 -p 6380 -a password flushall
     source .venv/bin/activate
     pytest tests/test_* -o log_cli=true -vv
