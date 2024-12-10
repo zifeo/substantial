@@ -5,7 +5,7 @@ import inspect
 import orjson as json
 
 import time
-from typing import Any, Callable, Union, Optional, List
+from typing import Any, Callable, Union, Optional
 from pydantic.dataclasses import dataclass
 
 from substantial.protos import events
@@ -101,7 +101,6 @@ class ValueEval:
     timeout: Union[float, None]
     retry_strategy: Union[RetryStrategy, None]
     compensate_fn: Optional[Callable[[], Any]]
-    compensation_stack: List[Callable[[], Any]]
     max_compensation_attempts: int = 3
 
     async def exec(
@@ -117,7 +116,7 @@ class ValueEval:
         try:
             # if there is compessation, we need to add it to the stack
             if self.compensate_fn:
-                self.compensation_stack.append(self.compensate_fn)
+                ctx.compensation_stack.append(self.compensate_fn)
 
             # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
             before_spawn = time.time()
@@ -148,9 +147,10 @@ class ValueEval:
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
-            if self.compensation_stack and len(self.compensation_stack):
-                self.compensation_stack.reverse()
-                for compensation_fn in self.compensation_stack:
+            compensation_stack = ctx.compensation_stack
+            if compensation_stack and len(compensation_stack):
+                compensation_stack.reverse()
+                for compensation_fn in compensation_stack:
                     try:
                         compensation_result = compensation_fn()
                         if inspect.iscoroutine(compensation_result):

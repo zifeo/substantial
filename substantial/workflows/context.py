@@ -63,7 +63,6 @@ class Context:
             timeout_secs,
             retry_strategy,
             compensate_with,
-            self.compensation_stack,
             max_compensation_attempts,
         )
         save_id = self.__next_id()
