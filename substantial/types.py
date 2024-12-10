@@ -110,6 +110,9 @@ class ValueEval:
         counter,
         compensation_stack: Optional[List[Callable[[], Any]]] = None,
     ) -> Any:
+        if compensation_stack is None:
+            compensation_stack = []
+
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3, initial_backoff_interval=0, max_backoff_interval=10
         )
@@ -148,7 +151,7 @@ class ValueEval:
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
-            if len(compensation_stack):
+            if compensation_stack and len(compensation_stack):
                 compensation_stack.reverse()
                 for compensation_fn in compensation_stack:
                     try:
