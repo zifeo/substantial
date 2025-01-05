@@ -83,7 +83,7 @@ class RetryStrategy:
 @dataclass
 class CompensationStrategy:
     compensate_fn: Optional[Callable[[], Any]] = None
-    max_compensation_attemps: int = 3
+    max_compensation_attempts: int = 3
 
 
 class CompensationFailed(BaseException):
