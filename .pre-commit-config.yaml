@@ -14,20 +14,20 @@ repos:
       - id: check-merge-conflict
       - id: end-of-file-fixer
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.7.1"
+    rev: "v0.8.6"
     hooks:
       - id: ruff
         args:
           - --fix
       - id: ruff-format
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: v3.30.0
+    rev: v4.1.0
     hooks:
       - id: commitizen
         stages:
           - commit-msg
   - repo: https://github.com/yoheimuta/protolint
-    rev: v0.50.5
+    rev: v0.51.0
     hooks:
       - id: protolint
         args:
