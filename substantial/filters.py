@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
-import json
+import orjson as json
 from typing import TYPE_CHECKING, Dict, List, Union
 from substantial.workflows.workflow import Workflow
 

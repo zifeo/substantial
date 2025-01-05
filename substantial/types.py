@@ -115,7 +115,7 @@ class ValueEval:
         )
 
         try:
-            # if there is compessation, we need to add it to the stack
+            # if there is compensation, we need to add it to the stack
             if self.compensate_fn:
                 ctx.compensation_stack.append(self.compensate_fn)
 
@@ -141,7 +141,7 @@ class ValueEval:
                 ret = op
             else:
                 raise Exception(
-                    f"Expected value or coroutielf.ne object, got {type(op)} instead"
+                    f"Expected value or coroutine object, got {type(op)} instead"
                 )
 
             save = events.Save(save_id, json.dumps(ret), -1)

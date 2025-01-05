@@ -1,6 +1,5 @@
 import random
 import uuid
-import logging
 import orjson as json
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type
 from datetime import datetime, timedelta, timezone
@@ -183,7 +182,3 @@ class Utils:
             lambda: uuid.uuid4(), expected_type=uuid.UUID
         )
         return serialized_uuid
-
-    @staticmethod
-    def log(level, msg, *args, **kwargs) -> None:
-        logging.log(level, msg, *args, **kwargs)
