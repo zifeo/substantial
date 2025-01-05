@@ -2,9 +2,10 @@ import asyncio
 from datetime import timedelta
 import inspect
 
-import json
+import orjson as json
+
 import time
-from typing import Any, Callable, Union
+from typing import Any, Callable, Union, Optional
 from pydantic.dataclasses import dataclass
 
 from substantial.protos import events
@@ -49,6 +50,7 @@ class RetryStrategy:
     max_retries: int
     initial_backoff_interval: Union[int, None]
     max_backoff_interval: Union[int, None]
+    compensate_on_first_fail: bool = False
 
     def __post_init__(self):
         if self.max_retries < 1:
@@ -63,7 +65,10 @@ class RetryStrategy:
         elif low is not None and high is None:
             self.max_backoff_interval = low + 10
         elif low is None and high is not None:
-            self.initial_backoff_interval = max(0, self.max_backoff_interval - 10)
+            self.initial_backoff_interval = max(
+                0,
+                self.max_backoff_interval - 10,
+            )
 
     def linear(self, retries_left: int) -> timedelta:
         """Scaled timeout in seconds"""
@@ -76,22 +81,47 @@ class RetryStrategy:
 
 
 @dataclass
+class CompensationStrategy:
+    compensate_fn: Optional[Callable[[], Any]] = None
+    max_compensation_attempts: int = 3
+
+
+class CompensationFailed(BaseException):
+    def __init__(
+        self,
+        original_error: Exception,
+        compensation_error: Optional[Exception] = None,
+    ):
+        self.original_error = original_error
+        self.compensation_error = compensation_error
+
+
+@dataclass
 class ValueEval:
     lambda_fn: Callable[[], Any]
-    timeout: Union[int, None]
+    timeout: Union[float, None]
     retry_strategy: Union[RetryStrategy, None]
+    compensate_fn: Optional[Callable[[], Any]]
+    max_compensation_attempts: int = 3
 
-    async def exec(self, ctx, save_id, counter) -> Any:
+    async def exec(
+        self,
+        ctx,
+        save_id,
+        counter,
+    ) -> Any:
         strategy = self.retry_strategy or RetryStrategy(
             max_retries=3, initial_backoff_interval=0, max_backoff_interval=10
         )
 
         try:
+            # if there is compensation, we need to add it to the stack
+            if self.compensate_fn:
+                ctx.compensation_stack.append(self.compensate_fn)
+
             # ctx.source(LogKind.Meta, inspect.getsource(self.lambda_fn))
             before_spawn = time.time()
-            op = (
-                self.lambda_fn()
-            )  # this does not account the case when lambda_fn() is not async
+            op = self.lambda_fn()
 
             ret = None
             if inspect.iscoroutine(op):
@@ -118,17 +148,51 @@ class ValueEval:
             ctx.source(events.Event(save=save))
             return ret
         except Exception as e:
+            if strategy.compensate_on_first_fail:
+                await self._trigger_compensation(ctx, save_id, e)
+                # should be same as save fn without compensate fn ?
+                message = f"{type(e).__name__}: {e}"
+                raise RetryFail(message)
+
             counter = counter or 1
             retries_left = strategy.max_retries - counter
             if retries_left > 0:
-                save = events.Save(save_id, json.dumps(None), counter + 1)
+                save = events.Save(
+                    save_id,
+                    json.dumps(None),
+                    counter + 1,
+                )
                 ctx.source(events.Event(save=save))
 
                 delta = strategy.linear(retries_left)
                 raise RetryMode(delta)
             else:
+                await self._trigger_compensation(ctx, save_id, e)
                 message = f"{type(e).__name__}: {e}"
                 raise RetryFail(message)
+
+    async def _trigger_compensation(self, ctx, save_id, error):
+        compensation_stack = ctx.compensation_stack.copy()
+        if compensation_stack and len(compensation_stack):
+            compensation_stack.reverse()
+            for compensation_fn in compensation_stack:
+                try:
+                    compensation_result = compensation_fn()
+                    if inspect.iscoroutine(compensation_result):
+                        compensation_result = await compensation_result
+                    ctx.source(
+                        events.Event(
+                            compensation=events.Compensation(
+                                save_id=save_id,
+                                error=str(error),
+                                compensation_result=json.dumps(
+                                    compensation_result,
+                                ),
+                            )
+                        )
+                    )
+                except Exception as compensation_error:
+                    raise CompensationFailed(error, compensation_error)
 
 
 Empty: Any = object()

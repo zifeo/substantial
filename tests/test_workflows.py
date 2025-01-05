@@ -1,11 +1,12 @@
 from dataclasses import dataclass
-from datetime import timedelta
-import json
+from datetime import timedelta, datetime
+import orjson as json
 from typing import List
 import pytest
 from substantial.backends.backend import Backend
 from substantial.backends.fs import FSBackend
 from substantial.backends.redis import RedisBackend
+
 from substantial.types import RetryStrategy
 from substantial.workflows.workflow import workflow
 from substantial.workflows.context import Context
@@ -46,7 +47,10 @@ async def test_simple_all_backends(t: WorkflowTest):
         assert s.w_output == "C B A"
         assert len(s.w_records.events) > 0
         assert s.w_records.events == [
-            Event(start=Start(kwargs=protobuf.Struct({})), at=s.w_records.events[0].at),
+            Event(
+                start=Start(kwargs=protobuf.Struct({})),
+                at=s.w_records.events[0].at,
+            ),
             Event(save=Save(1, json.dumps("A"), -1)),
             Event(save=Save(2, json.dumps("B A"), -1)),
             Event(save=Save(3, json.dumps("C B A"), -1)),
@@ -67,7 +71,9 @@ async def test_failing_workflow_with_retry(t: WorkflowTest):
         r1 = await c.save(
             lambda: failing_op(),
             retry_strategy=RetryStrategy(
-                max_retries=retries, initial_backoff_interval=1, max_backoff_interval=5
+                max_retries=retries,
+                initial_backoff_interval=1,
+                max_backoff_interval=5,
             ),
         )
         return r1
@@ -106,7 +112,7 @@ async def test_events_with_sleep(t: WorkflowTest):
         c.handle("cancel", lambda _: s.update())
         if await c.ensure(lambda: s.is_cancelled):
             r3 = await c.save(lambda: f"{payload} B {r1}")
-        return r3
+            return r3
 
     backends: List[Backend] = [
         FSBackend("./logs"),
@@ -115,7 +121,10 @@ async def test_events_with_sleep(t: WorkflowTest):
     for backend in backends:
         s = t.step(backend)
         s = await s.events(
-            {1: EventSend("sayHello", "Hello from outside!"), 6: EventSend("cancel")}
+            {
+                1: EventSend("sayHello", "Hello from outside!"),
+                6: EventSend("cancel"),
+            }
         ).exec_workflow(event_workflow)
 
         assert s.w_output == "Hello from outside! B A"
@@ -124,4 +133,101 @@ async def test_events_with_sleep(t: WorkflowTest):
         assert s.w_run_id in related_runs
 
 
-# TODO: test concurrent
+@pytest.fixture
+def utils_state():
+    return {"current_time": None, "rand_value": None, "unique_id": None}
+
+
+@async_test
+async def test_utils_methods(t: WorkflowTest, utils_state):
+    @workflow()
+    async def utils_workflow(context: Context):
+        a = await context.utils.now()
+        b = await context.utils.random(1, 10)
+        c = await context.utils.uuid4()
+        x = await context.save(lambda: "2024-11-29T13:52:08.859245")
+        if (
+            utils_state["current_time"] is None
+            and utils_state["rand_value"] is None
+            and utils_state["unique_id"] is None
+        ):
+            utils_state["current_time"] = a
+            utils_state["rand_value"] = b
+            utils_state["unique_id"] = c
+        else:
+            assert a == utils_state["current_time"]
+            assert b == utils_state["rand_value"]
+            assert c == utils_state["unique_id"]
+            assert isinstance(a, datetime)
+            assert isinstance(x, str)
+
+        await context.sleep(timedelta(seconds=1))
+        return a, b, c, x
+
+    backends = [
+        FSBackend("./logs"),
+        RedisBackend(host="localhost", port=6380, password="password"),
+    ]
+
+    for backend in backends:
+        s = await t.step(backend).exec_workflow(utils_workflow)
+        now, rand, uuid, x = s.w_output
+
+        assert 1 <= rand <= 10
+        assert len(str(uuid)) == 36
+
+
+@pytest.fixture
+def account_balance():
+    return {"account": 1000}
+
+
+@async_test
+async def test_banking_compensation(t: WorkflowTest, account_balance):
+    def risky_transaction():
+        raise Exception("Transaction failed")
+
+    @workflow()
+    async def banking_workflow(c: Context):
+        def assert_value():
+            assert {"account": 1000} == account_balance
+
+        def credit_account(value: int) -> int:
+            account_balance["account"] += value
+            return account_balance["account"]
+
+        def debit_account(value: int) -> int:
+            account_balance["account"] -= value
+            return account_balance["account"]
+
+        await c.save(
+            lambda: debit_account(4),
+            compensate_with=lambda: [
+                credit_account(4),
+                assert_value(),
+            ],
+        )
+        await c.save(
+            lambda: debit_account(10),
+            compensate_with=lambda: credit_account(10),
+        )
+        await c.sleep(timedelta(seconds=10))
+        await c.save(
+            lambda: [debit_account(2), risky_transaction()],
+            compensate_with=lambda: credit_account(2),
+        )
+        await c.save(
+            lambda: debit_account(100),
+            compensate_with=lambda: credit_account(100),
+        )
+        return account_balance
+
+    backends = [
+        FSBackend("./logs"),
+        RedisBackend(host="localhost", port=6380, password="password"),
+    ]
+
+    for backend in backends:
+        s = t.step(backend)
+        with pytest.raises(Exception) as _:
+            s = await s.exec_workflow(banking_workflow)

@@ -27,14 +27,15 @@ python = "^3.11"
 asyncio = "^3.4.3"
 uvloop = "^0.21.0"
 aioprocessing = { version = "2.0.1", extras = ["dill"] }
-pydantic = "^2.9.2"
-redis = "^5.2.0"
+pydantic = "^2.10.4"
+redis = "^5.2.1"
 betterproto = { version = "2.0.0b7", extras = ["compiler"]}
+orjson = "^3.10.13"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.3.3"
-pytest-asyncio = ">=0.23.7,<0.26.0"
-commitizen = ">=3.29.0"
+pytest = "^8.3.4"
+pytest-asyncio = ">=0.23.7,<0.25.0"
+commitizen = ">=4.1.0"
 
 [tool.commitizen]
 name = "cz_conventional_commits"

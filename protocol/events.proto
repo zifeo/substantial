@@ -11,8 +11,14 @@ message Start {
 
 message Save {
   uint32 id = 1;
-  string value = 2;
+  bytes value = 2;
   int32 counter = 3;
+}
+
+message Compensation {
+  uint32 save_id = 1;
+  string error = 2;
+  bytes compensation_result = 3;
 }
 
 message Sleep {
@@ -23,16 +29,15 @@ message Sleep {
 
 message Send {
   string name = 1;
-  string value = 2;
+  bytes value = 2;
 }
 
 message Stop {
   oneof result {
-    string ok = 1;
-    string err = 2;
+    bytes ok = 1;
+    bytes err = 2;
   }
 }
-
 message Event {
   google.protobuf.Timestamp at = 1;
   oneof of {
@@ -42,6 +47,7 @@ message Event {
     Send send = 13;
     Stop stop = 14;
   }
+  Compensation compensation = 15;
 };
 
 message Records {

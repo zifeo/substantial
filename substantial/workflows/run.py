@@ -1,6 +1,7 @@
 import asyncio
+import orjson as json
+
 from datetime import datetime, timedelta
-import json
 from typing import List
 
 from substantial.backends.backend import Backend
@@ -51,7 +52,10 @@ class Run:
         now = datetime.now()
         event = events.Event(
             at=now,
-            send=events.Send(name=name, value=json.dumps(value)),
+            send=events.Send(
+                name=name,
+                value=json.dumps(value),
+            ),
         )
 
         print("send", event)
@@ -94,7 +98,11 @@ class Run:
                 self.queue, self.run_id, schedule
             )
             if new_event is None:
-                await self.backend.close_schedule(self.queue, self.run_id, schedule)
+                await self.backend.close_schedule(
+                    self.queue,
+                    self.run_id,
+                    schedule,
+                )
             elif not stopped_run:
                 events_records.append(new_event)
         else:
@@ -109,13 +117,20 @@ class Run:
 
         try:
             if not stopped_run:
-                ret = await workflow(ctx, **ctx.events[0].start.kwargs.to_dict())
+                ret = await workflow(
+                    ctx,
+                    **ctx.events[0].start.kwargs.to_dict(),
+                )
                 # Alt impl: ctx.events.append(..)
                 await self.backend.add_schedule(
                     self.queue,
                     self.run_id,
                     schedule + timedelta(seconds=0.5),
-                    events.Event(stop=events.Stop(ok=json.dumps(ret))),
+                    events.Event(
+                        stop=events.Stop(
+                            ok=json.dumps(ret),
+                        )
+                    ),
                 )
         except Interrupt as interrupt:
             # FIXME need to specify the delta
@@ -138,7 +153,11 @@ class Run:
                 self.queue,
                 self.run_id,
                 schedule + timedelta(seconds=0.5),
-                events.Event(stop=events.Stop(err=json.dumps(fail.error_message))),
+                events.Event(
+                    stop=events.Stop(
+                        err=json.dumps(fail.error_message),
+                    )
+                ),
             )
         except CancelWorkflow as cancel:
             # TODO: save cancel events
