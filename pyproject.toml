@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "substantial"
-version = "0.0.1"
+version = "0.1.0"
 description = "Brokerless durable execution for Python."
 authors = []
 license = "MPL-2.0"
@@ -39,7 +39,7 @@ commitizen = ">=4.1.0"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.1"
+version = "0.1.0"
 tag_format = "v$major.$minor.$patch$prerelease"
 version_files = [
     "pyproject.toml:version",
