@@ -39,7 +39,7 @@ commitizen = ">=4.1.0"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "3.3.0"
+version = "0.0.1"
 tag_format = "v$major.$minor.$patch$prerelease"
 version_files = [
     "pyproject.toml:version",
