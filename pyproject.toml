@@ -28,7 +28,7 @@ asyncio = "^3.4.3"
 uvloop = "^0.21.0"
 aioprocessing = { version = "2.0.1", extras = ["dill"] }
 pydantic = "^2.10.4"
-redis = "^5.2.1"
+redis = ">=5.2.1,<7.0.0"
 betterproto = { version = "2.0.0b7", extras = ["compiler"]}
 orjson = "^3.10.13"
 
