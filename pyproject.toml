@@ -25,7 +25,7 @@ keywords = [
 [tool.poetry.dependencies]
 python = "^3.11"
 asyncio = ">=3.4.3,<5.0.0"
-uvloop = "^0.21.0"
+uvloop = ">=0.21,<0.23"
 aioprocessing = { version = "2.0.1", extras = ["dill"] }
 pydantic = "^2.10.4"
 redis = ">=5.2.1,<7.0.0"
