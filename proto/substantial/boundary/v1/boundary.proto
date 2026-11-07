@@ -1,0 +1,96 @@
+// The messages of the WASM boundary (docs/interfaces.md, I-23 and I-25): every call into the core
+// is one message in and one message out, in protobuf binary encoding.
+//
+// Exports of substantial.wasm, which imports nothing:
+//   sub_alloc(len) -> ptr                memory for a request of len bytes
+//   sub_free(ptr, len)                   frees a response, or a request never passed to the module
+//   sub_new(kind, ptr, len) -> machine   kind is a MachineKind, the request its RunInput, AgentConfig
+//                                        or PlanInput
+//   sub_call(machine, ptr, len) -> u64   the request is the machine's RunRequest, AgentRequest or
+//                                        PlanRequest; the answer its response, as ptr << 32 | len
+//   sub_drop(machine)                    frees a machine
+//
+// Ownership: sub_new and sub_call take the request buffer and free it, whatever the outcome. A
+// response belongs to the host, which frees it with sub_free once read.
+//
+// Errors: every response has CoreError error = 1, so an error decodes the same whatever the kind.
+// sub_new never returns 0: given an unknown kind or an input that does not decode or is invalid, it
+// returns a machine that answers every call with that error, and must still be dropped. A request
+// that does not decode is answered with an error and leaves the machine as it was; so does a call
+// on a machine that does not exist. A trap is a bug of the core: the host drops the instance.
+syntax = "proto3";
+
+package substantial.boundary.v1;
+
+enum MachineKind {
+  MACHINE_KIND_UNSPECIFIED = 0;
+  MACHINE_KIND_RUN = 1;
+  MACHINE_KIND_AGENT = 2;
+  MACHINE_KIND_PLAN = 3;
+}
+
+message Empty {
+}
+
+enum ErrorKind {
+  ERROR_KIND_UNSPECIFIED = 0;
+  ERROR_KIND_NON_DETERMINISM = 1;
+  ERROR_KIND_INVALID = 2;
+  ERROR_KIND_ENDED = 3;
+  ERROR_KIND_CORRUPT = 4;
+  ERROR_KIND_LAYOUT = 5;
+  // A value of the code whose encoding passes 64 MiB, the limit of I-15: the call is refused and
+  // records nothing. The message gives its size and the limit.
+  ERROR_KIND_VALUE_TOO_LARGE = 6;
+}
+
+message CoreError {
+  ErrorKind kind = 1;
+  string message = 2;
+}
+
+// The store contract's four operations (I-26).
+message StoreOp {
+  message Create {
+    string key = 1;
+    bytes bytes = 2;
+  }
+  message List {
+    string prefix = 1;
+    optional string start_after = 2;
+    uint32 max_keys = 3;
+    ListWait wait = 4;
+  }
+  oneof op {
+    Create create = 1;
+    string get = 2;
+    List list = 3;
+    string delete = 4;
+  }
+}
+
+message ListWait {
+  optional string etag = 1;
+  uint32 seconds = 2;
+}
+
+// The store failed after the adapter's own retries.
+message StoreFailure {
+  string message = 1;
+}
+
+message OpResult {
+  message Listing {
+    repeated string keys = 1;
+    optional string etag = 2;
+  }
+  oneof result {
+    Empty created = 1;
+    Empty exists = 2;
+    bytes bytes = 3;
+    Empty missing = 4;
+    Listing listing = 5;
+    Empty deleted = 6;
+    StoreFailure failed = 7;
+  }
+}

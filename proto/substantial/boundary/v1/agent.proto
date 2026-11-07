@@ -1,0 +1,107 @@
+// The agent machine, one per worker (I-23).
+syntax = "proto3";
+
+package substantial.boundary.v1;
+
+import "substantial/boundary/v1/boundary.proto";
+import "substantial/boundary/v1/run.proto";
+import "substantial/layout/v1/layout.proto";
+
+// A workflow a worker serves: runs of one of versions, and runs without a version if unversioned.
+message Served {
+  string name = 1;
+  repeated uint32 versions = 2;
+  // Required.
+  optional bool unversioned = 3;
+}
+
+// Creates an agent machine, one per worker.
+message AgentConfig {
+  string prefix = 1;
+  uint32 partitions = 2;
+  string worker = 3;
+  repeated Served workflows = 4;
+  uint32 concurrency = 5;
+  uint64 claim_ttl_ms = 6;
+  uint64 claim_skew_ms = 7;
+  uint64 max_idle_ms = 8;
+  uint32 due_page = 9;
+  uint32 due_pages = 10;
+  uint64 snapshot_every = 11;
+  uint32 op_retries = 12;
+  // 32 bytes from the host's CSPRNG, from which each replay's seed is derived; any other length
+  // is refused.
+  bytes seed = 13;
+  RunSettings settings = 14;
+  // The store's capabilities.wait: workers wait on listings instead of listing every max_idle.
+  bool store_waits = 15;
+  // A waiting listing's wait, 1 to 20 seconds; required on any store, used only on one that waits.
+  uint32 wait_seconds = 16;
+}
+
+message ReplayEnd {
+  oneof end {
+    Idle idle = 1;
+    Empty dropped = 2;
+  }
+}
+
+message AgentRequest {
+  message Feed {
+    uint64 id = 1;
+    OpResult result = 2;
+  }
+  message RunCommit {
+    string run = 1;
+    Commit commit = 2;
+  }
+  // Once for every `Replay`, after its last commit, whatever ended it: a committed suspension or
+  // end, a lost race, a `stop_replay`. The agent hands no other replay of the run before.
+  message ReplayEnded {
+    string run = 1;
+    ReplayEnd end = 2;
+  }
+  oneof request {
+    layout.v1.Time next = 1;
+    Feed feed = 2;
+    RunCommit commit = 3;
+    ReplayEnded replay_ended = 4;
+    Empty wake = 5;
+    Empty shutdown = 6;
+  }
+}
+
+message AgentCommand {
+  message Store {
+    uint64 id = 1;
+    StoreOp op = 2;
+  }
+  message Replay {
+    string run = 1;
+    RunInput input = 2;
+  }
+  message Committed {
+    string run = 1;
+    uint64 n = 2;
+    bool won = 3;
+    // After a progress commit won, the messages that reached the run since its replay opened: the
+    // host hands them to the run machine (RunRequest.arrived) before the replay goes on.
+    repeated InboxMessage inbox = 4;
+  }
+  oneof command {
+    Store store = 1;
+    Replay replay = 2;
+    Committed committed = 3;
+    string stop_replay = 4;
+    layout.v1.Time wait_until = 5;
+    Empty stop = 6;
+  }
+}
+
+message AgentResponse {
+  oneof response {
+    CoreError error = 1;
+    AgentCommand command = 2;
+    Empty done = 3;
+  }
+}

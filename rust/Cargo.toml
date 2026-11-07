@@ -1,0 +1,45 @@
+[package]
+name = "substantial"
+version = "0.2.0-beta.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Brokerless durable execution: the Rust host of the Substantial core"
+# The cross-language test program, run by dev/cross/run.py, not shipped.
+exclude = ["examples/cross.rs"]
+
+[dependencies]
+anyhow = "1"
+aws-credential-types = "1.3"
+aws-sdk-s3 = { version = "1.153", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio"] }
+bytes = "1.12"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+futures = "0.3"
+hex = "0.4"
+prost = "0.14"
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+substantial-macros = { version = "0.2.0-beta.1", path = "macros" }
+thiserror = "2"
+tokio = { version = "1.54", features = ["fs", "macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+url = "2.5"
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "std"] }
+
+[build-dependencies]
+prost-build = "0.14"
+protox = "0.10"
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "std"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tempfile = "3"
+tokio = { version = "1.54", features = ["full", "test-util"] }

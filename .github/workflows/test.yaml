@@ -1,0 +1,78 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: substantial
+      AWS_SECRET_ACCESS_KEY: substantial-secret
+      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo package --workspace
+
+  python:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: substantial
+      AWS_SECRET_ACCESS_KEY: substantial-secret
+      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.13"
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: uv sync --locked
+      - run: uv run ruff format --check
+      - run: uv run ruff check
+      - run: uv run pytest
+      - run: uv build
+      - name: Run the example from the built wheel
+        run: |
+          uv venv "$RUNNER_TEMP/wheel"
+          uv pip install --python "$RUNNER_TEMP/wheel/bin/python" dist/*.whl
+          "$RUNNER_TEMP/wheel/bin/python" -I python/examples/first_workflow.py "$RUNNER_TEMP/store"
+
+  typescript:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: substantial
+      AWS_SECRET_ACCESS_KEY: substantial-secret
+      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx biome ci
+      - run: npm test
+      - name: Run the example from the packed tarball
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir "$RUNNER_TEMP/install"
+          cp typescript/examples/first_workflow.ts "$RUNNER_TEMP/install/"
+          cd "$RUNNER_TEMP/install"
+          npm init -y
+          npm pkg set type=module
+          npm install "$RUNNER_TEMP"/substantial-*.tgz
+          node first_workflow.ts "$RUNNER_TEMP/store"
+      - run: npx jsr publish --dry-run

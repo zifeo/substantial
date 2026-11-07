@@ -1,0 +1,188 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# The tag is checked first, every package is built and verified next, and only then is anything
+# published. Each publish skips a version its registry already has: a release may be published
+# by hand before its tag is pushed, and a failed run may be rerun.
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the tag matches every manifest
+        run: python3 dev/set-version.py --check "${GITHUB_REF_NAME#v}"
+
+  rust:
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --workspace --locked --dry-run
+
+  python:
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.13"
+      - run: uv lock --check
+      - run: uv build
+      - name: Run the example from the built wheel
+        run: |
+          uv venv "$RUNNER_TEMP/wheel"
+          uv pip install --python "$RUNNER_TEMP/wheel/bin/python" dist/*.whl
+          "$RUNNER_TEMP/wheel/bin/python" -I python/examples/first_workflow.py "$RUNNER_TEMP/store"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-dist
+          path: dist/
+          if-no-files-found: error
+
+  typescript:
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm pack
+      - run: npx jsr publish --dry-run
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-tarball
+          path: substantial-*.tgz
+          if-no-files-found: error
+
+  github:
+    needs: [rust, python, typescript]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: parse-changelog@0.6.16
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists. Leaving title and notes unchanged."
+            exit 0
+          fi
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          parse-changelog CHANGELOG.md "${GITHUB_REF_NAME#v}" > release-notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md --prerelease="$prerelease"
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets/
+          merge-multiple: true
+      # The npm name is not ours yet: the tarball goes to the GitHub Release, never to npm.
+      - name: Attach the npm tarball, wheel and sdist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          published="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+          for file in assets/*; do
+            if printf '%s\n' "$published" | grep -Fxq "$(basename "$file")"; then
+              echo "$(basename "$file") is already on $GITHUB_REF_NAME. Leaving it unchanged."
+              continue
+            fi
+            gh release upload "$GITHUB_REF_NAME" "$file"
+          done
+
+  crates-io:
+    needs: [github]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The macros go first: cargo waits for each to reach the index before the next.
+      - name: Publish the crates missing from crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for crate in substantial-macros substantial; do
+            # Both names start with "subs", hence the su/bs index path.
+            if curl -sf "https://index.crates.io/su/bs/$crate" | jq -se --arg v "$version" 'any(.[]; .vers == $v)' >/dev/null; then
+              echo "$crate $version is already on crates.io, skipping."
+              continue
+            fi
+            cargo publish --locked -p "$crate"
+          done
+
+  pypi:
+    needs: [github]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  jsr:
+    needs: [github]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Publish to JSR unless it has this version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          status="$(curl -s -o /dev/null -w '%{http_code}' "https://api.jsr.io/scopes/substantial/packages/substantial/versions/$version")"
+          case "$status" in
+            200) echo "@substantial/substantial $version is already on JSR, skipping." ;;
+            404) npx jsr publish ;;
+            *) echo "JSR answered $status for $version." && exit 1 ;;
+          esac
+
+  bump:
+    needs: [crates-io, pypi, jsr]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Bump version
+        id: bump
+        run: echo "version=$(python3 dev/set-version.py --bump)" >> "$GITHUB_OUTPUT"
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          branch: bump-${{ steps.bump.outputs.version }}
+          delete-branch: true
+          commit-message: "chore: prepare release ${{ steps.bump.outputs.version }}"
+          title: "chore: prepare release ${{ steps.bump.outputs.version }}"
+          body: "Automatic suggested bump"
+          base: main

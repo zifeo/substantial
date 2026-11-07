@@ -1,0 +1,224 @@
+// Plans: client actions as machines of the same shape, next then feed (I-23).
+syntax = "proto3";
+
+package substantial.boundary.v1;
+
+import "substantial/boundary/v1/boundary.proto";
+import "substantial/layout/v1/layout.proto";
+
+// Creates a plan, a client action as a machine.
+message PlanInput {
+  oneof plan {
+    SendPlan send = 1;
+    CreatePlan create = 2;
+    OpenPlan open = 3;
+    StartPlan start = 4;
+    ResultPlan result = 5;
+    StatusPlan status = 6;
+    CancelPlan cancel = 7;
+    ReadPlan read = 8;
+  }
+}
+
+message SendPlan {
+  string prefix = 1;
+  uint32 partitions = 2;
+  string chain = 3;
+  string name = 4;
+  layout.v1.Value value = 5;
+  // The caller's id, or a ULID from the host. Generated ULIDs are monotonic: one made in the same
+  // millisecond as the last, or earlier, is greater, so a client's messages are consumed in the order sent.
+  string id = 6;
+  layout.v1.Time now = 7;
+}
+
+// The probe, then creates the namespace, or opens it if its marker holds the same partitions.
+message CreatePlan {
+  reserved 3;
+  string prefix = 1;
+  uint32 partitions = 2;
+}
+
+// Opens the namespace whose marker exists; then the probe.
+message OpenPlan {
+  reserved 2;
+  string prefix = 1;
+}
+
+message StartPlan {
+  string prefix = 1;
+  uint32 partitions = 2;
+  string workflow = 3;
+  optional uint32 version = 4;
+  // A JSON object.
+  layout.v1.Value input = 5;
+  // The caller's id, or a ULID from the host.
+  string id = 6;
+  layout.v1.Time now = 7;
+}
+
+// The outcome of a chain's last run, through its continuations.
+message ResultPlan {
+  string prefix = 1;
+  uint32 partitions = 2;
+  string chain = 3;
+  // The run the last poll answered not_ended with, absent for the first poll: the plan then gets
+  // that run's result alone, following its continuations, instead of the chain.
+  optional string run = 4;
+}
+
+message StatusPlan {
+  string prefix = 1;
+  uint32 partitions = 2;
+  string chain = 3;
+  // Tells a live claim from an expired one.
+  layout.v1.Time now = 4;
+}
+
+// A send of substantial.cancel holding the reason; answered with Sent.
+message CancelPlan {
+  string prefix = 1;
+  uint32 partitions = 2;
+  string chain = 3;
+  string reason = 4;
+  // As SendPlan.id.
+  string id = 5;
+  layout.v1.Time now = 6;
+}
+
+// The last value published under key by any run of the chain.
+message ReadPlan {
+  string prefix = 1;
+  uint32 partitions = 2;
+  string chain = 3;
+  string key = 4;
+}
+
+message PlanRequest {
+  oneof request {
+    Empty next = 1;
+    OpResult feed = 2;
+  }
+}
+
+message Sent {
+  message Refused {
+    string run = 1;
+    layout.v1.Status status = 2;
+  }
+  oneof sent {
+    // The message is in the inbox of this run, with its due entry.
+    string accepted = 1;
+    // The chain's last run ended other than by continuing.
+    Refused refused = 2;
+    Empty no_chain = 3;
+    // Sending again with the same id delivers once.
+    StoreFailure failed = 4;
+  }
+}
+
+message Opened {
+  oneof opened {
+    // The namespace is open, with these partitions, and the store passed the probe.
+    uint32 partitions = 1;
+    // No namespace, other partitions, an unknown layout, or a store that failed the probe.
+    string layout_error = 2;
+    StoreFailure failed = 3;
+  }
+}
+
+message Started {
+  oneof started {
+    // The run is created: start, indexes, due entry.
+    Empty created = 1;
+    // The id was started with the same workflow, version and input: that run, whose indexes and
+    // due entry are created again in case its first start stopped before them.
+    Empty existing = 2;
+    // The id is taken by another workflow, version or input, or by a run the core created.
+    Empty run_exists = 3;
+    // Starting again with the same id creates the run once.
+    StoreFailure failed = 4;
+  }
+}
+
+message RunResult {
+  message Ended {
+    string run = 1;
+    layout.v1.Result result = 2;
+  }
+  // The chain's last run, not ended yet: the host asks again later, passing run back in
+  // ResultPlan.run, and may wait on result_key, the run's result under the namespace, on a store
+  // whose listings wait.
+  message NotEnded {
+    string run = 1;
+    string result_key = 2;
+  }
+  reserved 2;
+  oneof result {
+    // The chain's last run ended other than by continuing.
+    Ended ended = 1;
+    Empty no_chain = 3;
+    StoreFailure failed = 4;
+    NotEnded not_ended = 5;
+  }
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  // Started, no segment yet, no live claim.
+  RUN_STATUS_PENDING = 1;
+  // A worker holds a live claim on it.
+  RUN_STATUS_RUNNING = 2;
+  // Segments, no result, no live claim.
+  RUN_STATUS_SUSPENDED = 3;
+  RUN_STATUS_COMPLETED = 4;
+  RUN_STATUS_FAILED = 5;
+  RUN_STATUS_CANCELLED = 6;
+  // A run that continued is live until its result exists, then the chain goes on with the next.
+  reserved 7;
+  reserved "RUN_STATUS_CONTINUED";
+}
+
+message RunState {
+  message Of {
+    string run = 1;
+    RunStatus status = 2;
+  }
+  oneof state {
+    // The status of the chain's last run.
+    Of status = 1;
+    Empty no_chain = 2;
+    StoreFailure failed = 3;
+  }
+}
+
+message ReadValue {
+  oneof read {
+    layout.v1.Value value = 1;
+    // Nothing published under the key yet.
+    Empty none = 2;
+    StoreFailure failed = 3;
+  }
+}
+
+message PlanStep {
+  oneof step {
+    StoreOp store = 1;
+    // send, cancel
+    Sent sent = 2;
+    // create, open
+    Opened opened = 3;
+    Started started = 4;
+    RunResult result = 5;
+    RunState status = 6;
+    ReadValue read = 7;
+  }
+}
+
+message PlanResponse {
+  oneof response {
+    CoreError error = 1;
+    PlanStep step = 2;
+    Empty done = 3;
+  }
+}

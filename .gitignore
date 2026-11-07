@@ -36,3 +36,9 @@ share/python-wheels/
 MANIFEST
 logs
 .ruff_cache
+
+# v2
+target/
+node_modules/
+substantial-*.tgz
+.coverage

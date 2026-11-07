@@ -1,0 +1,71 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  AWS_ACCESS_KEY_ID: substantial
+  AWS_SECRET_ACCESS_KEY: substantial-secret
+  SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: cargo llvm-cov --workspace --no-report
+      - run: cargo llvm-cov report --summary-only
+      - run: cargo llvm-cov report --lcov --output-path "$RUNNER_TEMP/rust.lcov"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-rust
+          path: ${{ runner.temp }}/rust.lcov
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.13"
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: uv sync --locked
+      - run: uv run pytest --cov=substantial --cov-report=term --cov-report="xml:$RUNNER_TEMP/python.xml"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-python
+          path: ${{ runner.temp }}/python.xml
+
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: npm ci
+      - run: >-
+          node --test --test-concurrency=4 --test-timeout=120000
+          --experimental-test-coverage
+          --test-coverage-include="typescript/src/**"
+          --test-coverage-exclude="typescript/src/gen/**"
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=lcov --test-reporter-destination="$RUNNER_TEMP/typescript.lcov"
+          "typescript/test/**/*.test.ts"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-typescript
+          path: ${{ runner.temp }}/typescript.lcov

@@ -1,0 +1,8 @@
+lint:
+  rules:
+    remove:
+      # Field names follow the layout's vocabulary (docs/interfaces.md): `carried` and `seen` are lists.
+      - REPEATED_FIELD_NAMES_PLURALIZED
+  rules_option:
+    max_line_length:
+      max_chars: 110

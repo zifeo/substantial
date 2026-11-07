@@ -1,0 +1,267 @@
+// The run machine, opened for one replay; the host's scheduler drives it (I-23).
+syntax = "proto3";
+
+package substantial.boundary.v1;
+
+import "substantial/boundary/v1/boundary.proto";
+import "substantial/layout/v1/layout.proto";
+
+message RunSettings {
+  uint64 commit_every_ms = 1;
+  uint64 continue_as_new_after_segments = 2;
+  uint64 continue_as_new_after_bytes = 3;
+  uint64 dedup_window_ms = 4;
+}
+
+message InboxMessage {
+  string key = 1;
+  layout.v1.Message body = 2;
+}
+
+// Opens a run machine for one replay.
+message RunInput {
+  string run = 1;
+  layout.v1.Start start = 2;
+  // Every recorded event: the snapshot's, then the segments' after it.
+  repeated layout.v1.Event history = 3;
+  uint64 history_bytes = 4;
+  uint64 next_n = 5;
+  // The messages start.carried names, in that order, then the inbox sorted by key.
+  repeated InboxMessage inbox = 6;
+  layout.v1.Time now = 7;
+  // 32 bytes, the seed of the run's ChaCha20 generator, which draws random and uuid live only.
+  bytes seed = 8;
+  string worker = 9;
+  RunSettings settings = 10;
+  // The namespace, whose keys a workflow's send reads its chain under (Next.store).
+  string prefix = 11;
+  uint32 partitions = 12;
+}
+
+message RetryPolicy {
+  uint32 max_attempts = 1;
+  uint64 initial_ms = 2;
+  uint64 max_ms = 3;
+  double multiplier = 4;
+}
+
+message StepOptions {
+  RetryPolicy retry = 1;
+  optional uint64 timeout_ms = 2;
+  bool undo = 3;
+  optional uint64 saga = 4;
+  // Set for an undo only: the occurrence of the step it undoes.
+  optional uint64 occurrence = 5;
+}
+
+message End {
+  message Continued {
+    optional string workflow = 1;
+    layout.v1.Value input = 2;
+    layout.v1.Value state = 3;
+    // The workflow's locals, which no host captures.
+    reserved 4;
+    // The version of workflow, given only with it; absent, its runs without a version. Continuing
+    // as itself keeps the run's version.
+    optional uint32 version = 5;
+  }
+  oneof end {
+    layout.v1.Completed completed = 1;
+    layout.v1.Failed failed = 2;
+    layout.v1.Cancelled cancelled = 3;
+    Continued continued = 4;
+  }
+}
+
+message Call {
+  message Step {
+    string name = 1;
+    StepOptions options = 2;
+  }
+  message Wait {
+    optional uint64 timeout_ms = 1;
+  }
+  message Bind {
+    repeated string names = 1;
+  }
+  message Start {
+    string workflow = 1;
+    optional uint32 version = 2;
+    layout.v1.Value input = 3;
+    optional string id = 4;
+  }
+  message Send {
+    string run = 1;
+    string name = 2;
+    layout.v1.Value value = 3;
+    optional string id = 4;
+  }
+  message SagaEnd {
+    uint64 saga = 1;
+    bool failed = 2;
+    // The saga open around this one, if any: ended without an error, its steps become that saga's.
+    optional uint64 parent = 3;
+  }
+  oneof call {
+    Step step = 1;
+    Empty now = 2;
+    Empty random = 3;
+    Empty uuid = 4;
+    uint64 sleep_ms = 5;
+    layout.v1.Time sleep_until = 6;
+    Wait wait = 7;
+    string receive = 8;
+    Bind bind = 9;
+    Start start = 10;
+    string child_result = 11;
+    Send send = 12;
+    layout.v1.Published publish = 13;
+    Empty saga_begin = 14;
+    SagaEnd saga_end = 15;
+    Empty rollback = 16;
+    layout.v1.Value iterate = 17;
+    Empty should_continue_as_new = 18;
+    End end = 19;
+  }
+}
+
+// A message handed to the code's handlers.
+message Message {
+  string id = 1;
+  string name = 2;
+  layout.v1.Value value = 3;
+}
+
+message Undo {
+  uint64 call = 1;
+  string name = 2;
+  uint64 occurrence = 3;
+  layout.v1.Value value = 4;
+}
+
+message Called {
+  message Messages {
+    repeated Message messages = 1;
+  }
+  message Undos {
+    repeated Undo undos = 1;
+  }
+  oneof called {
+    uint64 pending = 1;
+    Messages messages = 2;
+    string run = 3;
+    uint64 saga = 4;
+    Undos undos = 5;
+    layout.v1.Value value = 6;
+    Empty done = 7;
+  }
+  // Set for a step call: its occurrence, the one of its step key (I-6).
+  optional uint64 occurrence = 8;
+  // The replay passed the end of the recorded history: the code runs new code from this answer on.
+  bool live = 9;
+}
+
+message Outcome {
+  oneof outcome {
+    layout.v1.Value value = 1;
+    layout.v1.Failure error = 2;
+  }
+}
+
+message Resolution {
+  oneof resolution {
+    layout.v1.Value value = 1;
+    // StepFailed for a step, RunFailed for a child's result: details give the failure they wrap.
+    layout.v1.Failure error = 2;
+    string cancelled = 3;
+  }
+}
+
+enum CommitKind {
+  COMMIT_KIND_UNSPECIFIED = 0;
+  // The replay goes on in memory.
+  COMMIT_KIND_PROGRESS = 1;
+  COMMIT_KIND_SUSPEND = 2;
+  COMMIT_KIND_END = 3;
+}
+
+message Commit {
+  CommitKind kind = 1;
+  layout.v1.Segment segment = 2;
+  // Inbox keys this commit consumed or dropped as duplicates, deleted once it is durable.
+  repeated string consumed = 3;
+}
+
+// Steps are in flight; until is the earliest timer or retry, when the host calls next again anyway.
+message WaitSteps {
+  layout.v1.Time until = 1;
+}
+
+// Nothing was recorded: no segment to write.
+message Idle {
+  layout.v1.Time next_wake = 1;
+}
+
+message Next {
+  message Resolve {
+    uint64 call = 1;
+    Resolution resolution = 2;
+  }
+  message Execute {
+    uint64 call = 1;
+    uint32 attempt = 2;
+    optional uint64 timeout_ms = 3;
+  }
+  oneof next {
+    Resolve resolve = 1;
+    Message deliver = 2;
+    Execute execute = 3;
+    Commit commit = 4;
+    WaitSteps wait_steps = 5;
+    Idle idle = 6;
+    // A child's chain ended, its substantial.ended consumed: the run its start answered. The
+    // child's result calls resolve after it.
+    string child_ended = 7;
+    // A read of a workflow's send, of the chain it sends to, before the replay goes on: the host
+    // performs it on the namespace's store and answers RunRequest.stored before the next `next`.
+    // A store that fails after the adapter's retries drops the replay.
+    StoreOp store = 9;
+  }
+  // As Called.live.
+  bool live = 8;
+}
+
+message RunRequest {
+  message MakeCall {
+    Call call = 1;
+    layout.v1.Time now = 2;
+  }
+  message StepEnded {
+    uint64 call = 1;
+    uint32 attempt = 2;
+    Outcome outcome = 3;
+    layout.v1.Time now = 4;
+  }
+  // The messages of AgentCommand.Committed.inbox.
+  message Arrived {
+    repeated InboxMessage messages = 1;
+  }
+  oneof request {
+    MakeCall call = 1;
+    StepEnded step_ended = 2;
+    uint64 satisfied = 3;
+    layout.v1.Time next = 4;
+    Arrived arrived = 5;
+    // The answer to Next.store: bytes or missing for a get, a listing for a list; never failed.
+    OpResult stored = 6;
+  }
+}
+
+message RunResponse {
+  oneof response {
+    CoreError error = 1;
+    Called called = 2;
+    Next next = 3;
+    Empty done = 4;
+  }
+}

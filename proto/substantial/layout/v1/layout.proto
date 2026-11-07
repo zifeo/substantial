@@ -1,0 +1,255 @@
+// The objects of layout 1 (docs/interfaces.md). Every object of a namespace but its marker,
+// substantial.json, is one of these messages in protobuf binary encoding. The core alone encodes
+// them, for every host, so the bytes are the same everywhere: no map fields, whose order would vary.
+syntax = "proto3";
+
+package substantial.layout.v1;
+
+// Milliseconds since the Unix epoch, UTC.
+message Time {
+  int64 ms = 1;
+}
+
+// A value of the code: JSON as the hosts give it, or raw bytes.
+message Value {
+  // A reference to a value stored apart, not implemented.
+  reserved 3;
+  oneof kind {
+    bytes json = 1;
+    bytes raw = 2;
+  }
+}
+
+message Failure {
+  string type = 1;
+  string message = 2;
+  bool retryable = 3;
+  // JSON. The failures the core makes hold the one they wrap: StepFailed {"step", "attempts",
+  // "error"}, error the last attempt's failure as {"type", "message", "retryable", "details"}, such
+  // as ValueTooLarge for a value past the limit; RunFailed, a child's end, {"run", "status", "error",
+  // "reason"}.
+  Value details = 4;
+}
+
+message Parent {
+  string run = 1;
+  uint64 occurrence = 2;
+}
+
+// A message id a run consumed, and when: the at of its message event.
+message Seen {
+  string id = 1;
+  Time at = 2;
+}
+
+// runs/<run>/start
+message Start {
+  string workflow = 1;
+  optional uint32 version = 2;
+  Value input = 3;
+  string chain = 4;
+  uint64 seq = 5;
+  optional string previous = 6;
+  optional string resumes = 7;
+  Parent parent = 8;
+  Value state = 9;
+  // The workflow's locals, which no host captures.
+  reserved 10;
+  repeated string carried = 11;
+  // Ids without their consume time, before layout 1 was released.
+  reserved 12;
+  Time created_at = 13;
+  // Message ids consumed within dedup_window, each expiring dedup_window after its own time.
+  repeated Seen seen = 14;
+}
+
+message Step {
+  string name = 1;
+  uint64 occurrence = 2;
+  uint32 attempt = 3;
+  Value value = 4;
+}
+
+message StepRetry {
+  string name = 1;
+  uint64 occurrence = 2;
+  uint32 attempt = 3;
+  Failure error = 4;
+  Time at = 5;
+}
+
+message StepFailed {
+  string name = 1;
+  uint64 occurrence = 2;
+  uint32 attempt = 3;
+  Failure error = 4;
+}
+
+message Timer {
+  uint64 occurrence = 1;
+  Time until = 2;
+}
+
+message Fired {
+  uint64 occurrence = 1;
+}
+
+message MessageConsumed {
+  string key = 1;
+  string id = 2;
+  string name = 3;
+  // Exactly one of value and ended; ended only for substantial.ended.
+  Value value = 4;
+  Ended ended = 5;
+  // When the run consumed it, the run machine's now: its dedup_window starts there.
+  Time at = 6;
+}
+
+message Child {
+  uint64 occurrence = 1;
+  string run = 2;
+  string workflow = 3;
+  optional uint32 version = 4;
+  Value input = 5;
+}
+
+message Sent {
+  uint64 occurrence = 1;
+  // The chain the code sent to.
+  string run = 2;
+  string id = 3;
+  string name = 4;
+  Value value = 5;
+  // What the replay read of the chain before the commit, which every replay gives the code again:
+  // the run the message goes to, or the error the send raised, nothing sent.
+  oneof outcome {
+    Delivery to = 6;
+    Failure refused = 7;
+  }
+}
+
+// A workflow's send accepted: the chain's last run when it was read, and its workflow, which names
+// the message's due entry.
+message Delivery {
+  string run = 1;
+  string workflow = 2;
+}
+
+message Published {
+  string key = 1;
+  Value value = 2;
+}
+
+message Completed {
+  Value value = 1;
+}
+
+message Failed {
+  Failure error = 1;
+}
+
+message Cancelled {
+  string reason = 1;
+}
+
+// The next run's start is built from this event alone, so whoever does the effects needs no more.
+message Continued {
+  string run = 1;
+  string workflow = 2;
+  Value input = 3;
+  Value state = 4;
+  // The workflow's locals, which no host captures.
+  reserved 5;
+  repeated string carried = 6;
+  // Ids without their consume time, before layout 1 was released.
+  reserved 7;
+  // The next run's version: the run's own when it continues as itself.
+  optional uint32 version = 8;
+  repeated Seen seen = 9;
+}
+
+message Event {
+  oneof kind {
+    Step step = 1;
+    StepRetry step_retry = 2;
+    StepFailed step_failed = 3;
+    Timer timer = 4;
+    Fired fired = 5;
+    MessageConsumed message = 6;
+    Child child = 7;
+    Sent sent = 8;
+    Published published = 9;
+    Completed completed = 10;
+    Failed failed = 11;
+    Cancelled cancelled = 12;
+    Continued continued = 13;
+  }
+}
+
+// runs/<run>/log/<n>
+message Segment {
+  uint64 n = 1;
+  repeated Event events = 2;
+  // For a suspension, the earliest of its pending timers and step retries, absent when the run only
+  // waits on messages; for a progress commit, its own created_at, so the run is due at once if the
+  // replay stops; absent for an end.
+  Time next_wake = 3;
+  string worker = 4;
+  Time created_at = 5;
+}
+
+// runs/<run>/snap/<n>: every event of segments 0 to n.
+message Snapshot {
+  uint64 n = 1;
+  repeated Event events = 2;
+  Time next_wake = 3;
+}
+
+// runs/<run>/inbox/<time>-<id>
+message Message {
+  string id = 1;
+  string name = 2;
+  // Exactly one of value and ended; ended only for substantial.ended.
+  Value value = 3;
+  Time sent_at = 4;
+  Ended ended = 5;
+}
+
+// What a child's substantial.ended tells its parent: the end of its chain, as its result says.
+message Ended {
+  string run = 1;
+  Status status = 2;
+  Value value = 3;
+  Failure error = 4;
+  string reason = 5;
+}
+
+// runs/<run>/claim/<n>-<attempt>
+message Claim {
+  string worker = 1;
+  Time at = 2;
+  uint64 ttl_ms = 3;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_COMPLETED = 1;
+  STATUS_FAILED = 2;
+  STATUS_CANCELLED = 3;
+  STATUS_CONTINUED = 4;
+}
+
+// runs/<run>/result
+message Result {
+  Status status = 1;
+  Value value = 2;
+  Failure error = 3;
+  string reason = 4;
+  optional string next = 5;
+  Time ended_at = 6;
+}
+
+// pub/<chain>/<key>/<seq>-<n>-<i>
+message PublishedValue {
+  Value value = 1;
+}

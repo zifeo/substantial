@@ -1,0 +1,30 @@
+name: Cross-language
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  cross:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: substantial
+      AWS_SECRET_ACCESS_KEY: substantial-secret
+      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: uv sync --locked
+      - run: npm ci
+      - run: uv run dev/cross/run.py
