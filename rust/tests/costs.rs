@@ -273,10 +273,11 @@ async fn client_verbs() {
     let wf = steps();
     let (run, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
     let run = run.unwrap();
-    check("start", t, ops(2, 0, 0, 0, 2));
+    // The start, its due entry, and a GET of the id's tombstone.
+    check("start", t, ops(2, 1, 0, 0, 3));
     let (again, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
     again.unwrap();
-    check("start, same id and input again", t, ops(2, 1, 0, 0, 3));
+    check("start, same id and input again", t, ops(2, 2, 0, 0, 4));
     let (taken, t) = b.client(b.sub.start(&wf, K { k: 1 }).id("r")).await;
     assert!(matches!(taken, Err(Error::RunExists { .. })), "{taken:?}");
     check("start, id taken: RunExists", t, ops(1, 1, 0, 0, 2));
@@ -296,7 +297,8 @@ async fn client_verbs() {
     let missing = b.sub.run(&wf, "nobody");
     let (sent, t) = b.client(missing.send("m", 1)).await;
     assert!(matches!(sent, Err(Error::RunNotFound { .. })), "{sent:?}");
-    check("send, no chain: RunNotFound", t, ops(0, 2, 0, 0, 2));
+    // The first run's result and start, then its tombstone.
+    check("send, no chain: RunNotFound", t, ops(0, 3, 0, 0, 3));
 
     // Polls at 0, 10, 30, 70, 150, 310, 630, 1,270, 2,550 and 5,110 ms, the interval doubling up
     // to 30 s: 10 in 6 s.
@@ -367,8 +369,8 @@ async fn steps_and_commit_every() {
         assert_eq!((w.scans, w.scan_lists), (1, 1), "the scan that found it");
     }
     // The last step is in the end's segment; each step before it is a progress commit, made as
-    // the next one starts.
-    let end = ops(3, 1, 1, 2, 7);
+    // the next one starts. The end creates the run's collection entry.
+    let end = ops(4, 1, 1, 2, 8);
     check("0 steps, start to end", measured[0], end);
     check("1 step, start to end", measured[1], end);
     let progress = ops(1, 0, 1, 0, 2);
@@ -427,12 +429,13 @@ async fn three_steps_a_sleep_and_the_end() {
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     // The third step lands in the suspension; the worker holds the history for the second wakeup.
-    let expected = [ops(5, 1, 3, 2, 11), ops(3, 0, 1, 2, 6)];
+    let expected = [ops(5, 1, 3, 2, 11), ops(4, 0, 1, 2, 7)];
     check_wakeups("3 steps, sleep, end", &w, &expected);
     assert_eq!(w.scans, 2, "each wakeup found by a scan");
     let stored = b.stored().await;
     assert_eq!(stored["log"].0, 4);
-    assert_eq!(stored.values().map(|(n, _)| n).sum::<usize>(), 8);
+    assert_eq!(stored["queues"].0, 1, "the collection entry");
+    assert_eq!(stored.values().map(|(n, _)| n).sum::<usize>(), 9);
     worker.shutdown().await.unwrap();
 }
 
@@ -455,13 +458,14 @@ async fn an_order_waits_for_its_payment() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    // Nothing to record before the payment: the first wakeup writes no segment.
-    let expected = [ops(1, 2, 1, 2, 6), ops(4, 1, 2, 3, 10)];
+    // Nothing to record before the payment: the first wakeup writes an empty segment, so the
+    // run reads suspended, and creates no due entry.
+    let expected = [ops(2, 1, 1, 2, 6), ops(5, 1, 2, 3, 11)];
     check_wakeups("receive, 2 steps, end", &w, &expected);
     assert_eq!(w.scans, 2, "each wakeup found by a scan");
     let stored = b.stored().await;
-    assert_eq!(stored["log"].0, 2);
-    assert_eq!(stored.values().map(|(n, _)| n).sum::<usize>(), 6);
+    assert_eq!(stored["log"].0, 3);
+    assert_eq!(stored.values().map(|(n, _)| n).sum::<usize>(), 8);
     worker.shutdown().await.unwrap();
 }
 
@@ -489,7 +493,7 @@ async fn a_wait_with_a_timeout_leaves_its_timer() {
     tokio::time::sleep(SLEEP).await;
     let w = b.since(mark).await;
     // The end deletes the timer's due entry: no wakeup at its time.
-    let expected = [ops(3, 1, 1, 2, 7), ops(3, 1, 1, 4, 9)];
+    let expected = [ops(3, 1, 1, 2, 7), ops(4, 1, 1, 4, 10)];
     check_wakeups(
         "wait_until with timeout, message, end, stale timer",
         &w,
@@ -516,7 +520,8 @@ async fn a_child_and_its_result() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    let expected = [ops(6, 1, 1, 2, 10), ops(5, 2, 1, 2, 10), ops(3, 1, 1, 3, 8)];
+    // The child's start reads its id's tombstone.
+    let expected = [ops(6, 2, 1, 2, 11), ops(6, 2, 1, 2, 11), ops(4, 1, 1, 3, 9)];
     check_wakeups(
         "parent starts a child, child ends, parent ends",
         &w,
@@ -550,14 +555,14 @@ async fn a_workflow_sends_and_publishes() {
     t.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     // The sender's replay reads the target's result and start before its commit, its effect none.
-    let expected = [ops(5, 3, 1, 2, 11), ops(3, 1, 1, 3, 8)];
+    let expected = [ops(6, 3, 1, 2, 12), ops(4, 1, 1, 3, 9)];
     check_wakeups("a run sends and ends, the target ends", &w, &expected);
     let mark = b.workers.mark();
     let p = b.sub.start(&publisher, ()).id("p").await.unwrap();
     internal::wake(&worker);
     p.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    check_wakeups("a run publishes and ends", &w, &[ops(4, 1, 1, 2, 8)]);
+    check_wakeups("a run publishes and ends", &w, &[ops(5, 1, 1, 2, 9)]);
     let (read, t) = b.client(p.read::<u32>("progress")).await;
     assert_eq!(read.unwrap(), Some(1));
     check("read, a value", t, ops(0, 1, 1, 0, 2));
@@ -584,7 +589,7 @@ async fn continue_as_new_by_hand() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    let expected = [ops(6, 1, 1, 2, 10), ops(3, 1, 1, 2, 7)];
+    let expected = [ops(7, 1, 1, 2, 11), ops(4, 1, 1, 2, 8)];
     check_wakeups("continue as new, then end", &w, &expected);
     let (_, t) = b.client(run.result()).await;
     check("result, a chain of 2 runs", t, ops(0, 2, 1, 0, 3));
@@ -637,11 +642,11 @@ async fn a_polling_loop_snapshots_and_compresses() {
         iteration(0, 0),
         iteration(0, 1),
         // The ninth: 8 segments, the threshold passed, the run continues.
-        ops(6, 0, 1, 2, 9),
+        ops(7, 0, 1, 2, 10),
         // The next run of the chain, from an empty history.
         iteration(1, 0),
         // The last iteration ends the chain.
-        ops(3, 0, 1, 2, 6),
+        ops(4, 0, 1, 2, 7),
     ];
     check_wakeups(
         "polling loop, snapshot_every 4, continue after 8",
@@ -693,7 +698,7 @@ async fn a_retry_and_a_rollback() {
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     // The failed attempt and its backoff land in one suspension.
-    let expected = [ops(3, 1, 1, 2, 7), ops(3, 0, 1, 2, 6)];
+    let expected = [ops(3, 1, 1, 2, 7), ops(4, 0, 1, 2, 7)];
     check_wakeups(
         "a step fails once, retried after its backoff",
         &w,
@@ -704,7 +709,7 @@ async fn a_retry_and_a_rollback() {
     internal::wake(&worker);
     assert!(run.result().timeout(LONG).await.is_err());
     let w = b.since(mark).await;
-    check_wakeups("a step, a rollback undoing it", &w, &[ops(4, 1, 2, 2, 9)]);
+    check_wakeups("a step, a rollback undoing it", &w, &[ops(5, 1, 2, 2, 10)]);
     worker.shutdown().await.unwrap();
 }
 
@@ -733,7 +738,7 @@ async fn a_cancel_reaches_a_child() {
     // The parent ends cancelled and cancels its child; the child's end reaches the parent,
     // which has ended: that wakeup reads its history, to forward the message if it continued,
     // and deletes the hints.
-    let expected = [ops(5, 3, 2, 3, 13), ops(5, 2, 2, 3, 12), ops(0, 3, 1, 1, 5)];
+    let expected = [ops(6, 3, 2, 3, 14), ops(6, 2, 2, 3, 13), ops(0, 3, 1, 1, 5)];
     check_wakeups("cancel a parent with a child", &w, &expected);
     worker.shutdown().await.unwrap();
 }
@@ -761,9 +766,9 @@ async fn claims_renew_while_a_step_runs() {
     let t = w.wakeups[0].1;
     row("a 1.2 s step, claim_ttl 400ms", &t);
     // A renewal every claim_ttl / 2: one claim PUT, and its DELETE once the run commits.
-    let renewals = t.put - 3;
+    let renewals = t.put - 4;
     assert!((4..=6).contains(&renewals), "{t:?}");
-    assert_eq!(t, ops(3 + renewals, 1, 1, 2 + renewals, 7 + 2 * renewals));
+    assert_eq!(t, ops(4 + renewals, 1, 1, 2 + renewals, 8 + 2 * renewals));
     worker.shutdown().await.unwrap();
 }
 
@@ -841,6 +846,203 @@ async fn on_h3_a_waiting_listing_replaces_polling() {
         "woken by the start"
     );
     let w = b.since(mark).await;
-    check_wakeups("1 step on h3", &w, &[ops(3, 1, 1, 2, 7)]);
+    check_wakeups("1 step on h3", &w, &[ops(4, 1, 1, 2, 8)]);
+    worker.shutdown().await.unwrap();
+}
+
+/// A worker whose runs are collected 200 ms after they end, their ids taken for `tombstone`.
+fn collecting(b: &Bench, workflows: impl IntoWorkflows, tombstone: &str) -> WorkerBuilder {
+    b.worker(workflows)
+        .hidden("retention_min", "100ms")
+        .set("retention", "200ms")
+        .hidden("tombstone", tombstone)
+        .hidden("recheck", "1h")
+}
+
+/// A run of one segment ended, then collected: its id is taken until the tombstone ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn collection_and_tombstone_of_a_run() {
+    let b = bench(1).await;
+    let wf = steps();
+    let worker = b.started(collecting(&b, &wf, "1h")).await;
+    let mark = b.workers.mark();
+    let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
+    internal::wake(&worker);
+    run.result().timeout(LONG).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let w = b.since(mark).await;
+    // The collection reads the run's start, its last segment and its result (the result's age),
+    // creates `gone` then the tombstone's entry, and deletes the rest and the served entry.
+    let expected = [ops(4, 1, 1, 2, 8), ops(2, 3, 2, 4, 11)];
+    check_wakeups("a run of one segment, then its collection", &w, &expected);
+    let (status, t) = b.client(run.status()).await;
+    assert!(
+        matches!(
+            status,
+            Err(Error::RunNotFound {
+                collected: true,
+                ..
+            })
+        ),
+        "{status:?}"
+    );
+    check("status, collected: RunNotFound", t, ops(0, 3, 0, 0, 3));
+    let (taken, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
+    assert!(
+        matches!(
+            taken,
+            Err(Error::RunExists {
+                collected: true,
+                ..
+            })
+        ),
+        "{taken:?}"
+    );
+    // The start, `gone`, then the start withdrawn.
+    check(
+        "start, during the tombstone: RunExists",
+        t,
+        ops(1, 1, 0, 1, 3),
+    );
+    let stored = b.stored().await;
+    let kinds: Vec<&str> = stored.keys().map(String::as_str).collect();
+    assert_eq!(kinds, ["gone", "probe", "queues", "substantial.json"]);
+    worker.shutdown().await.unwrap();
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_during_and_after_the_tombstone() {
+    let b = bench(1).await;
+    let wf = steps();
+    let worker = b.started(collecting(&b, &wf, "1s")).await;
+    let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
+    internal::wake(&worker);
+    run.result().timeout(LONG).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    quiet(&b.workers).await;
+    let (taken, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
+    assert!(
+        matches!(
+            taken,
+            Err(Error::RunExists {
+                collected: true,
+                ..
+            })
+        ),
+        "{taken:?}"
+    );
+    check(
+        "start, during the tombstone: RunExists",
+        t,
+        ops(1, 1, 0, 1, 3),
+    );
+    let mark = b.workers.mark();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let w = b.since(mark).await;
+    check_wakeups("the tombstone's end", &w, &[ops(0, 1, 1, 2, 4)]);
+    let (again, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
+    again.unwrap();
+    check("start, after the tombstone", t, ops(2, 1, 0, 0, 3));
+    worker.shutdown().await.unwrap();
+}
+
+/// A run whose result is younger than twice `retention_min` when its collection comes due: the
+/// collection is deferred to the instant the result is that old.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_young_result_defers_its_collection() {
+    let b = bench(1).await;
+    let wf = steps();
+    let worker = b
+        .started(collecting(&b, &wf, "1h").set("retention", "100ms"))
+        .await;
+    let mark = b.workers.mark();
+    let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
+    internal::wake(&worker);
+    run.result().timeout(LONG).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let w = b.since(mark).await;
+    // The end, the deferral reading the run up to the result's age, then the collection.
+    let expected = [ops(4, 1, 1, 2, 8), ops(1, 3, 1, 1, 6), ops(2, 3, 2, 4, 11)];
+    check_wakeups("a collection deferred by the result's age", &w, &expected);
+    worker.shutdown().await.unwrap();
+}
+
+/// A due entry of a collected id, as a late sender's leaves: its wakeup reads the id is gone and
+/// deletes the entry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wakeup_of_a_collected_id() {
+    let b = bench(1).await;
+    let wf = steps();
+    let worker = b.started(collecting(&b, &wf, "1h")).await;
+    let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
+    internal::wake(&worker);
+    run.result().timeout(LONG).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    quiet(&b.workers).await;
+    let now = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
+    let late = format!(
+        "queues/steps/0000/due/{}~r~s0000000001",
+        now.format("%Y%m%dt%H%M%S%3fz")
+    );
+    b.inner.create(&late, Default::default()).await.unwrap();
+    let mark = b.workers.mark();
+    internal::wake(&worker);
+    let w = b.since(mark).await;
+    check_wakeups("a wakeup of a collected id", &w, &[ops(0, 1, 1, 1, 3)]);
+    worker.shutdown().await.unwrap();
+}
+
+/// A chain of 3 runs, each continued after a sleep: the first run retired, the second collected
+/// while the chain lives, the last at the chain's end, which collects the first, then the end of
+/// its tombstone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_lived_chain_collects_its_continued_runs() {
+    let b = bench(1).await;
+    let chain = Workflow::new("chain", |c, input: N| async move {
+        c.sleep(Duration::from_millis(600)).await?;
+        if input.n > 0 {
+            return Err(c.continue_as_new(N { n: input.n - 1 }).await);
+        }
+        Ok(0u32)
+    });
+    let worker = b.started(collecting(&b, &chain, "1s")).await;
+    let mark = b.workers.mark();
+    b.sub.start(&chain, N { n: 2 }).id("c").await.unwrap();
+    internal::wake(&worker);
+    // Not `result`: the chain is collected 200 ms after it ends, before a poll could see it.
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    let w = b.since(mark).await;
+    for (i, (run, t)) in w.wakeups.iter().enumerate() {
+        row(&format!("a chain of 3 runs, wakeup {} ({run})", i + 1), t);
+    }
+    // A run's result is written a few ms after its collection's due time is fixed, so a scan
+    // serving the entry as it comes due defers it those few ms.
+    let wakeups: Vec<Tally> = w
+        .wakeups
+        .iter()
+        .map(|(_, t)| *t)
+        .filter(|t| *t != ops(1, 3, 1, 1, 6))
+        .collect();
+    assert_eq!(wakeups.len(), 11, "{w:?}");
+    // The replays of a worker that read a run more than `retention_min / 2` ago, 50 ms here,
+    // read its result and start again before they write: only the collections are counted.
+    let collections = [3, 6, 8, 9, 10].map(|i| wakeups[i]);
+    let expected = [
+        // The first run retired: the chain's next run read, its index and values listed.
+        ops(0, 4, 3, 3, 10),
+        // The second run, its predecessor retired and its successor started.
+        ops(0, 5, 2, 6, 13),
+        // The last run: the chain's first run gone, its collection entry created.
+        ops(2, 6, 3, 6, 17),
+        // The first run's delete phase.
+        ops(1, 2, 2, 3, 8),
+        // The tombstone's end.
+        ops(0, 1, 1, 2, 4),
+    ];
+    if !measuring() {
+        assert_eq!(collections, expected);
+    }
+    let stored = b.stored().await;
+    let kinds: Vec<&str> = stored.keys().map(String::as_str).collect();
+    assert_eq!(kinds, ["probe", "substantial.json"]);
     worker.shutdown().await.unwrap();
 }

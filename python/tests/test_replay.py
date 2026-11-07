@@ -22,7 +22,8 @@ from substantial import (
     step_key,
     workflow,
 )
-from substantial._proto import agent, json_value, layout, run
+from substantial._proto import agent, boundary, json_value, layout, run
+from substantial.clock import Clock
 from substantial.core import Core
 from substantial.replay import Channel, Replay, replay
 from substantial.stores.memory import MemoryStore
@@ -90,6 +91,7 @@ class Harness:
             continue_as_new_after_segments=1000,
             continue_as_new_after_bytes=8 << 20,
             dedup_window_ms=86_400_000,
+            retention=run.Retention(forever=boundary.Empty()),
         )
         return run.RunInput(
             run="run-1",
@@ -108,8 +110,7 @@ class Harness:
         self.now = now
         events: asyncio.Queue[tuple[Any, ...]] = asyncio.Queue()
         channel = Channel()
-        clock = lambda: layout.Time(ms=self.now)  # noqa: E731
-        r = Replay(self.core, self.store, clock, events.put_nowait, self.step_timeout)
+        r = Replay(self.core, self.store, _Fixed(self.now), events.put_nowait, self.step_timeout)
         task = asyncio.create_task(replay(r, self.workflow, self.run_input(), channel))
         commits = []
         while True:
@@ -124,6 +125,16 @@ class Harness:
                 self.next_n = commit.segment.n + 1
                 self.inbox = [m for m in self.inbox if m.key not in commit.consumed]
                 commits.append(commit)
+
+
+class _Fixed(Clock):
+    """The real clock's waits at a fixed time."""
+
+    def __init__(self, ms: int) -> None:
+        self.ms = ms
+
+    def now(self) -> layout.Time:
+        return layout.Time(ms=self.ms)
 
 
 def counting(name: str, value: Any) -> tuple[list[int], Any]:

@@ -14,6 +14,7 @@ from substantial._proto import checked, run
 from substantial.durations import millis
 from substantial.errors import ConfigError, Failed, Failure, InvalidArgument
 from substantial.names import check_key
+from substantial.settings import FOREVER, Retention, check_retention
 
 if TYPE_CHECKING:
     from substantial.context import Context
@@ -70,6 +71,7 @@ class Workflow[**P, R]:
         name: str | None = None,
         version: int | None = None,
         step_timeout: timedelta | None = None,
+        retention: Retention | None = None,
     ):
         if not inspect.iscoroutinefunction(fn):
             raise InvalidArgument(f"a workflow is an async function, not {fn!r}")
@@ -77,11 +79,21 @@ class Workflow[**P, R]:
             raise InvalidArgument(f"a workflow version is an int in [0, 2**32), not {version!r}")
         if step_timeout is not None and millis(step_timeout) == 0:
             raise InvalidArgument(f"a workflow step_timeout is positive, not {step_timeout}")
+        if (
+            retention is not None
+            and retention is not FOREVER
+            and not isinstance(retention, timedelta)
+        ):
+            raise InvalidArgument(
+                f"a workflow retention is a timedelta or s.FOREVER, not {retention!r}"
+            )
         self.fn: Callable[..., Awaitable[R]] = fn
         self.name: str = check_key("workflow name", fn.__name__ if name is None else name)
         self.version = version
         # The timeout of its steps without their own, over the worker's `step_timeout`.
         self.step_timeout = step_timeout
+        # How long its runs are kept after their chain ends, over the worker's `retention`.
+        self.retention = retention
         self.__doc__ = fn.__doc__
         self.__wrapped__ = fn
 
@@ -112,7 +124,11 @@ class _WorkflowDecorator(Protocol):
 def workflow[**P, R](fn: Callable[Concatenate[Context, P], Awaitable[R]], /) -> Workflow[P, R]: ...
 @overload
 def workflow(
-    *, name: str | None = None, version: int | None = None, step_timeout: timedelta | None = None
+    *,
+    name: str | None = None,
+    version: int | None = None,
+    step_timeout: timedelta | None = None,
+    retention: Retention | None = None,
 ) -> _WorkflowDecorator: ...
 def workflow(
     fn: Callable[..., Awaitable[Any]] | None = None,
@@ -121,17 +137,20 @@ def workflow(
     name: str | None = None,
     version: int | None = None,
     step_timeout: timedelta | None = None,
+    retention: Retention | None = None,
 ) -> Workflow[..., Any] | _WorkflowDecorator:
-    """`@workflow` or `@workflow(name=, version=, step_timeout=)`."""
+    """`@workflow` or `@workflow(name=, version=, step_timeout=, retention=)`."""
     if fn is not None:
         return Workflow(fn)
-    return lambda f: Workflow(f, name=name, version=version, step_timeout=step_timeout)
+    return lambda f: Workflow(
+        f, name=name, version=version, step_timeout=step_timeout, retention=retention
+    )
 
 
 class Workflows:
     """The workflows a worker serves, by name and version."""
 
-    def __init__(self, workflows: Iterable[Workflow[..., Any]]) -> None:
+    def __init__(self, workflows: Iterable[Workflow[..., Any]], retention_min: timedelta) -> None:
         self.by_key: dict[tuple[str, int | None], Workflow[..., Any]] = {}
         if isinstance(workflows, str | Workflow) or not isinstance(workflows, Iterable):
             raise ConfigError(f"a worker serves a list of workflows, not {workflows!r}")
@@ -145,6 +164,13 @@ class Workflows:
             self.by_key[key] = w
         if not self.by_key:
             raise ConfigError("a worker needs at least one workflow")
+        # The core keeps one retention per name.
+        self.retentions: dict[str, Retention | None] = {}
+        for (name, _), w in self.by_key.items():
+            if w.retention is not None:
+                check_retention(w.retention, retention_min, f"the retention of workflow {name!r}")
+            if self.retentions.setdefault(name, w.retention) != w.retention:
+                raise ConfigError(f"the versions of workflow {name!r} give different retentions")
 
     def get(self, name: str, version: int | None) -> Workflow[..., Any] | None:
         return self.by_key.get((name, version))

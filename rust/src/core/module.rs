@@ -300,6 +300,7 @@ mod tests {
                 name: "w".into(),
                 versions: vec![],
                 unversioned: Some(true),
+                retention: None,
             }],
             concurrency: 1,
             claim_ttl_ms: 30_000,
@@ -311,8 +312,14 @@ mod tests {
             op_retries: 5,
             wait_seconds: 20,
             seed: vec![0; 32],
+            tombstone_ms: 7 * 86_400_000,
+            retention_min_ms: 3_600_000,
+            recheck_ms: 86_400_000,
             settings: Some(b::RunSettings {
                 continue_as_new_after_segments: 1000,
+                retention: Some(b::Retention {
+                    keep: Some(b::retention::Keep::Forever(b::Empty {})),
+                }),
                 ..Default::default()
             }),
             ..Default::default()

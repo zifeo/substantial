@@ -1,6 +1,6 @@
 {
   "name": "substantial",
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-beta.2",
   "description": "Brokerless durable execution: the TypeScript host of the Substantial core",
   "license": "MPL-2.0",
   "repository": {
@@ -21,7 +21,9 @@
   "files": [
     "typescript/dist",
     "wasm/substantial.wasm",
-    "wasm/SHA256SUMS"
+    "wasm/SHA256SUMS",
+    "redis/create.lua",
+    "redis/delete.lua"
   ],
   "scripts": {
     "build": "tsc -p typescript/tsconfig.build.json",
@@ -29,15 +31,30 @@
     "format": "biome check --write",
     "gen": "buf generate --template typescript/buf.gen.yaml && node -e \"const fs = require('node:fs'); for (const f of fs.globSync('typescript/src/gen/**/*.ts')) fs.writeFileSync(f, fs.readFileSync(f, 'utf8').trimEnd() + '\\n')\"",
     "prepack": "npm run build",
-    "test": "node --test --test-concurrency=4 --test-timeout=120000 \"typescript/test/**/*.test.ts\""
+    "test": "node --test --test-concurrency=4 --test-timeout=120000 \"typescript/test/*.test.ts\" && node --test --test-concurrency=1 --test-timeout=300000 \"typescript/test/serial/*.test.ts\""
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.16.0"
+    "@bufbuild/protobuf": "^2.16.0",
+    "canonicalize": "^5.1.0"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.1164.0",
+    "@redis/client": "^6.3.1"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "@redis/client": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1164.0",
     "@biomejs/biome": "^2.6.4",
     "@bufbuild/buf": "^1.75.0",
     "@bufbuild/protoc-gen-es": "^2.16.0",
+    "@redis/client": "^6.3.1",
     "@types/node": "^24.19.2",
     "typescript": "^7.0.2"
   }

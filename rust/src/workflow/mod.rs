@@ -1,6 +1,7 @@
 //! Workflows and the context their code calls (I-5 to I-14).
 
 mod as_workflow;
+mod canonical;
 mod child;
 mod context;
 pub(crate) mod executor;
@@ -23,6 +24,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 pub use as_workflow::{AsWorkflow, IntoWorkflows};
+pub(crate) use canonical::input_object;
 pub use child::{Child, SendFromWorkflow, StartChild};
 pub use context::{Context, WaitUntil};
 pub use log::Log;
@@ -33,6 +35,7 @@ pub use var::Var;
 
 use crate::error::{Error, Failure, Result};
 use crate::proto::layout::v1::{self as layout, value};
+use crate::settings::Retention;
 
 type Run = dyn Fn(Context, Vec<u8>) -> BoxFuture<'static, Result<Vec<u8>>> + Send + Sync;
 
@@ -61,6 +64,7 @@ pub struct Workflow<O> {
     name: String,
     version: Option<u32>,
     step_timeout: Option<Duration>,
+    retention: Option<Retention>,
     run: Arc<Run>,
     output: PhantomData<fn() -> O>,
 }
@@ -71,6 +75,7 @@ impl<O> Clone for Workflow<O> {
             name: self.name.clone(),
             version: self.version,
             step_timeout: self.step_timeout,
+            retention: self.retention,
             run: self.run.clone(),
             output: PhantomData,
         }
@@ -97,6 +102,7 @@ impl<O: Serialize + Send + 'static> Workflow<O> {
             name: name.to_owned(),
             version: None,
             step_timeout: None,
+            retention: None,
             run: Arc::new(run),
             output: PhantomData,
         }
@@ -134,6 +140,14 @@ impl<O> Workflow<O> {
         self
     }
 
+    /// How long its runs are kept after their chain ends, instead of the worker's `retention`:
+    /// a duration (`s::days(90)`) or `s::FOREVER`; one under an hour or over 100 years is a
+    /// `ConfigError` when a worker starts with it.
+    pub fn with_retention(mut self, retention: impl Into<Retention>) -> Self {
+        self.retention = Some(retention.into());
+        self
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -146,12 +160,17 @@ impl<O> Workflow<O> {
         self.step_timeout
     }
 
+    pub fn retention(&self) -> Option<Retention> {
+        self.retention
+    }
+
     /// The same workflow, its result read as JSON: workflows of different results in one `Vec`.
     pub fn untyped(&self) -> Untyped {
         Workflow {
             name: self.name.clone(),
             version: self.version,
             step_timeout: self.step_timeout,
+            retention: self.retention,
             run: self.run.clone(),
             output: PhantomData,
         }
@@ -167,7 +186,8 @@ impl<O> Workflow<O> {
 pub(crate) struct Workflows(Arc<HashMap<(String, Option<u32>), Untyped>>);
 
 impl Workflows {
-    pub(crate) fn new(workflows: Vec<Untyped>) -> Result<Self> {
+    /// The workflows of a worker whose least retention is `retention_min`.
+    pub(crate) fn new(workflows: Vec<Untyped>, retention_min: Duration) -> Result<Self> {
         let mut map = HashMap::new();
         for w in workflows {
             let name = w.name.clone();
@@ -184,7 +204,30 @@ impl Workflows {
                 "a worker needs at least one workflow".into(),
             ));
         }
+        // The core keeps one retention per name.
+        let mut retentions: HashMap<&str, Option<Retention>> = HashMap::new();
+        for ((name, _), w) in &map {
+            if let Some(r) = w.retention {
+                r.check(
+                    retention_min,
+                    &format!("the retention of workflow {name:?}"),
+                )?;
+            }
+            if *retentions.entry(name).or_insert(w.retention) != w.retention {
+                return Err(Error::ConfigError(format!(
+                    "the versions of workflow {name:?} give different retentions"
+                )));
+            }
+        }
         Ok(Self(Arc::new(map)))
+    }
+
+    /// The retention the workflows of `name` give, the same for all its versions.
+    pub(crate) fn retention(&self, name: &str) -> Option<Retention> {
+        self.0
+            .iter()
+            .find(|((n, _), _)| n == name)
+            .and_then(|(_, w)| w.retention)
     }
 
     pub(crate) fn get(&self, name: &str, version: Option<u32>) -> Option<&Untyped> {
@@ -242,17 +285,6 @@ pub(crate) fn json(bytes: Vec<u8>) -> Result<layout::Value> {
     })
 }
 
-/// An input as JSON: an object, or `{}` for `()` and `None`.
-pub(crate) fn input_object(input: impl Serialize) -> Result<Vec<u8>> {
-    match serde_json::to_value(input)? {
-        serde_json::Value::Null => Ok(b"{}".to_vec()),
-        object @ serde_json::Value::Object(_) => Ok(serde_json::to_vec(&object)?),
-        other => Err(Error::InvalidArgument(format!(
-            "an input is a JSON object, not {other}"
-        ))),
-    }
-}
-
 pub(crate) fn decode<T: DeserializeOwned>(v: Option<layout::Value>) -> Result<T> {
     match v.and_then(|v| v.kind) {
         Some(value::Kind::Json(bytes)) => Ok(serde_json::from_slice(&bytes)?),
@@ -298,6 +330,8 @@ fn error_kind(e: &Error) -> &'static str {
         Error::RunExists { .. } => "RunExists",
         Error::RunFailed { .. } => "RunFailed",
         Error::WaitTimeout => "WaitTimeout",
+        Error::Stuck(_) => "Stuck",
+        Error::Unchecked(_) => "Unchecked",
         Error::ValueTooLarge { .. } => "ValueTooLarge",
         Error::NotInWorkflow => "NotInWorkflow",
         Error::Json(_) => "Json",

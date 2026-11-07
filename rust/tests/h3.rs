@@ -230,3 +230,65 @@ async fn a_result_is_waited_on_its_key_through_a_continuation() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_get_is_not_queued_behind_waiting_listings() {
+    let h3 = FakeH3::start().await;
+    let s = open(&h3).await;
+    let first = s.list("p0/", None, 1, wait(None, 0)).await.unwrap();
+    let etag = first.etag.expect("an etag");
+    // As a worker serving 4 workflows on 16 partitions holds 64.
+    let held: Vec<_> = (0..64)
+        .map(|i| {
+            let (s, etag) = (s.clone(), etag.clone());
+            tokio::spawn(async move {
+                s.list(&format!("p{i}/"), None, 1, wait(Some(&etag), 2))
+                    .await
+            })
+        })
+        .collect();
+    eventually("64 held listings", async || h3.holds() >= 64).await;
+    let started = Instant::now();
+    assert_eq!(s.get("k").await.unwrap(), None);
+    let took = started.elapsed();
+    for h in held {
+        h.await.unwrap().unwrap();
+    }
+    assert!(
+        took < Duration::from_millis(500),
+        "a get took {took:?} behind 64 held listings"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_run_ends_promptly_with_4_workflows_on_16_partitions() {
+    let h3 = FakeH3::start().await;
+    let flows: Vec<Workflow<u32>> = ["a", "b", "c", "d"]
+        .into_iter()
+        .map(|n| Workflow::without_input(&format!("pool-{n}"), |_c| async { Ok(1) }))
+        .collect();
+    let sub = Substantial::create(h3.url("pool").as_str())
+        .partitions(16)
+        .credentials(FakeH3::credentials())
+        .await
+        .unwrap();
+    let worker = sub
+        .worker(flows.iter().collect::<Vec<_>>())
+        .preset(Preset::Script)
+        .start()
+        .unwrap();
+    eventually("a held listing per workflow and partition", async || {
+        h3.holds() >= 64
+    })
+    .await;
+    let started = Instant::now();
+    let run = sub.start(&flows[0], ()).await.unwrap();
+    let value = run.result().timeout(Duration::from_secs(10)).await;
+    assert_eq!(value.unwrap(), 1);
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(2), "a run took {took:?}");
+    tokio::time::timeout(Duration::from_secs(30), worker.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
+}

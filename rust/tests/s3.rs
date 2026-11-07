@@ -3,9 +3,9 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -13,6 +13,7 @@ use common::{retry, s3_url};
 use futures::{StreamExt, TryStreamExt};
 use substantial::__internal::{self as internal, Create, ListWait, S3Location};
 use substantial::{Credentials, Error, Keys, Substantial};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[test]
 fn urls_need_every_part() {
@@ -38,6 +39,11 @@ fn urls_need_every_part() {
         "s3://h/b/ns",
         "s3://h/b/ns?region=",
         "s3://h/b/ns?region=r&region=s",
+        "s3://h/b/ns?region=us_east",
+        "s3://h/b/ns?region=US-EAST-1",
+        "s3://h/b/ns?region=-r",
+        "s3://h/b/ns?region=r-",
+        "s3://h/b/ns?region=us%20east",
         "s3://h/b/ns?region=r&endpoint=http://h",
         "s3://h/b/ns?region=r&wait=true",
         "s3://h/b?region=r",
@@ -49,6 +55,8 @@ fn urls_need_every_part() {
         "s3://h/b/a//c?region=r",
         "s3:///b/ns?region=r",
         "s3://k:s@h/b/ns?region=r",
+        "s3://@h/b/ns?region=r",
+        "s3://:@h/b/ns?region=r",
         "s3://h/b/ns?region=r#x",
         "s3+https://h/b/ns?region=r",
         "gs://h/b/ns?region=r",
@@ -58,6 +66,13 @@ fn urls_need_every_part() {
             "{url}"
         );
     }
+    let long = format!("s3://h/b/ns?region={}", "r".repeat(64));
+    assert!(matches!(
+        S3Location::parse(&long),
+        Err(Error::ConfigError(_))
+    ));
+    let longest = format!("s3://h/b/ns?region={}", "r".repeat(63));
+    assert_eq!(S3Location::parse(&longest).unwrap().region, "r".repeat(63));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -225,4 +240,91 @@ async fn a_credentials_provider_is_called_again_near_expiry() {
         2,
         "the next request calls it again"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_provider_that_never_answers_fails_each_attempt_within_its_timeout() {
+    let calls = Arc::new(AtomicU32::new(0));
+    let counter = calls.clone();
+    let provider = Credentials::provider(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        std::future::pending::<Result<Keys, &str>>()
+    });
+    let s = internal::open("s3+http://127.0.0.1:1/b/ns?region=r", &provider, retry()).unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(3600), s.get("k")).await;
+    let failure = got.expect("the attempts end").unwrap_err();
+    assert_eq!(
+        failure.message,
+        "credentials provider: no keys within 60000 ms (after 5 attempts)"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        5,
+        "asked again at each attempt"
+    );
+}
+
+/// A server on 127.0.0.1 answering every request with `answer`, then closing the connection;
+/// returns its URL and the method of every request.
+async fn raw_server(answer: &'static [u8]) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let seen = methods.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut buf).await.unwrap();
+                head.extend_from_slice(&buf[..n]);
+            }
+            let method = String::from_utf8_lossy(&head)
+                .split(' ')
+                .next()
+                .unwrap()
+                .to_owned();
+            seen.lock().unwrap().push(method);
+            socket.write_all(answer).await.unwrap();
+            socket.shutdown().await.unwrap();
+        }
+    });
+    (
+        format!("s3+http://127.0.0.1:{port}/b/ns?region=us-east-1"),
+        methods,
+    )
+}
+
+fn fake() -> Credentials {
+    Credentials::S3 {
+        access_key_id: "fake".into(),
+        secret_access_key: "fake-secret".into(),
+        session_token: None,
+    }
+}
+
+#[tokio::test]
+async fn a_body_cut_short_is_retried_as_transient() {
+    let (url, methods) = raw_server(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nabc").await;
+    let s = internal::open(&url, &fake(), retry()).unwrap();
+    let failure = s.get("k").await.unwrap_err();
+    assert!(
+        failure.message.ends_with("(after 5 attempts)"),
+        "{failure:?}"
+    );
+    assert_eq!(*methods.lock().unwrap(), ["GET"; 5]);
+}
+
+#[tokio::test]
+async fn a_listing_without_is_truncated_is_complete() {
+    let (url, methods) = raw_server(
+        b"HTTP/1.1 200 OK\r\ncontent-length: 113\r\n\r\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+          <ListBucketResult><Contents><Key>ns/q/a</Key></Contents></ListBucketResult>",
+    )
+    .await;
+    let s = internal::open(&url, &fake(), retry()).unwrap();
+    let listing = s.list("q/", None, 10, None).await.unwrap();
+    assert_eq!(listing.keys, ["q/a"]);
+    assert_eq!(*methods.lock().unwrap(), ["GET"]);
 }

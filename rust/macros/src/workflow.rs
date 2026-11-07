@@ -10,6 +10,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let mut name: Option<LitStr> = None;
     let mut version: Option<Expr> = None;
     let mut step_timeout: Option<Expr> = None;
+    let mut retention: Option<Expr> = None;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
             name = Some(meta.value()?.parse()?);
@@ -17,10 +18,12 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             version = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("step_timeout") {
             step_timeout = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("retention") {
+            retention = Some(meta.value()?.parse()?);
         } else {
-            return Err(
-                meta.error("expected `name = \"..\"`, `version = ..` or `step_timeout = ..`")
-            );
+            return Err(meta.error(
+                "expected `name = \"..\"`, `version = ..`, `step_timeout = ..` or `retention = ..`",
+            ));
         }
         Ok(())
     });
@@ -73,6 +76,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     names::key(&name)?;
     let version = version.map(|v| quote!(.with_version(#v)));
     let step_timeout = step_timeout.map(|t| quote!(.with_step_timeout(#t)));
+    let retention = retention.map(|r| quote!(.with_retention(#r)));
 
     let (docs, attrs): (Vec<_>, Vec<_>) = f.attrs.drain(..).partition(|a| a.path().is_ident("doc"));
     let vis = f.vis.clone();
@@ -97,7 +101,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
             fn workflow(&self) -> ::substantial::Workflow<Self::Output> {
                 #f
-                ::substantial::Workflow::#constructor(#name, #body)#version #step_timeout
+                ::substantial::Workflow::#constructor(#name, #body)#version #step_timeout #retention
             }
         }
     })

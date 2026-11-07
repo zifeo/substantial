@@ -11,6 +11,16 @@ message RunSettings {
   uint64 continue_as_new_after_segments = 2;
   uint64 continue_as_new_after_bytes = 3;
   uint64 dedup_window_ms = 4;
+  // Required: recorded on the run's end segment.
+  Retention retention = 5;
+}
+
+// How long a run is kept after its chain's last run ends, then collected.
+message Retention {
+  oneof keep {
+    uint64 ms = 1;
+    Empty forever = 2;
+  }
 }
 
 message InboxMessage {

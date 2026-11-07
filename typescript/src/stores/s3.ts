@@ -1,21 +1,27 @@
-import { ConfigError } from "../errors.ts";
+import type { S3Client, S3ClientConfig, S3ServiceException } from "@aws-sdk/client-s3";
+import { ConfigError, messageOf } from "../errors.ts";
 import type { StoreRetry } from "../settings.ts";
 import { type CredentialsArg, Keys } from "./credentials.ts";
 import * as retry from "./retry.ts";
 import { Ambiguous, Fault, Refused, Transient } from "./retry.ts";
-import { errorCode, errorText, parseListing } from "./s3xml.ts";
-import { canonicalQuery, encode, sign } from "./sigv4.ts";
 import type { Capabilities, Create, Listing, ListOptions, ListWait, Store } from "./store.ts";
 import { refuseWait, StoreFailure } from "./store.ts";
 
+/** `@aws-sdk/client-s3`, loaded when an S3 store is opened. */
+export type Sdk = typeof import("@aws-sdk/client-s3");
+
 /** ListObjectsV2 returns at most this many keys a page. */
 export const PAGE = 1000;
-// fetch has no connect timeout of its own: the attempt's covers the connection too.
+const CONNECT_MS = 5_000;
 const ATTEMPT_MS = 60_000;
 export const WAIT_SECONDS = "x-substantial-wait-seconds";
 export const WAIT_ETAG = "x-substantial-wait-etag";
 export const LISTING_ETAG = "x-substantial-listing-etag";
 const MAX_WAIT_SECONDS = 20;
+/** A region as AWS names them, a DNS label of lowercase letters, digits and hyphens. */
+const REGION = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const REGION_RULE =
+  "1 to 63 lowercase letters, digits and hyphens, neither starting nor ending with a hyphen";
 const SCHEMES: Record<string, { wait: boolean; protocol: "https" | "http" }> = {
   "s3:": { wait: false, protocol: "https" },
   "s3+http:": { wait: false, protocol: "http" },
@@ -44,9 +50,9 @@ export function parseS3Url(url: string): S3Location {
   const scheme = SCHEMES[parsed.protocol];
   if (scheme === undefined) throw invalid("not an s3:// or h3:// URL");
   if (url.includes("#")) throw invalid("a store URL takes no fragment");
-  if (parsed.username !== "" || parsed.password !== "") {
-    throw invalid("credentials go in `credentials`, not in the URL");
-  }
+  // The raw authority: `URL` drops an empty userinfo, as in `s3://@host`.
+  const authority = url.slice(parsed.protocol.length + 2).split(/[/?#]/, 1)[0] ?? "";
+  if (authority.includes("@")) throw invalid("credentials go in `credentials`, not in the URL");
   if (parsed.hostname === "") throw invalid("names no endpoint");
   const defaultPort = scheme.protocol === "https" ? "443" : "80";
   const port = parsed.port === "" || parsed.port === defaultPort ? "" : `:${parsed.port}`;
@@ -65,6 +71,8 @@ export function parseS3Url(url: string): S3Location {
   });
   const region = query.get("region") ?? "";
   if (region === "") throw invalid("the query parameter region is required");
+  if (!REGION.test(region))
+    throw invalid(`the region ${JSON.stringify(region)} is not ${REGION_RULE}`);
   query.delete("region");
   const unknown = [...query.keys()][0];
   if (unknown !== undefined) throw invalid(`unknown query parameter ${unknown}`);
@@ -79,7 +87,7 @@ export function parseS3Url(url: string): S3Location {
 }
 
 /** The headers of a waiting listing, signed with the request. */
-function waitHeaders(wait: ListWait | undefined, maxKeys: number): Record<string, string> {
+export function waitHeaders(wait: ListWait | undefined, maxKeys: number): Record<string, string> {
   if (wait === undefined) return {};
   // The listing etag covers one page, so a waiting listing is never continued.
   if (maxKeys > PAGE) throw new Refused(`a waiting listing takes at most ${PAGE} keys`);
@@ -94,45 +102,98 @@ function waitHeaders(wait: ListWait | undefined, maxKeys: number): Record<string
   return headers;
 }
 
-interface Answer {
-  readonly status: number;
-  readonly headers: Headers;
-  readonly body: Uint8Array;
+/** The S3 error answer `e` is; any other failure is thrown again. */
+function refusal(what: string, e: unknown): { status: number; code: string; message: string } {
+  const status = (e as Partial<S3ServiceException>)?.$metadata?.httpStatusCode;
+  if (status === undefined) throw e;
+  const { name: code, message } = e as S3ServiceException;
+  const text = message && message !== "UnknownError" ? `${code}: ${message}` : code;
+  return { status, code, message: `${what}: HTTP ${status} ${text}` };
 }
 
+const transient = (message: string) => new Transient(message);
+
 /** Classifies the failure of an operation other than a create, which none makes ambiguous. */
-function statusFault(what: string, answer: Answer): Fault {
-  const message = `${what}: HTTP ${answer.status} ${errorText(answer.body)}`;
-  const s = answer.status;
+function statusFault(r: { status: number; message: string }): Fault {
+  const s = r.status;
   return s >= 500 || s === 408 || s === 409 || s === 429
-    ? new Transient(message)
-    : new Refused(message);
+    ? new Transient(r.message)
+    : new Refused(r.message);
+}
+
+/** The keys the SDK signs with: those `Keys.get` resolved for the request. The SDK would ask a
+ * provider twice a request near expiry, so `Keys` decides when to ask it, as in the Rust host. */
+function sdkCredentials(keys: Keys): NonNullable<S3ClientConfig["credentials"]> {
+  return async () => {
+    const { value: credentials, expiresAt } = keys.current;
+    return {
+      accessKeyId: credentials.accessKeyId,
+      secretAccessKey: credentials.secretAccessKey,
+      ...(credentials.sessionToken === undefined ? {} : { sessionToken: credentials.sessionToken }),
+      // The SDK keeps keys without an expiration for good, and reads others again from 5 minutes
+      // before it, when `Keys` refreshes them.
+      ...(expiresAt === undefined ? {} : { expiration: new Date(expiresAt) }),
+    };
+  };
+}
+
+/** The request and response of a middleware, as the SDK's HTTP handler gives them. */
+interface Http {
+  readonly request: { headers: Record<string, string> };
+}
+interface Answered {
+  readonly response: { headers: Record<string, string | undefined> };
 }
 
 /** `s3://<endpoint>/<bucket>/<ns>?region=<r>`: one object per key under the prefix `<ns>/`,
  * created with `If-None-Match: *`. `h3://` is the same adapter, its listings declared able to
- * wait. Requests go through the `fetch` given, never retried by it: `storeRetry` is the only
+ * wait. Requests go through `@aws-sdk/client-s3`, its own retries off: `storeRetry` is the only
  * retry. */
 export class S3Store implements Store {
   readonly capabilities: Capabilities;
-  readonly #location: S3Location;
+  readonly #sdk: Sdk;
   readonly #keys: Keys;
+  readonly #client: S3Client;
+  readonly #bucket: string;
   readonly #prefix: string;
   readonly #retry: StoreRetry;
-  readonly #fetch: typeof fetch;
   readonly #closing = new AbortController();
 
-  constructor(
-    location: S3Location,
-    credentials: CredentialsArg,
-    storeRetry: StoreRetry,
-    fetcher: typeof fetch,
-  ) {
-    this.#keys = new Keys(credentials);
-    this.#location = location;
+  constructor(location: S3Location, credentials: CredentialsArg, storeRetry: StoreRetry, sdk: Sdk) {
+    this.#sdk = sdk;
+    this.#keys = new Keys(credentials, ATTEMPT_MS);
+    this.#client = new sdk.S3Client({
+      endpoint: location.endpoint,
+      region: location.region,
+      forcePathStyle: true,
+      credentials: sdkCredentials(this.#keys),
+      maxAttempts: 1,
+      // The SDK reads each of these from the environment and the shared files unless given: the
+      // URL and the credentials alone define the store, as in every host.
+      retryMode: "standard",
+      useFipsEndpoint: false,
+      useDualstackEndpoint: false,
+      useArnRegion: false,
+      disableS3ExpressSessionAuth: false,
+      authSchemePreference: [],
+      requestHandler: {
+        connectionTimeout: CONNECT_MS,
+        requestTimeout: ATTEMPT_MS,
+        // No cap, as in every host: a waiting listing holds its socket up to 20 s, one per
+        // workflow and partition served and per `result` waiter, and the SDK's cap of 50 would
+        // queue every other request behind them.
+        httpAgent: { maxSockets: Number.POSITIVE_INFINITY },
+        httpsAgent: { maxSockets: Number.POSITIVE_INFINITY },
+      },
+      // S3-compatible stores that predate flexible checksums refuse their headers.
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
+      // `Expect: 100-continue` costs a round trip per create, of a few bytes each.
+      expectContinueHeader: false,
+    });
+    this.#bucket = location.bucket;
     this.#prefix = `${location.namespace}/`;
     this.#retry = storeRetry;
-    this.#fetch = fetcher;
     this.capabilities = { wait: location.wait };
   }
 
@@ -140,87 +201,74 @@ export class S3Store implements Store {
     return `${this.#prefix}${key}`;
   }
 
-  async #send(
-    method: string,
-    key: string | undefined,
-    params: Record<string, string> = {},
-    body: Uint8Array = new Uint8Array(),
-    headers: Record<string, string> = {},
-  ): Promise<Answer> {
+  /** One request; a failure without an answer throws `failed`'s fault. */
+  async #send<O>(
+    what: string,
+    failed: (message: string) => Fault,
+    request: (options: { abortSignal: AbortSignal }) => Promise<O>,
+    abandoned?: AbortSignal,
+  ): Promise<O> {
     if (this.#closing.signal.aborted) throw new Refused("the store is closed");
-    const loc = this.#location;
-    let path = `/${encode(loc.bucket)}`;
-    if (key !== undefined) path += `/${encode(this.#full(key), true)}`;
-    const query = canonicalQuery(params);
-    const credentials = await this.#keys.get();
-    const { host: _, ...signed } = await sign({
-      method,
-      host: loc.host,
-      path,
-      query,
-      headers,
-      payload: body,
-      credentials,
-      region: loc.region,
-      at: new Date(),
-    });
-    const url = `${loc.endpoint}${path}${query === "" ? "" : `?${query}`}`;
+    if (abandoned?.aborted) throw new Refused(`${what}: abandoned`);
+    await this.#keys.get();
     // A request that hangs must become an ambiguous outcome, not a stuck worker.
-    const signal = AbortSignal.any([this.#closing.signal, AbortSignal.timeout(ATTEMPT_MS)]);
+    const signals = [this.#closing.signal, AbortSignal.timeout(ATTEMPT_MS)];
+    const abortSignal = AbortSignal.any(
+      abandoned === undefined ? signals : [...signals, abandoned],
+    );
     try {
-      const response = await this.#fetch(url, {
-        method,
-        headers: signed,
-        ...(method === "PUT" ? { body: body as Uint8Array<ArrayBuffer> } : {}),
-        redirect: "manual",
-        signal,
-      });
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      return { status: response.status, headers: response.headers, body: bytes };
+      return await request({ abortSignal });
     } catch (e) {
+      if (e instanceof Fault) throw e;
       if (this.#closing.signal.aborted) throw new Refused("the store is closed");
-      throw e;
+      if (abandoned?.aborted) throw new Refused(`${what}: abandoned`);
+      if ((e as Partial<S3ServiceException>)?.$metadata?.httpStatusCode !== undefined) throw e;
+      throw failed(`${what}: ${messageOf(e)}`);
     }
   }
 
   async #put(key: string, data: Uint8Array): Promise<Create> {
-    let answer: Answer;
+    const what = `create ${key}`;
+    const command = new this.#sdk.PutObjectCommand({
+      Bucket: this.#bucket,
+      Key: this.#full(key),
+      Body: data,
+      IfNoneMatch: "*",
+    });
     try {
-      answer = await this.#send("PUT", key, {}, data, { "if-none-match": "*" });
+      await this.#send(
+        what,
+        (m) => new Ambiguous(m),
+        (o) => this.#client.send(command, o),
+      );
     } catch (e) {
-      if (e instanceof Fault) throw e;
-      throw new Ambiguous(`create ${key}: ${e instanceof Error ? e.message : e}`);
+      const r = refusal(what, e);
+      if (r.status === 412) return "exists";
+      // AWS: a concurrent conditional write of the key was in flight, this one did not happen.
+      if (r.status === 409 || r.status === 429) throw new Transient(r.message);
+      if (r.status >= 500 || r.status === 408) throw new Ambiguous(r.message);
+      throw new Refused(r.message);
     }
-    const s = answer.status;
-    if (s >= 200 && s < 300) return "created";
-    if (s === 412) return "exists";
-    const message = `create ${key}: HTTP ${s} ${errorText(answer.body)}`;
-    // AWS: a concurrent conditional write of the key was in flight, this one did not happen.
-    if (s === 409 || s === 429) throw new Transient(message);
-    if (s >= 500 || s === 408) throw new Ambiguous(message);
-    throw new Refused(message);
-  }
-
-  async #request(
-    what: string,
-    method: string,
-    key?: string,
-    params?: Record<string, string>,
-    headers?: Record<string, string>,
-  ): Promise<Answer> {
-    try {
-      return await this.#send(method, key, params, undefined, headers);
-    } catch (e) {
-      if (e instanceof Fault) throw e;
-      throw new Transient(`${what}: ${e instanceof Error ? e.message : e}`);
-    }
+    return "created";
   }
 
   async #read(key: string): Promise<Uint8Array | undefined> {
-    const answer = await this.#request(`get ${key}`, "GET", key);
-    if (answer.status === 200) return answer.body;
-    if (answer.status === 404 && errorCode(answer.body) === "NoSuchKey") return undefined;
-    throw statusFault(`get ${key}`, answer);
+    const what = `get ${key}`;
+    const command = new this.#sdk.GetObjectCommand({ Bucket: this.#bucket, Key: this.#full(key) });
+    let body: { transformToByteArray(): Promise<Uint8Array> } | undefined;
+    try {
+      ({ Body: body } = await this.#send(what, transient, (o) => this.#client.send(command, o)));
+    } catch (e) {
+      const r = refusal(what, e);
+      if (r.status === 404 && r.code === "NoSuchKey") return undefined;
+      throw statusFault(r);
+    }
+    if (body === undefined) throw new Transient(`${what}: an answer without a body`);
+    try {
+      return await body.transformToByteArray();
+    } catch (e) {
+      throw new Transient(`${what}: ${messageOf(e)}`);
+    }
   }
 
   async #listOnce(prefix: string, options: ListOptions): Promise<Listing> {
@@ -230,24 +278,43 @@ export class S3Store implements Store {
     let after = startAfter === undefined ? undefined : this.#full(startAfter);
     const headers = waitHeaders(wait, maxKeys);
     while (keys.length < maxKeys) {
-      const params: Record<string, string> = {
-        "list-type": "2",
-        prefix: this.#full(prefix),
-        "max-keys": String(Math.min(maxKeys - keys.length, PAGE)),
-      };
-      if (after !== undefined) params["start-after"] = after;
-      const answer = await this.#request(`list ${prefix}`, "GET", undefined, params, headers);
-      if (answer.status !== 200) throw statusFault(`list ${prefix}`, answer);
-      if (wait !== undefined) etag = answer.headers.get(LISTING_ETAG) ?? undefined;
-      const page = parseListing(answer.body);
-      if (page === undefined) throw new Transient(`list ${prefix}: not a ListObjectsV2 answer`);
-      for (const full of page.keys) {
+      const command = new this.#sdk.ListObjectsV2Command({
+        Bucket: this.#bucket,
+        Prefix: this.#full(prefix),
+        MaxKeys: Math.min(maxKeys - keys.length, PAGE),
+        ...(after === undefined ? {} : { StartAfter: after }),
+      });
+      if (wait !== undefined) {
+        // At the build step, so the headers are signed with the request.
+        command.middlewareStack.add(
+          (next) => async (args) => {
+            Object.assign((args as unknown as Http).request.headers, headers);
+            const result = await next(args);
+            etag = (result as unknown as Answered).response.headers[LISTING_ETAG];
+            return result;
+          },
+          { step: "build", name: "substantialWait" },
+        );
+      }
+      const what = `list ${prefix}`;
+      let page: { Contents?: { Key?: string }[]; IsTruncated?: boolean | undefined };
+      try {
+        page = await this.#send(
+          what,
+          transient,
+          (o) => this.#client.send(command, o),
+          options.signal,
+        );
+      } catch (e) {
+        throw statusFault(refusal(what, e));
+      }
+      for (const { Key: full = "" } of page.Contents ?? []) {
         if (!full.startsWith(this.#prefix)) {
           throw new Refused(`listed ${JSON.stringify(full)} outside the namespace`);
         }
         keys.push(full.slice(this.#prefix.length));
       }
-      if (wait !== undefined || !(page.truncated && keys.length > 0)) break;
+      if (wait !== undefined || !(page.IsTruncated && keys.length > 0)) break;
       after = this.#full(keys[keys.length - 1] as string);
     }
     if (wait !== undefined && !etag) {
@@ -259,10 +326,18 @@ export class S3Store implements Store {
   }
 
   async #remove(key: string): Promise<void> {
-    const answer = await this.#request(`delete ${key}`, "DELETE", key);
-    if (answer.status >= 200 && answer.status < 300) return;
-    if (answer.status === 404 && errorCode(answer.body) === "NoSuchKey") return;
-    throw statusFault(`delete ${key}`, answer);
+    const what = `delete ${key}`;
+    const command = new this.#sdk.DeleteObjectCommand({
+      Bucket: this.#bucket,
+      Key: this.#full(key),
+    });
+    try {
+      await this.#send(what, transient, (o) => this.#client.send(command, o));
+    } catch (e) {
+      const r = refusal(what, e);
+      if (r.status === 404 && r.code === "NoSuchKey") return;
+      throw statusFault(r);
+    }
   }
 
   create(key: string, data: Uint8Array): Promise<Create> {
@@ -288,19 +363,28 @@ export class S3Store implements Store {
     return retry.withRetry(this.#retry, () => this.#remove(key));
   }
 
+  async open(): Promise<void> {}
+
   /** Aborts the requests in flight; any later operation fails. */
   async close(): Promise<void> {
     this.#closing.abort();
+    this.#client.destroy();
   }
 }
 
 /** Resolves once the `result` at `key` exists, holding waiting listings that take its key as
  * their prefix: a result waited on is seen as soon as it is created, in one request per
- * `MAX_WAIT_SECONDS` meanwhile. */
-export async function resultCreated(store: Store, key: string): Promise<void> {
+ * `MAX_WAIT_SECONDS` meanwhile; or once `deadline`, a `performance.now()`, has passed. `signal`
+ * aborts the listing in flight and ends the wait. */
+export async function resultCreated(
+  store: Store,
+  key: string,
+  deadline: number,
+  signal: AbortSignal,
+): Promise<void> {
   let wait: ListWait = { seconds: 0 };
-  for (;;) {
-    const page = await store.list(key, { maxKeys: 1, wait });
+  while (performance.now() < deadline && !signal.aborted) {
+    const page = await store.list(key, { maxKeys: 1, wait, signal });
     if (page.keys.includes(key)) return;
     if (page.etag === undefined) {
       throw new StoreFailure(`a waiting listing answered without ${LISTING_ETAG}`);

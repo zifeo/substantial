@@ -39,6 +39,8 @@ export class FakeH3 {
   readonly listed: Listed[] = [];
   /** Every request, in the order received. */
   readonly requests: IncomingHttpHeaders[] = [];
+  /** The method of every request, in the order received. */
+  readonly methods: string[] = [];
   /** How many listings were held so far. */
   holds = 0;
   /** Answers waiting listings without their etag, as a server whose listings cannot wait. */
@@ -94,6 +96,7 @@ export class FakeH3 {
     body: Buffer,
   ): Promise<[number, string | Uint8Array, Record<string, string>?]> {
     this.requests.push(headers);
+    this.methods.push(method);
     const parsed = new URL(url, "http://h3");
     const path = decodeURIComponent(parsed.pathname);
     if (!path.startsWith(`/${BUCKET}`)) return error(404, "NoSuchBucket");

@@ -1,10 +1,11 @@
 // Stores and helpers shared by the tests; S3 only when `SUBSTANTIAL_S3_URL` is set (see
-// `dev/rustfs.compose.yaml`).
+// `dev/rustfs.compose.yaml`), Redis only when the variable of its topology is (see
+// `dev/redis*.compose.yaml`).
 import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import { workerWith } from "../src/client.ts";
 import { milliseconds, type Substantial, seconds, type Worker } from "../src/mod.ts";
 import { type InternalOptions, STORE_RETRY } from "../src/settings.ts";
@@ -15,10 +16,43 @@ import { type Listing, type ListOptions, type Store, StoreFailure } from "../src
 import type { AnyWorkflow } from "../src/workflow.ts";
 
 export const LONG = seconds(10);
-export const ADAPTERS = ["memory", "file", "s3"] as const;
+const REDIS_URLS = {
+  redis: "SUBSTANTIAL_REDIS_URL",
+  "redis-sentinel": "SUBSTANTIAL_REDIS_SENTINEL_URL",
+  "redis-cluster": "SUBSTANTIAL_REDIS_CLUSTER_URL",
+} as const;
+export type Topology = keyof typeof REDIS_URLS;
+export const ADAPTERS = [
+  "memory",
+  "file",
+  "s3",
+  "redis",
+  "redis-sentinel",
+  "redis-cluster",
+] as const;
 export type Adapter = (typeof ADAPTERS)[number];
 const S3_URL = process.env.SUBSTANTIAL_S3_URL;
 export const NO_S3 = S3_URL === undefined ? "SUBSTANTIAL_S3_URL is not set" : false;
+
+/** Why the tests of `topology` are skipped, or `false` when its variable is set. */
+export function noRedis(topology: Topology): string | false {
+  const name = REDIS_URLS[topology];
+  return process.env[name] === undefined ? `${name} is not set` : false;
+}
+
+/** A fresh namespace under the one the variable of `topology` names. */
+export function redisUrl(topology: Topology): string {
+  const url = process.env[REDIS_URLS[topology]];
+  if (url === undefined) throw new Error(`${REDIS_URLS[topology]} is not set`);
+  const q = url.indexOf("?");
+  return `${url.slice(0, q)}/${token()}${url.slice(q)}`;
+}
+
+function skipped(adapter: Adapter): string | false {
+  if (adapter === "s3") return NO_S3;
+  if (adapter === "memory" || adapter === "file") return false;
+  return noRedis(adapter);
+}
 
 export function token(bytes = 8): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) =>
@@ -40,7 +74,9 @@ export function tempDir(): string {
 }
 
 /** A fresh namespace in an adapter of this host, and what removes it. */
-export function freshStore(adapter: Adapter): { store: Store; dispose: () => Promise<void> } {
+export async function freshStore(
+  adapter: Adapter,
+): Promise<{ store: Store; dispose: () => Promise<void> }> {
   if (adapter === "memory") {
     return { store: new MemoryStore(`test-${token()}`), dispose: async () => {} };
   }
@@ -51,21 +87,25 @@ export function freshStore(adapter: Adapter): { store: Store; dispose: () => Pro
       dispose: () => rm(dir, { recursive: true, force: true }),
     };
   }
-  const store = openStore(s3Url(), "env");
+  const store =
+    adapter === "s3"
+      ? await openStore(s3Url(), "env")
+      : await openStore(redisUrl(adapter), undefined);
   return { store, dispose: () => store.close() };
 }
 
-/** A test run on a fresh store of each adapter; on S3 only when `SUBSTANTIAL_S3_URL` is set. */
+/** A test run on a fresh store of each adapter; on S3 and Redis only when their variables are
+ * set. */
 export function eachAdapter(
   title: string,
-  fn: (store: Store, adapter: Adapter) => Promise<void>,
+  fn: (store: Store, adapter: Adapter, t: TestContext) => Promise<void>,
   adapters: readonly Adapter[] = ADAPTERS,
 ): void {
   for (const adapter of adapters) {
-    test(`${title} [${adapter}]`, { skip: adapter === "s3" && NO_S3 }, async () => {
-      const { store, dispose } = freshStore(adapter);
+    test(`${title} [${adapter}]`, { skip: skipped(adapter) }, async (t) => {
+      const { store, dispose } = await freshStore(adapter);
       try {
-        await fn(store, adapter);
+        await fn(store, adapter, t);
       } finally {
         await dispose();
       }
@@ -148,6 +188,10 @@ export class Recording implements Store {
   async delete(key: string): Promise<void> {
     await this.#gate();
     await this.inner.delete(key);
+  }
+
+  open(): Promise<void> {
+    return this.inner.open();
   }
 
   close(): Promise<void> {

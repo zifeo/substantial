@@ -68,7 +68,13 @@ function config(): agent.AgentConfig {
     opRetries: 5,
     waitSeconds: 20,
     seed: new Uint8Array(32),
-    settings: { continueAsNewAfterSegments: 1000n },
+    tombstoneMs: 7n * 86_400_000n,
+    retentionMinMs: 3_600_000n,
+    recheckMs: 86_400_000n,
+    settings: {
+      continueAsNewAfterSegments: 1000n,
+      retention: { keep: { case: "forever", value: {} } },
+    },
   });
 }
 

@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import logging
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from substantial._proto import agent, boundary, json_value, layout, run
+from substantial.clock import Clock, Inbox
 from substantial.context import Context
 from substantial.core import Core
-from substantial.durations import millis, until
-from substantial.errors import Cancelled, ContinuedAsNew, ProtocolError, StoreError, failure_of
+from substantial.durations import millis
+from substantial.errors import (
+    Cancelled,
+    ContinuedAsNew,
+    ProtocolError,
+    StepFailed,
+    StoreError,
+    failure_of,
+)
 from substantial.executor import Executor
 from substantial.machines import RunMachine
-from substantial.scheduler import Clock, Shared
+from substantial.scheduler import Shared
 from substantial.step import CURRENT, attempt
 from substantial.stores import Store, perform
 from substantial.workflow import Workflow
@@ -34,8 +43,12 @@ class Channel:
     """What the agent loop tells a replay: the answer to its commit, or to stop."""
 
     def __init__(self) -> None:
-        self.stop = asyncio.Event()
-        self.committed: asyncio.Queue[agent.AgentCommand.Committed] = asyncio.Queue()
+        self.stop: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self.committed: Inbox[agent.AgentCommand.Committed] = Inbox()
+
+    def stop_replay(self) -> None:
+        if not self.stop.done():
+            self.stop.set_result(None)
 
 
 class Replay:
@@ -69,14 +82,6 @@ def _input_bytes(start: layout.Start) -> bytes:
     if which == "json":
         return start.input.json
     raise ProtocolError(f"input other than inline JSON is not supported yet: {start.input}")
-
-
-async def _first(*aws: Any) -> set[asyncio.Future]:
-    tasks = {asyncio.ensure_future(a) for a in aws}
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    return done
 
 
 async def _drive(
@@ -116,7 +121,7 @@ async def _drive(
             code = _fail_code(shared, code)
             if shared.fatal is not None:
                 raise ProtocolError(f"a call of the code failed: {shared.fatal}")
-            if channel.stop.is_set():
+            if channel.stop.done():
                 return dropped()
             if not channel.committed.empty():
                 raise ProtocolError("committed without a commit")
@@ -142,16 +147,13 @@ async def _drive(
             elif which == "wait_steps":
                 if not attempts:
                     raise ProtocolError("wait_steps with no step in flight")
-                timer = None
-                if nxt.wait_steps.HasField("until"):
-                    timer = until(nxt.wait_steps.until, clock())
-                stop = asyncio.ensure_future(channel.stop.wait())
-                await asyncio.wait({*attempts, stop}, timeout=timer, return_when="FIRST_COMPLETED")
-                stop.cancel()
+                timer = nxt.wait_steps.until if nxt.wait_steps.HasField("until") else None
+                await clock.wait({*attempts, channel.stop}, timer)
             elif which == "store":
-                read = asyncio.ensure_future(perform(r.store, nxt.store))
-                await _first(read, channel.stop.wait())
-                if channel.stop.is_set():
+                read = clock.spawn(perform(r.store, nxt.store), f"read of {data.run}")
+                await clock.wait({read, channel.stop}, None)
+                if channel.stop.done():
+                    read.cancel()
                     return dropped()
                 result = read.result()
                 if result.HasField("failed"):
@@ -188,10 +190,10 @@ async def _commit(
     """Hands a commit to the agent; whether the replay goes on."""
     n = commit.segment.n if commit.HasField("segment") else None
     emit(("commit", run_id, commit))
-    done = await _first(channel.committed.get(), channel.stop.wait())
-    if channel.stop.is_set():
+    await shared.clock.wait({channel.committed.signal(), channel.stop}, None)
+    if channel.stop.done():
         return False
-    acked = done.pop().result()
+    acked = channel.committed.get_nowait()
     if not acked.won:
         return False
     if n is not None and n != acked.n:
@@ -215,13 +217,13 @@ def _spawn_attempt(shared: Shared, e: run.Next.Execute) -> asyncio.Task:
     found = shared.step_body(e.call)
     if found is None:
         raise ProtocolError(f"execute of call {e.call} without a step")
-    body, key = found
+    body, name, key = found
     timeout_ms = e.timeout_ms if e.HasField("timeout_ms") else None
 
     async def run_attempt() -> tuple[int, int, run.Outcome]:
-        return e.call, e.attempt, await attempt(body, key, timeout_ms)
+        return e.call, e.attempt, await attempt(shared.clock, name, body, key, timeout_ms)
 
-    return asyncio.get_running_loop().create_task(run_attempt())
+    return shared.clock.spawn(run_attempt(), f"attempt of {key}")
 
 
 def _end_run(shared: Shared, code: asyncio.Task) -> None:
@@ -245,5 +247,13 @@ def _end_run(shared: Shared, code: asyncio.Task) -> None:
     else:
         f = failure_of(e)
         failure = layout.Failure(type=f.type, message=f.message, retryable=f.retryable)
+        if isinstance(e, StepFailed):
+            # A client's RunFailed reads the step's cause from it, as a StepFailed's from the core.
+            cause = {
+                "type": e.cause.type,
+                "message": e.cause.message,
+                "retryable": e.cause.retryable,
+            }
+            failure.details.CopyFrom(json_value(json.dumps({"error": cause}).encode()))
         end = run.End(failed=layout.Failed(error=failure))
     shared.call(run.Call(end=end))

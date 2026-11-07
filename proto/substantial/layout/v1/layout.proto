@@ -34,6 +34,9 @@ message Failure {
 message Parent {
   string run = 1;
   uint64 occurrence = 2;
+  // The parent's segment whose effects start the child: its collection waits until the parent can
+  // no longer redo them.
+  uint64 segment = 3;
 }
 
 // A message id a run consumed, and when: the at of its message event.
@@ -196,6 +199,8 @@ message Segment {
   Time next_wake = 3;
   string worker = 4;
   Time created_at = 5;
+  // On an end segment, how long the run is kept after it ends; absent to keep it forever.
+  optional uint64 retention_ms = 6;
 }
 
 // runs/<run>/snap/<n>: every event of segments 0 to n.
@@ -205,7 +210,7 @@ message Snapshot {
   Time next_wake = 3;
 }
 
-// runs/<run>/inbox/<time>-<id>
+// runs/<run>/inbox/<ord>-<id>
 message Message {
   string id = 1;
   string name = 2;
@@ -247,6 +252,14 @@ message Result {
   string reason = 4;
   optional string next = 5;
   Time ended_at = 6;
+  // When its writer created it: a collection waits until it is old enough that no worker that read
+  // the run without it may still write under the run.
+  Time written_at = 7;
+}
+
+// runs/<run>/gone: the run was collected, and its id stays taken until then.
+message Gone {
+  Time until = 1;
 }
 
 // pub/<chain>/<key>/<seq>-<n>-<i>

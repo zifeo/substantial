@@ -2,6 +2,7 @@
 //
 //   node --conditions=substantial-source dev/cross/cross.ts worker <url>   serves the workflow until SIGTERM
 //   node --conditions=substantial-source dev/cross/cross.ts client <url>   starts a run, messages it and prints its result as JSON
+//   node --conditions=substantial-source dev/cross/cross.ts start <url>    starts the run `same-input`, its input written its own way, and prints its chain and status as JSON
 import { type Context, milliseconds, minutes, Substantial, step, workflow } from "substantial";
 
 const LANGUAGE = "typescript";
@@ -26,8 +27,8 @@ const cross = workflow<Input, Output>(
 );
 
 const [mode, url] = process.argv.slice(2);
-if ((mode !== "worker" && mode !== "client") || url === undefined) {
-  console.error("usage: cross.ts worker|client <url>");
+if ((mode !== "worker" && mode !== "client" && mode !== "start") || url === undefined) {
+  console.error("usage: cross.ts worker|client|start <url>");
   process.exit(2);
 }
 
@@ -37,6 +38,9 @@ const sub = await Substantial.create(url, {
 });
 if (mode === "worker") {
   await sub.worker([cross], { preset: "script" }).serve();
+} else if (mode === "start") {
+  const run = await sub.start(cross, { name: "ada", delay_ms: 200 }, { id: "same-input" });
+  console.log(JSON.stringify({ chain: run.chain, status: await run.status() }));
 } else {
   const run = await sub.start(cross, { name: "ada", delay_ms: 200 }, { id: "cross-1" });
   await run.send("suffix", { text: "!", times: 3 }, { id: "suffix-1" });

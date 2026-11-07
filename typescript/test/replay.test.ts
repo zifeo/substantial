@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { create } from "@bufbuild/protobuf";
+import { RealClock } from "../src/clock.ts";
 import { CoreModule } from "../src/core.ts";
 import {
   type Context,
@@ -110,6 +111,7 @@ class Harness {
         continueAsNewAfterSegments: 1000n,
         continueAsNewAfterBytes: 8n << 20n,
         dedupWindowMs: 86_400_000n,
+        retention: { keep: { case: "forever", value: {} } },
       },
     });
   }
@@ -134,9 +136,14 @@ class Harness {
       }
     };
     const host = { store: this.store, stepTimeout: minutes(5) };
-    await replay(core, this.workflow, this.runInput(), () => time(this.now), emit, channel, host);
+    await replay(core, this.workflow, this.runInput(), fixed(now), emit, channel, host);
     return new Replayed(commits, await ended.promise);
   }
+}
+
+/** The real clock's waits at a fixed time. */
+function fixed(ms: number): RealClock {
+  return Object.assign(new RealClock(), { now: () => ms });
 }
 
 function counting<T>(name: string, value: T): { runs: number[]; counted: () => Promise<T> } {

@@ -2,6 +2,8 @@
 
 cross.py worker <url>    serves the workflow until SIGTERM
 cross.py client <url>    starts a run, messages it and prints its result as JSON
+cross.py start <url>     starts the run `same-input`, its input written its own way, and prints
+                         its chain and status as JSON
 """
 
 import asyncio
@@ -41,6 +43,9 @@ async def main(mode: str, url: str) -> None:
     sub = await Substantial.create(url, partitions=1, credentials=credentials)
     if mode == "worker":
         await sub.worker([cross], preset="script").serve()
+    elif mode == "start":
+        run = await sub.start(cross, {"delay_ms": 200.0, "name": "ada"}, id="same-input")
+        print(json.dumps({"chain": run.chain, "status": str(await run.status())}))
     else:
         run = await sub.start(cross, {"name": "ada", "delay_ms": 200}, id="cross-1")
         await run.send("suffix", {"text": "!", "times": 3}, id="suffix-1")
@@ -51,6 +56,6 @@ async def main(mode: str, url: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in ("worker", "client"):
-        sys.exit("usage: cross.py worker|client <url>")
+    if len(sys.argv) != 3 or sys.argv[1] not in ("worker", "client", "start"):
+        sys.exit("usage: cross.py worker|client|start <url>")
     asyncio.run(main(sys.argv[1], sys.argv[2]))

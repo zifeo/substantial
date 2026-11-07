@@ -138,6 +138,28 @@ eachAdapter("starts are idempotent by id", async (store) => {
   assert.equal(runs, 1, "one run");
 });
 
+eachAdapter("inputs are compared as canonical JSON", async (store) => {
+  const echo = workflow("echo", async (_c: Context, input: Record<string, unknown>) => input);
+  const sub = await createOn(store, { partitions: 1 });
+  const first = await sub.start(echo, { b: [1, { d: 2, c: "é" }], a: 0.5 }, { id: "same" });
+  const again = await sub.start(echo, { a: 0.5, b: [1, { c: "é", d: 2 }] }, { id: "same" });
+  assert.equal(first.chain, again.chain);
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2n ** 53n]) {
+    await assert.rejects(
+      sub.start(echo, { x: [bad] }),
+      (e) => e instanceof InvalidArgument && e.message.startsWith("the input is not JSON"),
+    );
+  }
+  await assert.rejects(
+    sub.start(echo, { x: "\ud800" }),
+    (e) => e instanceof InvalidArgument && e.message.startsWith("the input is not JSON"),
+  );
+  {
+    await using _ = script(sub, [echo]);
+    assert.deepEqual(await first.result({ timeout: LONG }), { a: 0.5, b: [1, { c: "é", d: 2 }] });
+  }
+});
+
 eachAdapter("names outside the rules are invalid arguments", async (store) => {
   const sub = await createOn(store, { partitions: 1 });
   const long = "a".repeat(101);

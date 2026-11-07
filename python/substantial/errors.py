@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -107,14 +108,16 @@ NEW_VERSION = "an incompatible change needs a new version (version=)"
 
 
 class RunFailed(SubstantialError):
-    """The run ended failed or cancelled; `status` is "failed" or "cancelled"."""
+    """The run ended failed or cancelled; `status` is "failed" or "cancelled". `cause` is the
+    `StepFailed.cause` of the step that failed it, else None."""
 
-    def __init__(self, run: str, status: str, error: Failure) -> None:
+    def __init__(self, run: str, status: str, error: Failure, cause: Failure | None) -> None:
         hint = f"; {NEW_VERSION}" if error.type == "NonDeterminism" else ""
         super().__init__(f"run {run} {status}: {error}{hint}")
         self.run = run
         self.status = status
         self.error = error
+        self.cause = cause
 
 
 class NonDeterminism(SubstantialError):
@@ -125,8 +128,22 @@ class NotInWorkflow(SubstantialError):
     pass
 
 
+def _rfc3339(t: datetime) -> str:
+    return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 class RunExists(SubstantialError):
-    pass
+    """`collected` when the id is taken by a run collected, `until` then."""
+
+    def __init__(self, id: str, *, until: datetime | None) -> None:
+        by = (
+            "another workflow, version or input"
+            if until is None
+            else f"a run collected, until {_rfc3339(until)}"
+        )
+        super().__init__(f"id {id} is taken by {by}")
+        self.collected = until is not None
+        self.until = until
 
 
 class InvalidArgument(SubstantialError):
@@ -138,7 +155,17 @@ class RunEnded(SubstantialError):
 
 
 class RunNotFound(SubstantialError):
-    pass
+    """`collected` when the chain's first run was collected, its id taken `until` then."""
+
+    def __init__(self, chain: str, *, until: datetime | None) -> None:
+        collected = (
+            ""
+            if until is None
+            else f": it was collected, and its id is taken until {_rfc3339(until)}"
+        )
+        super().__init__(f"no chain {chain}{collected}")
+        self.collected = until is not None
+        self.until = until
 
 
 class WaitTimeout(SubstantialError):
@@ -186,7 +213,7 @@ def error_from_failure(f: layout_pb2.Failure) -> SubstantialError:
     if failure.type == "StepFailed":
         return _step_failed(f, failure)
     if failure.type == "RunNotFound":
-        return RunNotFound(failure.message)
+        return _run_not_found(f)
     if failure.type == "RunEnded":
         return RunEnded(failure.message)
     return Failed(failure)
@@ -199,11 +226,40 @@ def _details(f: layout_pb2.Failure) -> dict[str, Any] | None:
     return d if isinstance(d, dict) else None
 
 
-def _step_failed(f: layout_pb2.Failure, failure: Failure) -> SubstantialError:
-    error = (_details(f) or {}).get("error")
+def _run_not_found(f: layout_pb2.Failure) -> SubstantialError:
+    d = _details(f) or {}
+    run, until = d.get("run"), d.get("until")
+    if not isinstance(run, str) or not isinstance(until, str | None):
+        return ProtocolError(f"RunNotFound with details {f.details}")
+    try:
+        return RunNotFound(run, until=None if until is None else datetime.fromisoformat(until))
+    except ValueError:
+        return ProtocolError(f"RunNotFound with details {f.details}")
+
+
+def _wrapped(details: Any) -> Failure | None:
+    """The failure a `StepFailed`'s details wrap, `{"error": {...}}`; None if they hold none."""
+    error = details.get("error") if isinstance(details, dict) else None
     if not isinstance(error, dict) or not {"type", "message", "retryable"} <= error.keys():
+        return None
+    return Failure(error["type"], error["message"], error["retryable"])
+
+
+def _step_failed(f: layout_pb2.Failure, failure: Failure) -> SubstantialError:
+    cause = _wrapped(_details(f))
+    if cause is None:
         return ProtocolError(f"StepFailed with details {f.details}")
-    return StepFailed(failure, Failure(error["type"], error["message"], error["retryable"]))
+    return StepFailed(failure, cause)
+
+
+def run_failed_cause(type_: str, details: Any) -> Failure | None:
+    """The cause of a run failed with `type_`: a `StepFailed`'s wraps it in its details."""
+    if type_ != "StepFailed":
+        return None
+    cause = _wrapped(details)
+    if cause is None:
+        raise ProtocolError(f"a run failed with StepFailed with details {details!r}")
+    return cause
 
 
 def _run_failed(f: layout_pb2.Failure) -> SubstantialError:
@@ -212,11 +268,14 @@ def _run_failed(f: layout_pb2.Failure) -> SubstantialError:
         return ProtocolError(f"RunFailed with details {f.details}")
     status, error, reason = d.get("status"), d.get("error"), d.get("reason")
     if status == "failed" and error is not None:
-        return RunFailed(
-            d["run"], status, Failure(error["type"], error["message"], error["retryable"])
-        )
+        failure = Failure(error["type"], error["message"], error["retryable"])
+        try:
+            cause = run_failed_cause(failure.type, error.get("details"))
+        except ProtocolError as e:
+            return e
+        return RunFailed(d["run"], status, failure, cause)
     if status == "cancelled" and reason is not None:
-        return RunFailed(d["run"], status, Failure("Cancelled", reason))
+        return RunFailed(d["run"], status, Failure("Cancelled", reason), None)
     return ProtocolError(f"RunFailed of {d.get('run')} as {status}")
 
 

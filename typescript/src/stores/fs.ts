@@ -228,5 +228,7 @@ export class FsStore implements Store {
     return retry.withRetry(this.#retry, () => deleteKey(this.#root, key));
   }
 
+  async open(): Promise<void> {}
+
   async close(): Promise<void> {}
 }

@@ -149,7 +149,7 @@ async def test_create_states_what_is_unknown_or_not_built() -> None:
     for url in ["file//tmp/x", "/tmp/x", "ftp://host/x"]:
         with pytest.raises(ConfigError, match=r"^unknown scheme .* memory://, file:, s3://"):
             await Substantial.create(url, partitions=1)
-    for url in ["redis://localhost:6379/0?namespace=x", "sqlite:x.db", "postgres://u@h/db"]:
+    for url in ["sqlite:x.db", "postgres://u@h/db"]:
         with pytest.raises(ConfigError, match="not available in this host yet"):
             await Substantial.create(url, partitions=1)
     with pytest.raises(ConfigError, match="give an absolute or relative path"):
@@ -257,14 +257,17 @@ async def test_a_worker_that_dies_logs_at_once_and_fails_the_waits(
     monkeypatch.setattr(AgentMachine, "next", next_)
     sub = await Substantial.create("memory://worker-dies", partitions=1)
     with pytest.raises(Trap, match="injected"):
-        async with script(sub, [waiting]):
+        async with script(sub, [waiting]) as worker:
             run = await sub.start(waiting)
             pending = asyncio.create_task(run.result(timeout=LONG))
             await asyncio.sleep(0.1)
+            assert worker.alive and worker.error is None
             dying = True
             async with asyncio.timeout(2):
                 with pytest.raises(Trap, match="injected"):
                     await pending
+            # What a readiness probe reads.
+            assert not worker.alive and isinstance(worker.error, Trap)
             stopped = [r for r in caplog.records if r.levelno == logging.ERROR]
             assert [r.getMessage() for r in stopped] == [stopped[0].getMessage()]
             assert stopped[0].getMessage().endswith("stopped: injected")

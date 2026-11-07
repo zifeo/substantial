@@ -45,5 +45,8 @@ class MemoryStore:
     async def delete(self, key: str) -> None:
         self._objects.pop(key, None)
 
+    async def open(self) -> None:
+        pass
+
     async def close(self) -> None:
         pass

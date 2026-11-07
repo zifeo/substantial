@@ -24,6 +24,9 @@ use crate::settings::StoreRetry;
 
 /// ListObjectsV2 returns at most this many keys a page.
 pub(super) const PAGE: u32 = 1000;
+/// A request that hangs must become an ambiguous outcome, not a stuck worker. An attempt fits a
+/// waiting listing (20 s at most) with 40 s to spare.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `s3://<endpoint>/<bucket>/<ns>?region=<r>`: one object per key under the prefix `<ns>/`,
 /// created with `If-None-Match: *`. `h3://` is the same adapter, its listings declared able to
@@ -60,7 +63,11 @@ impl S3Location {
             "h3+http" => (true, "http"),
             _ => return Err(invalid("not an s3:// or h3:// URL")),
         };
-        if !parsed.username().is_empty() || parsed.password().is_some() {
+        // The raw authority: `Url` drops an empty userinfo, as in `s3://@host`.
+        let authority = url.split_once("://").map_or("", |(_, rest)| {
+            rest.split(['/', '?', '#']).next().unwrap_or_default()
+        });
+        if authority.contains('@') {
             return Err(invalid("credentials go in `credentials`, not in the URL"));
         }
         if parsed.fragment().is_some() {
@@ -94,6 +101,12 @@ impl S3Location {
             .remove("region")
             .filter(|r| !r.is_empty())
             .ok_or_else(|| invalid("the query parameter region is required"))?;
+        if !valid_region(&region) {
+            return Err(invalid(&format!(
+                "the region {region:?} is not 1 to 63 lowercase letters, digits and hyphens, \
+                 neither starting nor ending with a hyphen"
+            )));
+        }
         if let Some(unknown) = query.keys().next() {
             return Err(invalid(&format!("unknown query parameter {unknown}")));
         }
@@ -107,6 +120,15 @@ impl S3Location {
     }
 }
 
+/// A region as AWS names them, a DNS label of lowercase letters, digits and hyphens.
+fn valid_region(region: &str) -> bool {
+    let allowed = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+    (1..=63).contains(&region.len())
+        && region.chars().all(allowed)
+        && !region.starts_with('-')
+        && !region.ends_with('-')
+}
+
 impl S3Store {
     pub fn open(
         location: S3Location,
@@ -115,11 +137,10 @@ impl S3Store {
     ) -> Result<Self> {
         retry.validate()?;
         let auth = credentials.s3()?;
-        // A request that hangs must become an ambiguous outcome, not a stuck worker; retries are
-        // `store_retry`'s alone. An attempt fits a waiting listing (20 s at most) with 40 s to spare.
+        // Retries are `store_retry`'s alone.
         let timeouts = TimeoutConfig::builder()
             .connect_timeout(Duration::from_secs(5))
-            .operation_attempt_timeout(Duration::from_secs(60))
+            .operation_attempt_timeout(ATTEMPT_TIMEOUT)
             .build();
         let mut config = aws_sdk_s3::Config::builder();
         let refresh = match auth {
@@ -157,11 +178,20 @@ impl S3Store {
     }
 
     /// Refreshes the provider's keys if they near their expiry; a provider's error fails the
-    /// request without retries.
+    /// request without retries, and a provider that does not answer within the attempt timeout
+    /// fails the attempt as transient.
     async fn fresh(&self) -> Result<(), Fault> {
-        match &self.refresh {
-            Some(refresh) => refresh.fresh().await.map_err(Fault::Permanent),
-            None => Ok(()),
+        let Some(refresh) = &self.refresh else {
+            return Ok(());
+        };
+        // Dropping a refresh that hangs releases its lock, so the next attempt calls the provider
+        // again.
+        match tokio::time::timeout(ATTEMPT_TIMEOUT, refresh.fresh()).await {
+            Ok(fresh) => fresh.map_err(Fault::Permanent),
+            Err(_) => Err(Fault::Transient(format!(
+                "credentials provider: no keys within {} ms",
+                ATTEMPT_TIMEOUT.as_millis()
+            ))),
         }
     }
 
@@ -338,15 +368,30 @@ impl Store for S3Store {
         Capabilities { wait: self.wait }
     }
 
+    fn open(&self) -> futures::future::BoxFuture<'_, crate::error::Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
         Box::pin(async move {
             let attempt = || self.put(key, &bytes);
-            retry::create(self.retry, &bytes, attempt, || self.read(key)).await
+            retry::create(
+                self.retry,
+                &bytes,
+                attempt,
+                || self.read(key),
+                tokio::time::sleep,
+            )
+            .await
         })
     }
 
     fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>> {
-        Box::pin(retry::with_retry(self.retry, move || self.read(key)))
+        Box::pin(retry::with_retry(
+            self.retry,
+            move || self.read(key),
+            tokio::time::sleep,
+        ))
     }
 
     fn list<'a>(
@@ -360,18 +405,22 @@ impl Store for S3Store {
             match &wait {
                 Some(wait) if self.wait => {
                     let attempt = || self.list_waiting(prefix, start_after, max_keys, wait);
-                    retry::with_retry(self.retry, attempt).await
+                    retry::with_retry(self.retry, attempt, tokio::time::sleep).await
                 }
                 _ => {
                     super::refuse_wait(&wait)?;
                     let attempt = || self.list_once(prefix, start_after, max_keys);
-                    retry::with_retry(self.retry, attempt).await
+                    retry::with_retry(self.retry, attempt, tokio::time::sleep).await
                 }
             }
         })
     }
 
     fn delete<'a>(&'a self, key: &'a str) -> StoreFuture<'a, ()> {
-        Box::pin(retry::with_retry(self.retry, move || self.remove(key)))
+        Box::pin(retry::with_retry(
+            self.retry,
+            move || self.remove(key),
+            tokio::time::sleep,
+        ))
     }
 }

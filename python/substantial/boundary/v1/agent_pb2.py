@@ -27,35 +27,35 @@ from substantial.boundary.v1 import run_pb2 as substantial_dot_boundary_dot_v1_d
 from substantial.layout.v1 import layout_pb2 as substantial_dot_layout_dot_v1_dot_layout__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#substantial/boundary/v1/agent.proto\x12\x17substantial.boundary.v1\x1a&substantial/boundary/v1/boundary.proto\x1a!substantial/boundary/v1/run.proto\x1a\"substantial/layout/v1/layout.proto\"R\n\x06Served\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08versions\x18\x02 \x03(\r\x12\x18\n\x0bunversioned\x18\x03 \x01(\x08H\x00\x88\x01\x01\x42\x0e\n\x0c_unversioned\"\x8e\x03\n\x0b\x41gentConfig\x12\x0e\n\x06prefix\x18\x01 \x01(\t\x12\x12\n\npartitions\x18\x02 \x01(\r\x12\x0e\n\x06worker\x18\x03 \x01(\t\x12\x32\n\tworkflows\x18\x04 \x03(\x0b\x32\x1f.substantial.boundary.v1.Served\x12\x13\n\x0b\x63oncurrency\x18\x05 \x01(\r\x12\x14\n\x0c\x63laim_ttl_ms\x18\x06 \x01(\x04\x12\x15\n\rclaim_skew_ms\x18\x07 \x01(\x04\x12\x13\n\x0bmax_idle_ms\x18\x08 \x01(\x04\x12\x10\n\x08\x64ue_page\x18\t \x01(\r\x12\x11\n\tdue_pages\x18\n \x01(\r\x12\x16\n\x0esnapshot_every\x18\x0b \x01(\x04\x12\x12\n\nop_retries\x18\x0c \x01(\r\x12\x0c\n\x04seed\x18\r \x01(\x0c\x12\x36\n\x08settings\x18\x0e \x01(\x0b\x32$.substantial.boundary.v1.RunSettings\x12\x13\n\x0bstore_waits\x18\x0f \x01(\x08\x12\x14\n\x0cwait_seconds\x18\x10 \x01(\r\"t\n\tReplayEnd\x12-\n\x04idle\x18\x01 \x01(\x0b\x32\x1d.substantial.boundary.v1.IdleH\x00\x12\x31\n\x07\x64ropped\x18\x02 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x42\x05\n\x03\x65nd\"\xd3\x04\n\x0c\x41gentRequest\x12+\n\x04next\x18\x01 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12:\n\x04\x66\x65\x65\x64\x18\x02 \x01(\x0b\x32*.substantial.boundary.v1.AgentRequest.FeedH\x00\x12\x41\n\x06\x63ommit\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentRequest.RunCommitH\x00\x12I\n\x0creplay_ended\x18\x04 \x01(\x0b\x32\x31.substantial.boundary.v1.AgentRequest.ReplayEndedH\x00\x12.\n\x04wake\x18\x05 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12\x32\n\x08shutdown\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x1a\x45\n\x04\x46\x65\x65\x64\x12\n\n\x02id\x18\x01 \x01(\x04\x12\x31\n\x06result\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.OpResult\x1aI\n\tRunCommit\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x06\x63ommit\x18\x02 \x01(\x0b\x32\x1f.substantial.boundary.v1.Commit\x1aK\n\x0bReplayEnded\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x03\x65nd\x18\x02 \x01(\x0b\x32\".substantial.boundary.v1.ReplayEndB\t\n\x07request\"\xcb\x04\n\x0c\x41gentCommand\x12<\n\x05store\x18\x01 \x01(\x0b\x32+.substantial.boundary.v1.AgentCommand.StoreH\x00\x12>\n\x06replay\x18\x02 \x01(\x0b\x32,.substantial.boundary.v1.AgentCommand.ReplayH\x00\x12\x44\n\tcommitted\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentCommand.CommittedH\x00\x12\x15\n\x0bstop_replay\x18\x04 \x01(\tH\x00\x12\x31\n\nwait_until\x18\x05 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12.\n\x04stop\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x1a\x41\n\x05Store\x12\n\n\x02id\x18\x01 \x01(\x04\x12,\n\x02op\x18\x02 \x01(\x0b\x32 .substantial.boundary.v1.StoreOp\x1aG\n\x06Replay\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\x30\n\x05input\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.RunInput\x1a\x66\n\tCommitted\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\t\n\x01n\x18\x02 \x01(\x04\x12\x0b\n\x03won\x18\x03 \x01(\x08\x12\x34\n\x05inbox\x18\x04 \x03(\x0b\x32%.substantial.boundary.v1.InboxMessageB\t\n\x07\x63ommand\"\xba\x01\n\rAgentResponse\x12\x33\n\x05\x65rror\x18\x01 \x01(\x0b\x32\".substantial.boundary.v1.CoreErrorH\x00\x12\x38\n\x07\x63ommand\x18\x02 \x01(\x0b\x32%.substantial.boundary.v1.AgentCommandH\x00\x12.\n\x04\x64one\x18\x03 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x42\n\n\x08responseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#substantial/boundary/v1/agent.proto\x12\x17substantial.boundary.v1\x1a&substantial/boundary/v1/boundary.proto\x1a!substantial/boundary/v1/run.proto\x1a\"substantial/layout/v1/layout.proto\"\x89\x01\n\x06Served\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08versions\x18\x02 \x03(\r\x12\x18\n\x0bunversioned\x18\x03 \x01(\x08H\x00\x88\x01\x01\x12\x35\n\tretention\x18\x04 \x01(\x0b\x32\".substantial.boundary.v1.RetentionB\x0e\n\x0c_unversioned\"\xd2\x03\n\x0b\x41gentConfig\x12\x0e\n\x06prefix\x18\x01 \x01(\t\x12\x12\n\npartitions\x18\x02 \x01(\r\x12\x0e\n\x06worker\x18\x03 \x01(\t\x12\x32\n\tworkflows\x18\x04 \x03(\x0b\x32\x1f.substantial.boundary.v1.Served\x12\x13\n\x0b\x63oncurrency\x18\x05 \x01(\r\x12\x14\n\x0c\x63laim_ttl_ms\x18\x06 \x01(\x04\x12\x15\n\rclaim_skew_ms\x18\x07 \x01(\x04\x12\x13\n\x0bmax_idle_ms\x18\x08 \x01(\x04\x12\x10\n\x08\x64ue_page\x18\t \x01(\r\x12\x11\n\tdue_pages\x18\n \x01(\r\x12\x16\n\x0esnapshot_every\x18\x0b \x01(\x04\x12\x12\n\nop_retries\x18\x0c \x01(\r\x12\x0c\n\x04seed\x18\r \x01(\x0c\x12\x36\n\x08settings\x18\x0e \x01(\x0b\x32$.substantial.boundary.v1.RunSettings\x12\x13\n\x0bstore_waits\x18\x0f \x01(\x08\x12\x14\n\x0cwait_seconds\x18\x10 \x01(\r\x12\x14\n\x0ctombstone_ms\x18\x11 \x01(\x04\x12\x18\n\x10retention_min_ms\x18\x12 \x01(\x04\x12\x12\n\nrecheck_ms\x18\x13 \x01(\x04\"t\n\tReplayEnd\x12-\n\x04idle\x18\x01 \x01(\x0b\x32\x1d.substantial.boundary.v1.IdleH\x00\x12\x31\n\x07\x64ropped\x18\x02 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x42\x05\n\x03\x65nd\"\xd3\x04\n\x0c\x41gentRequest\x12+\n\x04next\x18\x01 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12:\n\x04\x66\x65\x65\x64\x18\x02 \x01(\x0b\x32*.substantial.boundary.v1.AgentRequest.FeedH\x00\x12\x41\n\x06\x63ommit\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentRequest.RunCommitH\x00\x12I\n\x0creplay_ended\x18\x04 \x01(\x0b\x32\x31.substantial.boundary.v1.AgentRequest.ReplayEndedH\x00\x12.\n\x04wake\x18\x05 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12\x32\n\x08shutdown\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x1a\x45\n\x04\x46\x65\x65\x64\x12\n\n\x02id\x18\x01 \x01(\x04\x12\x31\n\x06result\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.OpResult\x1aI\n\tRunCommit\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x06\x63ommit\x18\x02 \x01(\x0b\x32\x1f.substantial.boundary.v1.Commit\x1aK\n\x0bReplayEnded\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x03\x65nd\x18\x02 \x01(\x0b\x32\".substantial.boundary.v1.ReplayEndB\t\n\x07request\"\xcb\x04\n\x0c\x41gentCommand\x12<\n\x05store\x18\x01 \x01(\x0b\x32+.substantial.boundary.v1.AgentCommand.StoreH\x00\x12>\n\x06replay\x18\x02 \x01(\x0b\x32,.substantial.boundary.v1.AgentCommand.ReplayH\x00\x12\x44\n\tcommitted\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentCommand.CommittedH\x00\x12\x15\n\x0bstop_replay\x18\x04 \x01(\tH\x00\x12\x31\n\nwait_until\x18\x05 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12.\n\x04stop\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x1a\x41\n\x05Store\x12\n\n\x02id\x18\x01 \x01(\x04\x12,\n\x02op\x18\x02 \x01(\x0b\x32 .substantial.boundary.v1.StoreOp\x1aG\n\x06Replay\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\x30\n\x05input\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.RunInput\x1a\x66\n\tCommitted\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\t\n\x01n\x18\x02 \x01(\x04\x12\x0b\n\x03won\x18\x03 \x01(\x08\x12\x34\n\x05inbox\x18\x04 \x03(\x0b\x32%.substantial.boundary.v1.InboxMessageB\t\n\x07\x63ommand\"\xba\x01\n\rAgentResponse\x12\x33\n\x05\x65rror\x18\x01 \x01(\x0b\x32\".substantial.boundary.v1.CoreErrorH\x00\x12\x38\n\x07\x63ommand\x18\x02 \x01(\x0b\x32%.substantial.boundary.v1.AgentCommandH\x00\x12.\n\x04\x64one\x18\x03 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x42\n\n\x08responseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'substantial.boundary.v1.agent_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_SERVED']._serialized_start=175
-  _globals['_SERVED']._serialized_end=257
-  _globals['_AGENTCONFIG']._serialized_start=260
-  _globals['_AGENTCONFIG']._serialized_end=658
-  _globals['_REPLAYEND']._serialized_start=660
-  _globals['_REPLAYEND']._serialized_end=776
-  _globals['_AGENTREQUEST']._serialized_start=779
-  _globals['_AGENTREQUEST']._serialized_end=1374
-  _globals['_AGENTREQUEST_FEED']._serialized_start=1142
-  _globals['_AGENTREQUEST_FEED']._serialized_end=1211
-  _globals['_AGENTREQUEST_RUNCOMMIT']._serialized_start=1213
-  _globals['_AGENTREQUEST_RUNCOMMIT']._serialized_end=1286
-  _globals['_AGENTREQUEST_REPLAYENDED']._serialized_start=1288
-  _globals['_AGENTREQUEST_REPLAYENDED']._serialized_end=1363
-  _globals['_AGENTCOMMAND']._serialized_start=1377
-  _globals['_AGENTCOMMAND']._serialized_end=1964
-  _globals['_AGENTCOMMAND_STORE']._serialized_start=1711
-  _globals['_AGENTCOMMAND_STORE']._serialized_end=1776
-  _globals['_AGENTCOMMAND_REPLAY']._serialized_start=1778
-  _globals['_AGENTCOMMAND_REPLAY']._serialized_end=1849
-  _globals['_AGENTCOMMAND_COMMITTED']._serialized_start=1851
-  _globals['_AGENTCOMMAND_COMMITTED']._serialized_end=1953
-  _globals['_AGENTRESPONSE']._serialized_start=1967
-  _globals['_AGENTRESPONSE']._serialized_end=2153
+  _globals['_SERVED']._serialized_start=176
+  _globals['_SERVED']._serialized_end=313
+  _globals['_AGENTCONFIG']._serialized_start=316
+  _globals['_AGENTCONFIG']._serialized_end=782
+  _globals['_REPLAYEND']._serialized_start=784
+  _globals['_REPLAYEND']._serialized_end=900
+  _globals['_AGENTREQUEST']._serialized_start=903
+  _globals['_AGENTREQUEST']._serialized_end=1498
+  _globals['_AGENTREQUEST_FEED']._serialized_start=1266
+  _globals['_AGENTREQUEST_FEED']._serialized_end=1335
+  _globals['_AGENTREQUEST_RUNCOMMIT']._serialized_start=1337
+  _globals['_AGENTREQUEST_RUNCOMMIT']._serialized_end=1410
+  _globals['_AGENTREQUEST_REPLAYENDED']._serialized_start=1412
+  _globals['_AGENTREQUEST_REPLAYENDED']._serialized_end=1487
+  _globals['_AGENTCOMMAND']._serialized_start=1501
+  _globals['_AGENTCOMMAND']._serialized_end=2088
+  _globals['_AGENTCOMMAND_STORE']._serialized_start=1835
+  _globals['_AGENTCOMMAND_STORE']._serialized_end=1900
+  _globals['_AGENTCOMMAND_REPLAY']._serialized_start=1902
+  _globals['_AGENTCOMMAND_REPLAY']._serialized_end=1973
+  _globals['_AGENTCOMMAND_COMMITTED']._serialized_start=1975
+  _globals['_AGENTCOMMAND_COMMITTED']._serialized_end=2077
+  _globals['_AGENTRESPONSE']._serialized_start=2091
+  _globals['_AGENTRESPONSE']._serialized_end=2277
 # @@protoc_insertion_point(module_scope)

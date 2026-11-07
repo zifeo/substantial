@@ -1,5 +1,6 @@
 // Short names for the code generated from proto/substantial, and the JSON values of the code.
 import { create } from "@bufbuild/protobuf";
+import canonicalize from "canonicalize";
 import { InvalidArgument, ProtocolError, ValueTooLarge } from "./errors.ts";
 import {
   type Time,
@@ -68,6 +69,18 @@ export function encodeJson(value: unknown, what: string): Uint8Array {
   let json: Uint8Array;
   try {
     json = encoder.encode(jsonText(value));
+  } catch (e) {
+    throw new InvalidArgument(`${what} is not JSON: ${e instanceof Error ? e.message : e}`);
+  }
+  return capped(json, what);
+}
+
+/** As `encodeJson`, canonical (RFC 8785): keys sorted, numbers as ECMAScript prints them. */
+export function encodeCanonical(value: unknown, what: string): Uint8Array {
+  let json: Uint8Array;
+  try {
+    // The strict text first: canonicalize alone would turn a Map into {}.
+    json = encoder.encode(canonicalize(JSON.parse(jsonText(value))));
   } catch (e) {
     throw new InvalidArgument(`${what} is not JSON: ${e instanceof Error ? e.message : e}`);
   }

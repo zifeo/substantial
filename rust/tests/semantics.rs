@@ -256,7 +256,11 @@ async fn a_workflow_send_to_a_missing_or_ended_run_raises_the_same_on_replay() {
         c.receive::<u32>("go").await?;
         Ok(match (missing, ended) {
             (
-                Err(Error::RunNotFound { chain }),
+                Err(Error::RunNotFound {
+                    chain,
+                    collected: false,
+                    ..
+                }),
                 Err(Error::RunEnded {
                     run,
                     status: RunStatus::Completed,

@@ -4,13 +4,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 
-use tokio::sync::mpsc;
-
+use crate::clock::{Clock, Inbox, Ready};
 use crate::core::Core;
 use crate::proto::boundary::v1::{self as b, CommitKind, replay_end};
 use crate::proto::layout::v1::{self as layout, Time, event::Kind};
 use crate::store::MemoryStore;
-use crate::worker::replay::{Host, ReplayEvent, ToReplay, replay};
+use crate::worker::Event;
+use crate::worker::replay::{Host, ToReplay, replay};
 use crate::workflow::{Untyped, json};
 use crate::{Context, Error, Workflow};
 
@@ -102,6 +102,9 @@ impl Harness {
                 continue_as_new_after_segments: 1000,
                 continue_as_new_after_bytes: 8 << 20,
                 dedup_window_ms: 86_400_000,
+                retention: Some(b::Retention {
+                    keep: Some(b::retention::Keep::Forever(b::Empty {})),
+                }),
             }),
         }
     }
@@ -109,36 +112,34 @@ impl Harness {
     /// Replays at `now`, winning or losing every commit, and keeps what was committed.
     pub(super) async fn replay_with(&mut self, now: i64, won: bool) -> Replayed {
         self.clock.store(now, Ordering::SeqCst);
-        let clock = self.clock.clone();
-        let (events_tx, mut events) = mpsc::unbounded_channel();
-        let (tell, inbox) = mpsc::unbounded_channel();
+        let events: Arc<Inbox<Event>> = Arc::default();
+        let tell: Arc<Inbox<ToReplay>> = Arc::default();
         let input = self.run_input(now);
         let host = Host {
             core: self.core.clone(),
             store: Arc::new(MemoryStore::open("harness").unwrap()),
-            clock: Arc::new(move || Time {
-                ms: clock.load(Ordering::SeqCst),
-            }),
+            clock: Clock::Fixed(self.clock.clone()),
         };
         tokio::spawn(replay(
             host,
             self.workflow.clone(),
             crate::time::minutes(5),
             input,
-            events_tx,
-            inbox,
+            events.clone(),
+            tell.clone(),
         ));
         let mut commits = vec![];
+        let signal: Arc<dyn Ready> = events.clone();
         loop {
-            match events.recv().await.unwrap() {
-                ReplayEvent::Commit(_, commit) => {
+            Clock::Real.wait(std::slice::from_ref(&signal), None).await;
+            match events.pop().unwrap() {
+                Event::Commit(_, commit) => {
                     let segment = commit.segment.clone().unwrap();
-                    tell.send(ToReplay::Committed {
+                    tell.push(ToReplay::Committed {
                         n: segment.n,
                         won,
                         inbox: Vec::new(),
-                    })
-                    .unwrap();
+                    });
                     if won {
                         self.history.extend(segment.events);
                         self.next_n = segment.n + 1;
@@ -146,7 +147,8 @@ impl Harness {
                         commits.push(commit);
                     }
                 }
-                ReplayEvent::Ended(_, end) => return Replayed { commits, end },
+                Event::Ended(_, end) => return Replayed { commits, end },
+                _ => unreachable!("a replay sends commits and its end"),
             }
         }
     }

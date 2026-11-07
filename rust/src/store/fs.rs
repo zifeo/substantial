@@ -204,6 +204,10 @@ impl Store for FsStore {
         Capabilities { wait: false }
     }
 
+    fn open(&self) -> futures::future::BoxFuture<'_, crate::error::Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
         Box::pin(async move {
             let attempt = || {
@@ -214,15 +218,19 @@ impl Store for FsStore {
                 let key = key.to_owned();
                 self.blocking(move |root| get(root, &key))
             };
-            retry::create(self.retry, &bytes, attempt, read).await
+            retry::create(self.retry, &bytes, attempt, read, tokio::time::sleep).await
         })
     }
 
     fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>> {
-        Box::pin(retry::with_retry(self.retry, move || {
-            let key = key.to_owned();
-            self.blocking(move |root| get(root, &key))
-        }))
+        Box::pin(retry::with_retry(
+            self.retry,
+            move || {
+                let key = key.to_owned();
+                self.blocking(move |root| get(root, &key))
+            },
+            tokio::time::sleep,
+        ))
     }
 
     fn list<'a>(
@@ -234,18 +242,26 @@ impl Store for FsStore {
     ) -> StoreFuture<'a, Listing> {
         Box::pin(async move {
             super::refuse_wait(&wait)?;
-            retry::with_retry(self.retry, || {
-                let (prefix, start_after) = (prefix.to_owned(), start_after.map(str::to_owned));
-                self.blocking(move |root| list(root, &prefix, start_after.as_deref(), max_keys))
-            })
+            retry::with_retry(
+                self.retry,
+                || {
+                    let (prefix, start_after) = (prefix.to_owned(), start_after.map(str::to_owned));
+                    self.blocking(move |root| list(root, &prefix, start_after.as_deref(), max_keys))
+                },
+                tokio::time::sleep,
+            )
             .await
         })
     }
 
     fn delete<'a>(&'a self, key: &'a str) -> StoreFuture<'a, ()> {
-        Box::pin(retry::with_retry(self.retry, move || {
-            let key = key.to_owned();
-            self.blocking(move |root| delete(root, &key))
-        }))
+        Box::pin(retry::with_retry(
+            self.retry,
+            move || {
+                let key = key.to_owned();
+                self.blocking(move |root| delete(root, &key))
+            },
+            tokio::time::sleep,
+        ))
     }
 }

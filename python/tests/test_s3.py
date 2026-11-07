@@ -1,13 +1,17 @@
-"""What the S3 adapter does beyond the shared contract; all but URL parsing and signing run only
-when `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`)."""
+"""What the S3 adapter does beyond the shared contract; all but URL parsing and the fake h3 server
+run only when `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`)."""
 
 import asyncio
+import contextlib
 import os
+import sys
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-import httpx
 import pytest
 from conftest import LONG, require_s3, script
+from fake_h3 import CREDENTIALS, FakeH3
 
 from substantial import (
     ConfigError,
@@ -18,8 +22,7 @@ from substantial import (
     Substantial,
     workflow,
 )
-from substantial.stores import ListWait, S3Location, StoreFailure, open_store
-from substantial.stores.sigv4 import sign
+from substantial.stores import ListWait, S3Location, StoreFailure, open_store, s3_store
 
 
 def test_urls_need_every_part() -> None:
@@ -30,10 +33,17 @@ def test_urls_need_every_part() -> None:
     assert not aws.wait
     assert S3Location.parse("s3+http://[::1]:9000/b/ns?region=r").endpoint == "http://[::1]:9000"
     assert S3Location.parse("h3://h/b/ns?region=r").wait
+    assert S3Location.parse(f"s3://h/b/ns?region={'r' * 63}").region == "r" * 63
     for url in [
         "s3://h/b/ns",
         "s3://h/b/ns?region=",
         "s3://h/b/ns?region=r&region=s",
+        "s3://h/b/ns?region=us_east",
+        "s3://h/b/ns?region=US-EAST-1",
+        "s3://h/b/ns?region=-r",
+        "s3://h/b/ns?region=r-",
+        "s3://h/b/ns?region=us%20east",
+        f"s3://h/b/ns?region={'r' * 64}",
         "s3://h/b/ns?region=r&endpoint=http://h",
         "s3://h/b/ns?region=r&wait=true",
         "s3://h/b?region=r",
@@ -45,6 +55,8 @@ def test_urls_need_every_part() -> None:
         "s3://h/b/a//c?region=r",
         "s3:///b/ns?region=r",
         "s3://k:s@h/b/ns?region=r",
+        "s3://@h/b/ns?region=r",
+        "s3://:@h/b/ns?region=r",
         "s3://h/b/ns?region=r#x",
         "s3://h:port/b/ns?region=r",
         "s3+https://h/b/ns?region=r",
@@ -54,22 +66,99 @@ def test_urls_need_every_part() -> None:
             S3Location.parse(url)
 
 
-def test_signature_matches_the_aws_example() -> None:
-    # The GET Object example of the S3 SigV4 documentation, with its credentials and time.
-    credentials = Credentials("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
-    headers = sign(
-        method="GET",
-        host="examplebucket.s3.amazonaws.com",
-        path="/test.txt",
-        query="",
-        headers={"range": "bytes=0-9"},
-        payload=b"",
-        credentials=credentials,
-        region="us-east-1",
-        at=datetime(2013, 5, 24, tzinfo=UTC),
+def test_s3_urls_without_the_extra_name_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "substantial.stores.s3_store", raising=False)
+    for name in [*(n for n in sys.modules if n.startswith("aiobotocore.")), "aiobotocore"]:
+        monkeypatch.setitem(sys.modules, name, None)
+    with pytest.raises(ConfigError, match=r'pip install "substantial\[s3\]"'):
+        open_store("h3+http://127.0.0.1:1/b/ns?region=r", Credentials("id", "s"))
+    open_store("memory://no-extra", None)
+
+
+async def test_each_operation_is_one_request() -> None:
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ns"), CREDENTIALS)
+        assert await store.create("q/a", b"a") == "created"
+        assert await store.create("q/a", b"b") == "exists"
+        assert await store.get("q/a") == b"a"
+        assert await store.get("q/b") is None
+        assert (await store.list("q/", start_after=None, max_keys=10, wait=None)).keys == ["q/a"]
+        await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0))
+        await store.delete("q/a")
+        await store.close()
+        methods = [method for method, _ in h3.requests]
+        assert methods == ["PUT", "PUT", "GET", "GET", "GET", "GET", "DELETE"], h3.requests
+
+
+@contextlib.asynccontextmanager
+async def raw_server(answer: bytes) -> AsyncIterator[tuple[str, list[str]]]:
+    """A server on 127.0.0.1 answering every request with `answer`, then closing the connection;
+    yields its URL and the method of every request."""
+    methods: list[str] = []
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        line = await reader.readline()
+        while await reader.readline() not in (b"\r\n", b"\n", b""):
+            pass
+        methods.append(line.decode().split(" ")[0])
+        writer.write(answer)
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        yield f"s3+http://127.0.0.1:{port}/b/ns?region=us-east-1", methods
+    finally:
+        server.close()
+
+
+async def test_a_body_cut_short_is_retried_as_transient() -> None:
+    async with raw_server(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nabc") as (url, methods):
+        store = open_store(url, CREDENTIALS)
+        with pytest.raises(StoreFailure, match=r"\(after 5 attempts\)"):
+            await store.get("k")
+        assert methods == ["GET"] * 5
+        await store.close()
+
+
+async def test_a_listing_without_is_truncated_is_complete() -> None:
+    body = (
+        b'<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>'
+        b"<Contents><Key>ns/q/a</Key></Contents></ListBucketResult>"
     )
-    expected = "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
-    assert headers["authorization"].endswith(f"Signature={expected}")
+    answer = b"HTTP/1.1 200 OK\r\ncontent-length: %d\r\n\r\n" % len(body) + body
+    async with raw_server(answer) as (url, methods):
+        store = open_store(url, CREDENTIALS)
+        listing = await store.list("q/", start_after=None, max_keys=10, wait=None)
+        assert listing.keys == ["q/a"]
+        assert methods == ["GET"]
+        await store.close()
+
+
+# Settings of the AWS environment and shared files that would change how the SDK reaches the
+# endpoint, the profile's `s3` section included.
+AMBIENT = [
+    {"AWS_PROFILE": "absent"},
+    {"AWS_CONFIG_FILE": "accelerate"},
+    {"AWS_USE_FIPS_ENDPOINT": "true"},
+    {"AWS_USE_DUALSTACK_ENDPOINT": "true"},
+]
+
+
+@pytest.mark.parametrize("ambient", AMBIENT, ids=lambda a: next(iter(a)))
+async def test_the_aws_environment_and_files_are_not_read(
+    ambient: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = tmp_path / "config"
+    config.write_text("[default]\ns3 =\n  use_accelerate_endpoint = true\n")
+    for name, value in ambient.items():
+        monkeypatch.setenv(name, str(config) if value == "accelerate" else value)
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ambient"), CREDENTIALS)
+        assert await store.create("q/a", b"a") == "created"
+        assert await store.get("q/a") == b"a"
+        await store.close()
 
 
 async def test_create_and_open_run_the_probe() -> None:
@@ -137,43 +226,36 @@ async def test_h3_needs_the_listing_etag_of_a_waiting_listing() -> None:
 
 
 async def test_waiting_listings_send_and_answer_the_wait_headers() -> None:
-    seen: list[httpx.Request] = []
-
-    def answer(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        body = (
-            "<ListBucketResult><IsTruncated>false</IsTruncated>"
-            "<Contents><Key>ns/q/a</Key></Contents></ListBucketResult>"
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ns"), CREDENTIALS)
+        await store.create("q/a&b", b"x")
+        first = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(5))
+        assert first.keys == ["q/a&b"]
+        assert first.etag is not None
+        assert "x-substantial-wait-etag" not in h3.listed[-1].headers
+        listing = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0, "e1"))
+        assert listing == first
+        headers = h3.listed[-1].headers
+        assert (headers["x-substantial-wait-seconds"], headers["x-substantial-wait-etag"]) == (
+            "0",
+            "e1",
         )
-        return httpx.Response(200, text=body, headers={"x-substantial-listing-etag": "e2"})
-
-    store = open_store("h3+http://h:1/b/ns?region=r", Credentials("id", "s"))
-    await store.close()
-    store._client = httpx.AsyncClient(transport=httpx.MockTransport(answer))  # type: ignore[attr-defined]
-    listing = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(20, "e1"))
-    assert listing.keys == ["q/a"]
-    assert listing.etag == "e2"
-    headers = seen[0].headers
-    assert (headers["x-substantial-wait-seconds"], headers["x-substantial-wait-etag"]) == (
-        "20",
-        "e1",
-    )
-    signed = headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
-    assert {"x-substantial-wait-seconds", "x-substantial-wait-etag"} <= set(signed)
-    first = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(5))
-    assert "x-substantial-wait-etag" not in seen[1].headers
-    assert first.etag == "e2"
-    for bad in [ListWait(21), ListWait(5, "e\n1")]:
+        signed = headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+        assert {"x-substantial-wait-seconds", "x-substantial-wait-etag"} <= set(signed)
+        sent = len(h3.requests)
+        for bad in [ListWait(21), ListWait(5, "e\n1")]:
+            with pytest.raises(StoreFailure):
+                await store.list("q/", start_after=None, max_keys=10, wait=bad)
         with pytest.raises(StoreFailure):
-            await store.list("q/", start_after=None, max_keys=10, wait=bad)
-    with pytest.raises(StoreFailure):
-        await store.list("q/", start_after=None, max_keys=1001, wait=ListWait(5))
-    assert len(seen) == 2, "refused before any request"
-    s3 = open_store("s3+http://h:1/b/ns?region=r", Credentials("id", "s"))
-    with pytest.raises(StoreFailure):
-        await s3.list("q/", start_after=None, max_keys=10, wait=ListWait(5))
-    await store.close()
-    await s3.close()
+            await store.list("q/", start_after=None, max_keys=1001, wait=ListWait(5))
+        assert len(h3.requests) == sent, "refused before any request"
+        s3 = open_store(h3.url("ns").replace("h3+http", "s3+http"), CREDENTIALS)
+        with pytest.raises(StoreFailure):
+            await s3.list("q/", start_after=None, max_keys=10, wait=ListWait(5))
+        await store.close()
+        with pytest.raises(StoreFailure, match="closed"):
+            await store.get("q/a&b")
+        await s3.close()
 
 
 def env_keys(expires_in: timedelta | None, secret: str | None = None) -> Credentials:
@@ -241,6 +323,24 @@ async def test_a_provider_that_raises_fails_the_request_and_is_asked_again() -> 
         await store.get("runs/a/start")
     assert await store.get("runs/a/start") is None
     assert len(calls) == 2
+    await store.close()
+
+
+async def test_a_provider_that_never_answers_fails_each_attempt_within_its_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(s3_store, "ATTEMPT_TIMEOUT", 0.05)
+    calls: list[int] = []
+
+    async def hung() -> Credentials:
+        calls.append(1)
+        await asyncio.Event().wait()
+        raise AssertionError("never answers")
+
+    store = open_store("s3+http://127.0.0.1:1/b/ns?region=r", hung)
+    with pytest.raises(StoreFailure, match=r"TimeoutError.*\(after 5 attempts\)"):
+        await store.get("k")
+    assert len(calls) == 5, "asked again at each attempt"
     await store.close()
 
 

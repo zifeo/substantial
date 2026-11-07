@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 fn main() {
-    // `proto` and `wasm` are symlinks to the repository's single copies: cargo package follows
-    // them, so the published crate carries the files themselves.
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Read when the script runs, not when it is compiled: a shared target dir reuses one script
+    // binary across checkouts. `proto` and `wasm` are symlinks to the repository's single
+    // copies: cargo package follows them, so the published crate carries the files themselves.
+    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let proto = root.join("proto");
     let files = [
         "substantial/layout/v1/layout.proto",

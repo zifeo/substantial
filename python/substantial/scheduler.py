@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from substantial._proto import layout, run
+from substantial.clock import Clock
 from substantial.errors import (
     NEW_VERSION,
     Cancelled,
@@ -28,7 +29,6 @@ from substantial.machines import RunMachine
 
 log = logging.getLogger("substantial")
 
-Clock = Callable[[], layout.Time]
 Decode = Callable[[layout.Value | None], Any]
 StepBody = Callable[[], Awaitable[Any]]
 # An undo, given the value of the step it undoes, as the body of its step.
@@ -76,8 +76,8 @@ class Shared:
         self.input = input_json
         self.loop = loop
         self.slots: dict[int, tuple[asyncio.Future, Decode]] = {}
-        # The steps pending, with their step key.
-        self.steps: dict[int, tuple[StepBody, str]] = {}
+        # The steps pending, with their name and step key.
+        self.steps: dict[int, tuple[StepBody, str, str]] = {}
         # The undos of every step call of the replay, by call.
         self.undos: dict[int, tuple[UndoBody, run.StepOptions]] = {}
         self.handlers: dict[str, list[Handler]] = {}
@@ -107,7 +107,7 @@ class Shared:
         if self.diverged is not None:
             raise NonDeterminism(self.diverged)
         try:
-            called = self.machine.call(call, self.clock())
+            called = self.machine.call(call, self.clock.now())
         except NonDeterminism as e:
             self.diverged = f"{e}; {NEW_VERSION}"
             self.waits = []
@@ -151,7 +151,7 @@ class Shared:
                 raise self.protocol(f"step call answered without its occurrence: {called}")
             if which == "pending":
                 key = f"{self.run}/{call.step.name}/{called.occurrence}"
-                self.steps[called.pending] = (spec.body, key)
+                self.steps[called.pending] = (spec.body, call.step.name, key)
                 if spec.undo is not None:
                     self.undos[called.pending] = spec.undo
         fut = self.loop.create_future()
@@ -167,7 +167,7 @@ class Shared:
             raise self.protocol(f"unexpected answer {which} to {call.WhichOneof('call')}")
         return fut
 
-    def step_body(self, call: int) -> tuple[StepBody, str] | None:
+    def step_body(self, call: int) -> tuple[StepBody, str, str] | None:
         return self.steps.get(call)
 
     def fail_code(self, failure: Failure) -> None:
@@ -229,13 +229,13 @@ class Shared:
             raise ProtocolError(f"empty resolution of call {r.call}")
 
     def step_ended(self, call: int, attempt: int, outcome: run.Outcome) -> None:
-        self.machine.step_ended(call, attempt, outcome, self.clock())
+        self.machine.step_ended(call, attempt, outcome, self.clock.now())
 
     def arrived(self, messages: Sequence[run.InboxMessage]) -> None:
         self.machine.arrived(messages)
 
     def next(self) -> run.Next:
-        nxt = self.machine.next(self.clock())
+        nxt = self.machine.next(self.clock.now())
         self.live = nxt.live
         return nxt
 

@@ -1,5 +1,5 @@
-// The store contract of I-26, run against every adapter of this host; on S3 only when
-// `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`).
+// The store contract of I-26, run against every adapter of this host; on S3 and Redis only when
+// their variables are set (see `helpers.ts`).
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -60,8 +60,8 @@ eachAdapter("list in byte order", async (store) => {
   assert.deepEqual(await ls("", undefined, 1), ["p/a"]);
 });
 
-eachAdapter("list refuses wait", async (store) => {
-  assert.equal(store.capabilities.wait, false);
+eachAdapter("list refuses wait", async (store, _adapter, t) => {
+  if (store.capabilities.wait) return t.skip("this store's listings wait");
   await assert.rejects(store.list("q/", { maxKeys: 10, wait: { seconds: 1 } }), StoreFailure);
 });
 
@@ -138,11 +138,11 @@ test("memory namespaces are shared by name only", async () => {
 test("URLs name the adapter", async () => {
   const dir = tempDir();
   try {
-    openStore("memory://url-test", undefined);
+    await openStore("memory://url-test", undefined);
     const path = join(dir, "ns");
-    const file: Store = openStore(`file:${path}`, undefined);
+    const file: Store = await openStore(`file:${path}`, undefined);
     await file.create("k", bytes("v"));
-    const again = openStore(`file://${path}`, undefined);
+    const again = await openStore(`file://${path}`, undefined);
     assert.deepEqual(await again.get("k"), bytes("v"));
     const refused = [
       "memory://",
@@ -155,33 +155,34 @@ test("URLs name the adapter", async () => {
       "nope",
     ];
     for (const url of refused) {
-      assert.throws(() => openStore(url, undefined), ConfigError, url);
+      await assert.rejects(openStore(url, undefined), ConfigError, url);
     }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("credentials go only where a store takes them", () => {
+test("credentials go only where a store takes them", async () => {
   const explicit = new Credentials({ accessKeyId: "id", secretAccessKey: "secret" });
   assert.ok(!JSON.stringify(explicit).includes("secret"));
-  assert.throws(() => openStore("memory://c", explicit), ConfigError);
-  assert.throws(() => openStore(`file:${tempDir()}`, "env"), ConfigError);
+  await assert.rejects(openStore("memory://c", explicit), ConfigError);
+  await assert.rejects(openStore(`file:${tempDir()}`, "env"), ConfigError);
   const s3 = "s3+http://127.0.0.1:1/b/ns?region=r";
-  assert.throws(() => openStore(s3, undefined), ConfigError);
-  assert.throws(() => openStore(s3, "environment" as "env"), ConfigError);
+  await assert.rejects(openStore(s3, undefined), ConfigError);
+  await assert.rejects(openStore(s3, "environment" as "env"), ConfigError);
   assert.throws(() => new Credentials({ accessKeyId: "id", secretAccessKey: "" }), ConfigError);
-  assert.equal(openStore(s3, explicit).capabilities.wait, false);
-  assert.equal(openStore("h3://127.0.0.1:1/b/ns?region=r", explicit).capabilities.wait, true);
+  assert.equal((await openStore(s3, explicit)).capabilities.wait, false);
+  const h3 = await openStore("h3://127.0.0.1:1/b/ns?region=r", explicit);
+  assert.equal(h3.capabilities.wait, true);
   const saved = { id: process.env.AWS_ACCESS_KEY_ID, secret: process.env.AWS_SECRET_ACCESS_KEY };
   try {
     process.env.AWS_ACCESS_KEY_ID = "id";
     delete process.env.AWS_SECRET_ACCESS_KEY;
-    assert.throws(() => openStore(s3, "env"), /AWS_SECRET_ACCESS_KEY/);
+    await assert.rejects(openStore(s3, "env"), /AWS_SECRET_ACCESS_KEY/);
     process.env.AWS_SECRET_ACCESS_KEY = "";
-    assert.throws(() => openStore(s3, "env"), /AWS_SECRET_ACCESS_KEY/);
+    await assert.rejects(openStore(s3, "env"), /AWS_SECRET_ACCESS_KEY/);
     process.env.AWS_SECRET_ACCESS_KEY = "secret";
-    openStore(s3, "env");
+    await openStore(s3, "env");
   } finally {
     for (const [name, value] of [
       ["AWS_ACCESS_KEY_ID", saved.id],

@@ -77,7 +77,7 @@ test("create states what is unknown or not built", async () => {
         e instanceof ConfigError && /^unknown scheme .* memory:\/\/, file:, s3:/.test(e.message),
     );
   }
-  for (const url of ["redis://localhost:6379/0?namespace=x", "sqlite:x.db", "mysql://u@h/db"]) {
+  for (const url of ["sqlite:x.db", "mysql://u@h/db"]) {
     await assert.rejects(
       Substantial.create(url, { partitions: 1 }),
       (e) => e instanceof ConfigError && /not available in this host yet/.test(e.message),
@@ -232,6 +232,8 @@ test("a worker that dies fails the waits pending on its namespace", async () => 
     const run = await sub.start(waiting);
     const pending = run.result({ timeout: LONG });
     await eventually("a suspended run", async () => (await run.status()) === "suspended");
+    assert.ok(worker.alive);
+    assert.equal(worker.error, undefined);
     AgentMachine.prototype.feed = () => {
       throw trap;
     };
@@ -239,7 +241,59 @@ test("a worker that dies fails the waits pending on its namespace", async () => 
     await assert.rejects(pending, (e) => e === trap);
     assert.ok(performance.now() - began < 2000, "failed at once, not at the timeout");
     assert.ok(errors.some(([what, e]) => /worker \w+ died:/.test(String(what)) && e === trap));
+    // What a readiness probe reads.
+    assert.ok(!worker.alive);
+    assert.equal(worker.error, trap);
     await assert.rejects(worker.shutdown(), (e) => e === trap);
+  } finally {
+    AgentMachine.prototype.feed = feed;
+    console.error = error;
+  }
+});
+
+/** A memory store whose listings claim to wait: one given a wait answers after 20 ms whatever
+ * changed, unless its signal aborts it first. */
+class Waiting extends MemoryStore {
+  override readonly capabilities = { wait: true };
+  readonly resultWaits: ListOptions[] = [];
+
+  override async list(prefix: string, options: ListOptions): Promise<Listing> {
+    const { wait, signal, ...rest } = options;
+    const listing = await super.list(prefix, rest);
+    if (wait !== undefined) {
+      if (prefix.endsWith("/result")) this.resultWaits.push(options);
+      await sleep(20, undefined, signal === undefined ? {} : { signal });
+    }
+    return { keys: listing.keys, etag: "etag" };
+  }
+}
+
+test("a result wait abandoned when its worker dies stops listing", async () => {
+  const { AgentMachine } = await import("../src/machines.ts");
+  const feed = AgentMachine.prototype.feed;
+  const error = console.error;
+  console.error = () => {};
+  try {
+    const waiting = workflow("abandoned-waiting", async (c) => {
+      await c.step("first", () => null);
+      await c.receive("never");
+    });
+    const store = new Waiting("worker-abandoned");
+    const sub = await createOn(store, { partitions: 1 });
+    const worker = script(sub, [waiting]);
+    const run = await sub.start(waiting);
+    await eventually("a suspended run", async () => (await run.status()) === "suspended");
+    const pending = run.result({ timeout: LONG });
+    await eventually("a result wait", () => store.resultWaits.length >= 2);
+    AgentMachine.prototype.feed = () => {
+      throw new Error("injected trap");
+    };
+    await assert.rejects(pending, /injected trap/);
+    const after = store.resultWaits.length;
+    await sleep(200);
+    assert.equal(store.resultWaits.length, after, "no listing after the wait was abandoned");
+    assert.ok(store.resultWaits.at(-1)?.signal?.aborted, "the listing in flight aborted");
+    await assert.rejects(worker.shutdown(), /injected trap/);
   } finally {
     AgentMachine.prototype.feed = feed;
     console.error = error;

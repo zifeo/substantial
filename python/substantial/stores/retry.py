@@ -40,9 +40,14 @@ class Permanent(Fault):
     """Trying again cannot help: an invalid key, a refused permission."""
 
 
+# How a backoff waits, in seconds: `asyncio.sleep` on the real clock.
+Sleep = Callable[[float], Awaitable[None]]
+
+
 class _Backoff:
-    def __init__(self, policy: StoreRetry) -> None:
+    def __init__(self, policy: StoreRetry, sleep: Sleep) -> None:
         self.policy = policy
+        self.sleep = sleep
         self.delay = policy.initial
         self.attempt = 1
 
@@ -53,12 +58,14 @@ class _Backoff:
             raise StoreFailure(f"{error} (after {self.attempt} {unit})")
         self.attempt += 1
         if sleep:
-            await asyncio.sleep(self.delay / timedelta(seconds=1))
+            await self.sleep(self.delay / timedelta(seconds=1))
             self.delay = min(self.delay * 2, self.policy.max)
 
 
-async def with_retry[T](policy: StoreRetry, op: Callable[[], Awaitable[T]]) -> T:
-    backoff = _Backoff(policy)
+async def with_retry[T](
+    policy: StoreRetry, op: Callable[[], Awaitable[T]], sleep: Sleep = asyncio.sleep
+) -> T:
+    backoff = _Backoff(policy, sleep)
     while True:
         try:
             return await op()
@@ -73,10 +80,11 @@ async def create(
     data: bytes,
     attempt: Callable[[], Awaitable[Create]],
     get: Callable[[], Awaitable[bytes | None]],
+    sleep: Sleep = asyncio.sleep,
 ) -> Create:
     """A create that never assumes it won or lost: an ambiguous outcome is followed by a `get`,
     the same bytes meaning "created", other bytes "exists", and a missing key creating again."""
-    backoff = _Backoff(policy)
+    backoff = _Backoff(policy, sleep)
     ambiguous = False
     # An earlier attempt left unanswered may have landed after the get, so a later "exists" is
     # checked too.

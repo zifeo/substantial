@@ -10,12 +10,12 @@ use std::task::{Poll, Waker};
 
 use futures::future::BoxFuture;
 
+use crate::clock::Clock;
 use crate::core::RunMachine;
 use crate::error::{Error, Failure, NEW_VERSION, Result};
 use crate::proto::boundary::v1::{self as b, ErrorKind, called::Called, next::Next, resolution};
 use crate::proto::layout::v1::{self as layout, Time};
 
-pub(crate) type Clock = Arc<dyn Fn() -> Time + Send + Sync>;
 /// One attempt of a step: its JSON value, or its failure.
 pub(crate) type StepBody =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Vec<u8>, Failure>> + Send + Sync>;
@@ -40,8 +40,8 @@ struct Slot {
 struct State {
     machine: RunMachine,
     slots: HashMap<u64, Slot>,
-    /// The steps pending, with their step key.
-    steps: HashMap<u64, (StepBody, String)>,
+    /// The steps pending, with their name and step key.
+    steps: HashMap<u64, (StepBody, String, String)>,
     /// The undos of every step call of the replay, by call.
     undos: HashMap<u64, UndoSpec>,
     /// The children whose end the core consumed, by run.
@@ -132,7 +132,11 @@ impl Shared {
     }
 
     pub(crate) fn now(&self) -> Time {
-        (self.clock)()
+        self.clock.now()
+    }
+
+    pub(crate) fn clock(&self) -> &Clock {
+        &self.clock
     }
 
     /// Makes a call of the code. `INVALID` for a call carrying the code's own names or values is
@@ -203,7 +207,7 @@ impl Shared {
         if let Called::Pending(id) = called {
             let key = format!("{}/{name}/{occurrence}", self.run);
             let mut state = self.lock();
-            state.steps.insert(id, (spec.body, key));
+            state.steps.insert(id, (spec.body, name, key));
             if let Some(undo) = spec.undo {
                 state.undos.insert(id, undo);
             }
@@ -248,7 +252,7 @@ impl Shared {
         self.lock().waits.push((call, predicate));
     }
 
-    pub(crate) fn step_body(&self, call: u64) -> Option<(StepBody, String)> {
+    pub(crate) fn step_body(&self, call: u64) -> Option<(StepBody, String, String)> {
         self.lock().steps.get(&call).cloned()
     }
 

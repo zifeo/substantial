@@ -1,7 +1,7 @@
 // Children (I-11) and messages sent from a workflow (I-9).
-import { InvalidArgument, onlyOptions } from "./errors.ts";
+import { InvalidArgument, onlyOptions, RunFailed } from "./errors.ts";
 import { checkKey, checkName } from "./names.ts";
-import { decodeValue, encodeJson, jsonValue } from "./proto.ts";
+import { decodeValue, encodeCanonical, encodeJson, jsonValue } from "./proto.ts";
 import { makeCall, type Shared } from "./scheduler.ts";
 import { type AnyWorkflow, Workflow } from "./workflow.ts";
 
@@ -15,13 +15,14 @@ export interface ChildOptions {
   readonly id?: string;
 }
 
-/** The JSON bytes of an input: an object, `{}` when none is given. */
+/** The canonical JSON bytes (RFC 8785) of an input, as the core compares a start's input byte
+ * for byte: an object, `{}` when none is given. */
 export function inputObject(input: unknown): Uint8Array {
   const object = input === undefined ? {} : input;
   if (typeof object !== "object" || object === null || Array.isArray(object)) {
     throw new InvalidArgument(`an input is a JSON object, not ${JSON.stringify(object)}`);
   }
-  return encodeJson(object, "the input");
+  return encodeCanonical(object, "the input");
 }
 
 export function send(
@@ -66,7 +67,14 @@ export class Child<O = unknown> {
 
   /** The value the child's chain ended with; `RunFailed` if it failed or was cancelled. */
   result(): Promise<O> {
-    return this.#shared.future(makeCall({ case: "childResult", value: this.chain }), decodeValue);
+    const call = makeCall({ case: "childResult", value: this.chain });
+    const result = this.#shared.future<O>(call, decodeValue);
+    result.catch((e: unknown) => {
+      if (e instanceof RunFailed && e.status === "failed") {
+        this.#shared.clock.failureRead(this.chain);
+      }
+    });
+    return result;
   }
 
   /** Sends the child a message, delivered once per `id`. */

@@ -1,5 +1,5 @@
-"""The store contract of I-26, run against every adapter of this host; on S3 only when
-`SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`)."""
+"""The store contract of I-26, run against every adapter of this host; on S3 and Redis only when
+their variables are set (see `conftest`)."""
 
 import asyncio
 from pathlib import Path
@@ -60,7 +60,8 @@ async def test_list_in_byte_order(store: Store) -> None:
 
 
 async def test_list_refuses_wait(store: Store) -> None:
-    assert not store.capabilities.wait
+    if store.capabilities.wait:
+        pytest.skip("this store's listings wait")
     with pytest.raises(StoreFailure):
         await store.list("q/", start_after=None, max_keys=10, wait=ListWait(seconds=1))
 

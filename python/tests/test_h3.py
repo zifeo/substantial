@@ -153,3 +153,45 @@ async def test_a_result_is_waited_on_its_key_through_a_continuation(h3: FakeH3) 
     assert all("x-substantial-wait-seconds" in listed.headers for listed in waits)
     assert any(listed.woken for listed in waits), waits
     await sub.close()
+
+
+async def test_a_get_is_not_queued_behind_waiting_listings(h3: FakeH3, store: Store) -> None:
+    first = await store.list("p0/", start_after=None, max_keys=1, wait=ListWait(0))
+    # As a worker serving 4 workflows on 16 partitions holds 64.
+    held = [
+        asyncio.create_task(
+            store.list(f"p{i}/", start_after=None, max_keys=1, wait=ListWait(2, first.etag))
+        )
+        for i in range(64)
+    ]
+
+    async def holding() -> bool:
+        return h3.holds >= 64
+
+    await eventually("64 held listings", holding, within=1)
+    started = time.monotonic()
+    assert await store.get("k") is None
+    took = time.monotonic() - started
+    await asyncio.gather(*held)
+    assert took < 0.5, f"a get took {took:.2f} s behind 64 held listings"
+
+
+async def test_a_run_ends_promptly_with_4_workflows_on_16_partitions(h3: FakeH3) -> None:
+    async def one(c: Context) -> int:
+        return 1
+
+    flows = [workflow(name=f"pool-{n}")(one) for n in "abcd"]
+    async with (
+        Substantial.create(h3.url("pool"), partitions=16, credentials=CREDENTIALS) as sub,
+        sub.worker(flows, preset="script"),
+    ):
+
+        async def holding() -> bool:
+            return h3.holds >= 64
+
+        await eventually("a held listing per workflow and partition", holding)
+        started = time.monotonic()
+        run = await sub.start(flows[0])
+        assert await run.result(timeout=timedelta(seconds=10)) == 1
+        took = time.monotonic() - started
+    assert took < 2, f"a run took {took:.2f} s"

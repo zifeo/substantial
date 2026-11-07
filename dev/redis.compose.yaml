@@ -1,8 +1,29 @@
+# Valkey standalone for the Redis tests, on 127.0.0.1:39501, AOF fsynced at every write.
+#
+#   docker compose -f dev/redis.compose.yaml up -d --wait
+#   SUBSTANTIAL_REDIS_URL='redis://127.0.0.1:39501/tests?db=0&replicas=0' uv run pytest
+#   docker compose -f dev/redis.compose.yaml down -v
+#
+# Without SUBSTANTIAL_REDIS_URL the Redis tests are skipped, each saying so.
+name: substantial-redis
+
 services:
-  redis:
-    image: bitnami/redis:7.0
-    restart: unless-stopped
+  valkey:
+    image: valkey/valkey:8.1
+    container_name: substantial-redis-39501
+    command:
+      - valkey-server
+      - --protected-mode
+      - "no"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - always
+      - --maxmemory-policy
+      - noeviction
     ports:
-      - "6380:6379"
-    environment:
-      REDIS_PASSWORD: password
+      - "127.0.0.1:39501:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      retries: 30

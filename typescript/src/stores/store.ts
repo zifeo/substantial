@@ -16,6 +16,8 @@ export interface ListOptions {
   readonly startAfter?: string;
   readonly maxKeys: number;
   readonly wait?: ListWait;
+  /** Aborts the listing once its answer is no longer wanted, as a `result` wait given up. */
+  readonly signal?: AbortSignal;
 }
 
 export interface Listing {
@@ -26,6 +28,9 @@ export interface Listing {
 /** An adapter scoped to its namespace: keys are relative to it. */
 export interface Store {
   readonly capabilities: Capabilities;
+  /** Connects, throwing `ConfigError` on a store the adapter cannot use; the operations connect
+   * too when it was not called. */
+  open(): Promise<void>;
   /** Atomic and exclusive: of concurrent creates of a key, exactly one gets "created". */
   create(key: string, data: Uint8Array): Promise<Create>;
   get(key: string): Promise<Uint8Array | undefined>;

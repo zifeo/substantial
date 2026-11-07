@@ -6,8 +6,10 @@ import asyncio
 import json
 from typing import Any
 
+import rfc8785
+
 from substantial._proto import checked, json_value, run
-from substantial.errors import InvalidArgument
+from substantial.errors import InvalidArgument, RunFailed
 from substantial.names import check_key, check_name
 from substantial.scheduler import Shared, decode_json
 from substantial.workflow import Workflow
@@ -22,11 +24,17 @@ def encode(value: Any, what: str) -> bytes:
 
 
 def input_object(input: dict[str, Any] | None) -> bytes:
+    """An input as canonical JSON (RFC 8785), as the core compares a start's input byte for
+    byte."""
     if input is None:
         return b"{}"
     if not isinstance(input, dict):
         raise InvalidArgument(f"an input is a JSON object, not {input!r}")
-    return encode(input, "the input")
+    try:
+        data = rfc8785.dumps(input)
+    except rfc8785.CanonicalizationError as e:
+        raise InvalidArgument(f"the input is not JSON: {e}") from None
+    return checked(data)
 
 
 def done[T](shared: Shared, value: T) -> asyncio.Future[T]:
@@ -64,7 +72,16 @@ class Child[R]:
 
     def result(self) -> asyncio.Future[R]:
         """The value the child's chain ended with; `RunFailed` if it failed or was cancelled."""
-        return self._shared.future(run.Call(child_result=self.chain), decode_json)
+        result = self._shared.future(run.Call(child_result=self.chain), decode_json)
+        result.add_done_callback(self._read)
+        return result
+
+    def _read(self, result: asyncio.Future[R]) -> None:
+        if result.cancelled():
+            return
+        e = result.exception()
+        if isinstance(e, RunFailed) and e.status == "failed":
+            self._shared.clock.failure_read(self.chain)
 
     def send(self, name: str, value: Any = None, *, id: str | None = None) -> asyncio.Future[None]:
         """Sends the child a message, delivered once per `id`, which the core derives from this

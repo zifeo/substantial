@@ -7,6 +7,7 @@
 //! attempts as tasks of their own on the runtime.
 
 mod client;
+mod clock;
 mod core;
 mod error;
 mod names;
@@ -14,6 +15,8 @@ mod plan;
 mod proto;
 mod settings;
 mod store;
+#[cfg(feature = "testing")]
+pub mod testing;
 mod time;
 mod worker;
 mod workflow;
@@ -22,8 +25,8 @@ pub use client::{
     Create, Open, ResultWait, Run, RunStatus, SendMessage, StartRun, Substantial, WorkerBuilder,
 };
 pub use error::{Continuation, Error, Failure, Result};
-pub use settings::Preset;
-pub use store::{Credentials, Keys};
+pub use settings::{FOREVER, Preset, Retention};
+pub use store::{Credentials, Keys, Password};
 pub use substantial_macros::{step, workflow};
 pub use time::{days, hours, minutes, seconds};
 pub use worker::Worker;
@@ -42,9 +45,11 @@ pub mod __internal {
     use std::sync::Arc;
 
     pub use crate::settings::{STORE_RETRY, StoreRetry};
+    #[cfg(feature = "redis")]
+    pub use crate::store::RedisStore;
     pub use crate::store::{
-        Capabilities, Create, FsStore, ListWait, Listing, MemoryStore, S3Location, S3Store, Store,
-        StoreFailure, StoreFuture, open,
+        Capabilities, Create, FsStore, ListWait, Listing, MemoryStore, RedisLocation, S3Location,
+        S3Store, Store, StoreFailure, StoreFuture, Topology, open,
     };
 
     use crate::client::{self, Source};
@@ -63,6 +68,14 @@ pub mod __internal {
     /// `WorkerBuilder::set`, for any setting.
     pub fn set(builder: WorkerBuilder, name: &str, value: impl ToString) -> WorkerBuilder {
         builder.with(name, value, true)
+    }
+
+    /// A `result` wait that follows its chain from the first run again every `refollow`.
+    pub fn refollow<T>(
+        wait: crate::ResultWait<T>,
+        refollow: std::time::Duration,
+    ) -> crate::ResultWait<T> {
+        wait.refollow(refollow)
     }
 
     /// Wakes the worker at once, as a start or a send from this process does.

@@ -10,17 +10,19 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Served(_message.Message):
-    __slots__ = ("name", "versions", "unversioned")
+    __slots__ = ("name", "versions", "unversioned", "retention")
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSIONS_FIELD_NUMBER: _ClassVar[int]
     UNVERSIONED_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_FIELD_NUMBER: _ClassVar[int]
     name: str
     versions: _containers.RepeatedScalarFieldContainer[int]
     unversioned: bool
-    def __init__(self, name: _Optional[str] = ..., versions: _Optional[_Iterable[int]] = ..., unversioned: _Optional[bool] = ...) -> None: ...
+    retention: _run_pb2.Retention
+    def __init__(self, name: _Optional[str] = ..., versions: _Optional[_Iterable[int]] = ..., unversioned: _Optional[bool] = ..., retention: _Optional[_Union[_run_pb2.Retention, _Mapping]] = ...) -> None: ...
 
 class AgentConfig(_message.Message):
-    __slots__ = ("prefix", "partitions", "worker", "workflows", "concurrency", "claim_ttl_ms", "claim_skew_ms", "max_idle_ms", "due_page", "due_pages", "snapshot_every", "op_retries", "seed", "settings", "store_waits", "wait_seconds")
+    __slots__ = ("prefix", "partitions", "worker", "workflows", "concurrency", "claim_ttl_ms", "claim_skew_ms", "max_idle_ms", "due_page", "due_pages", "snapshot_every", "op_retries", "seed", "settings", "store_waits", "wait_seconds", "tombstone_ms", "retention_min_ms", "recheck_ms")
     PREFIX_FIELD_NUMBER: _ClassVar[int]
     PARTITIONS_FIELD_NUMBER: _ClassVar[int]
     WORKER_FIELD_NUMBER: _ClassVar[int]
@@ -37,6 +39,9 @@ class AgentConfig(_message.Message):
     SETTINGS_FIELD_NUMBER: _ClassVar[int]
     STORE_WAITS_FIELD_NUMBER: _ClassVar[int]
     WAIT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    TOMBSTONE_MS_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_MIN_MS_FIELD_NUMBER: _ClassVar[int]
+    RECHECK_MS_FIELD_NUMBER: _ClassVar[int]
     prefix: str
     partitions: int
     worker: str
@@ -53,7 +58,10 @@ class AgentConfig(_message.Message):
     settings: _run_pb2.RunSettings
     store_waits: bool
     wait_seconds: int
-    def __init__(self, prefix: _Optional[str] = ..., partitions: _Optional[int] = ..., worker: _Optional[str] = ..., workflows: _Optional[_Iterable[_Union[Served, _Mapping]]] = ..., concurrency: _Optional[int] = ..., claim_ttl_ms: _Optional[int] = ..., claim_skew_ms: _Optional[int] = ..., max_idle_ms: _Optional[int] = ..., due_page: _Optional[int] = ..., due_pages: _Optional[int] = ..., snapshot_every: _Optional[int] = ..., op_retries: _Optional[int] = ..., seed: _Optional[bytes] = ..., settings: _Optional[_Union[_run_pb2.RunSettings, _Mapping]] = ..., store_waits: _Optional[bool] = ..., wait_seconds: _Optional[int] = ...) -> None: ...
+    tombstone_ms: int
+    retention_min_ms: int
+    recheck_ms: int
+    def __init__(self, prefix: _Optional[str] = ..., partitions: _Optional[int] = ..., worker: _Optional[str] = ..., workflows: _Optional[_Iterable[_Union[Served, _Mapping]]] = ..., concurrency: _Optional[int] = ..., claim_ttl_ms: _Optional[int] = ..., claim_skew_ms: _Optional[int] = ..., max_idle_ms: _Optional[int] = ..., due_page: _Optional[int] = ..., due_pages: _Optional[int] = ..., snapshot_every: _Optional[int] = ..., op_retries: _Optional[int] = ..., seed: _Optional[bytes] = ..., settings: _Optional[_Union[_run_pb2.RunSettings, _Mapping]] = ..., store_waits: _Optional[bool] = ..., wait_seconds: _Optional[int] = ..., tombstone_ms: _Optional[int] = ..., retention_min_ms: _Optional[int] = ..., recheck_ms: _Optional[int] = ...) -> None: ...
 
 class ReplayEnd(_message.Message):
     __slots__ = ("idle", "dropped")

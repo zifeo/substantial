@@ -21,16 +21,26 @@ COMMIT_KIND_SUSPEND: CommitKind
 COMMIT_KIND_END: CommitKind
 
 class RunSettings(_message.Message):
-    __slots__ = ("commit_every_ms", "continue_as_new_after_segments", "continue_as_new_after_bytes", "dedup_window_ms")
+    __slots__ = ("commit_every_ms", "continue_as_new_after_segments", "continue_as_new_after_bytes", "dedup_window_ms", "retention")
     COMMIT_EVERY_MS_FIELD_NUMBER: _ClassVar[int]
     CONTINUE_AS_NEW_AFTER_SEGMENTS_FIELD_NUMBER: _ClassVar[int]
     CONTINUE_AS_NEW_AFTER_BYTES_FIELD_NUMBER: _ClassVar[int]
     DEDUP_WINDOW_MS_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_FIELD_NUMBER: _ClassVar[int]
     commit_every_ms: int
     continue_as_new_after_segments: int
     continue_as_new_after_bytes: int
     dedup_window_ms: int
-    def __init__(self, commit_every_ms: _Optional[int] = ..., continue_as_new_after_segments: _Optional[int] = ..., continue_as_new_after_bytes: _Optional[int] = ..., dedup_window_ms: _Optional[int] = ...) -> None: ...
+    retention: Retention
+    def __init__(self, commit_every_ms: _Optional[int] = ..., continue_as_new_after_segments: _Optional[int] = ..., continue_as_new_after_bytes: _Optional[int] = ..., dedup_window_ms: _Optional[int] = ..., retention: _Optional[_Union[Retention, _Mapping]] = ...) -> None: ...
+
+class Retention(_message.Message):
+    __slots__ = ("ms", "forever")
+    MS_FIELD_NUMBER: _ClassVar[int]
+    FOREVER_FIELD_NUMBER: _ClassVar[int]
+    ms: int
+    forever: _boundary_pb2.Empty
+    def __init__(self, ms: _Optional[int] = ..., forever: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ...) -> None: ...
 
 class InboxMessage(_message.Message):
     __slots__ = ("key", "body")

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from datetime import timedelta
 
 import pytest
@@ -13,8 +14,10 @@ from test_replay import Harness
 
 from substantial import (
     Context,
+    Failure,
     InvalidArgument,
     Permanent,
+    RunFailed,
     StepFailed,
     Substantial,
     UndoFailed,
@@ -103,6 +106,42 @@ async def test_step_failed_holds_the_last_attempt_s_failure_as_its_cause() -> No
     ]
 
 
+async def test_a_failed_run_holds_the_cause_of_the_step_that_failed_it() -> None:
+    def decline() -> None:
+        raise Declined("card declined")
+
+    @workflow
+    async def paying(c: Context) -> None:
+        await c.step("charge", decline)
+
+    @workflow
+    async def refusing(c: Context) -> None:
+        raise Declined("not today")
+
+    @workflow
+    async def ordering(c: Context) -> list[object]:
+        child = await c.start(paying)
+        try:
+            await child.result()
+        except RunFailed as e:
+            assert e.cause is not None
+            return [e.error.type, e.cause.type, e.cause.message, e.cause.retryable]
+        raise AssertionError("the child did not fail")
+
+    sub = await Substantial._create(MemoryStore(f"causes-{secrets.token_hex(4)}"), partitions=1)
+    async with script(sub, [paying, refusing, ordering]):
+        with pytest.raises(RunFailed) as paid:
+            await (await sub.start(paying)).result(timeout=LONG)
+        assert paid.value.error.type == "StepFailed"
+        assert paid.value.cause == Failure("Declined", "card declined", False)
+        with pytest.raises(RunFailed) as refused:
+            await (await sub.start(refusing)).result(timeout=LONG)
+        assert refused.value.error.type == "Declined"
+        assert refused.value.cause is None
+        ordered = await (await sub.start(ordering)).result(timeout=LONG)
+        assert ordered == ["StepFailed", "Declined", "card declined", False]
+
+
 async def test_an_undo_has_the_timeout_of_its_step() -> None:
     async def undo_nap(value: str) -> None:
         await nap()
@@ -118,3 +157,50 @@ async def test_an_undo_has_the_timeout_of_its_step() -> None:
 
     message = (await Harness(undone).replay(1_000)).completed()
     assert message.endswith("attempt past 200 ms"), message
+
+
+async def test_a_timed_out_async_step_is_interrupted() -> None:
+    reached: list[str] = []
+
+    async def hang() -> None:
+        try:
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            reached.append("interrupted")
+            raise
+        reached.append("after the await")
+
+    @workflow
+    async def hanging(c: Context) -> str:
+        try:
+            await c.step("hang", hang, timeout=SHORT)
+        except StepFailed as e:
+            return e.cause.type
+        return "returned"
+
+    sub = await Substantial._create(MemoryStore(f"hang-{secrets.token_hex(4)}"), partitions=1)
+    async with script(sub, [hanging]):
+        assert await (await sub.start(hanging)).result(timeout=LONG) == "StepTimeout"
+    await asyncio.sleep(0.6)
+    assert reached == ["interrupted"]
+
+
+async def test_an_uninterruptible_step_runs_to_its_end_with_its_outcome_dropped() -> None:
+    finished: list[str] = []
+
+    def block() -> str:
+        time.sleep(0.4)
+        finished.append("ended")
+        return "late"
+
+    @workflow
+    async def blocking(c: Context) -> str:
+        return await c.step("block", block, timeout=SHORT)
+
+    sub = await Substantial._create(MemoryStore(f"block-{secrets.token_hex(4)}"), partitions=1)
+    async with script(sub, [blocking]):
+        with pytest.raises(RunFailed) as failed:
+            await (await sub.start(blocking)).result(timeout=LONG)
+    assert failed.value.cause is not None and failed.value.cause.type == "StepTimeout"
+    await asyncio.sleep(0.6)
+    assert finished == ["ended"]

@@ -1,9 +1,10 @@
 // One replay: a run machine driven by the workflow's code (I-23, I-24).
 import { setImmediate } from "node:timers";
 import { create } from "@bufbuild/protobuf";
+import { abandonedReplay, type Clock, Future, Inbox } from "./clock.ts";
 import { RunContext } from "./context.ts";
 import type { Core } from "./core.ts";
-import { type Duration, delay } from "./durations.ts";
+import type { Duration } from "./durations.ts";
 import {
   Cancelled,
   ContinuedAsNew,
@@ -11,6 +12,7 @@ import {
   InvalidArgument,
   messageOf,
   ProtocolError,
+  StepFailed,
   StoreError,
 } from "./errors.ts";
 import { RunMachine } from "./machines.ts";
@@ -24,7 +26,7 @@ import {
   type layout,
   run,
 } from "./proto.ts";
-import { type Clock, current, makeCall, Shared } from "./scheduler.ts";
+import { current, makeCall, Shared } from "./scheduler.ts";
 import { attempt } from "./step.ts";
 import { perform } from "./stores/open.ts";
 import type { Store } from "./stores/store.ts";
@@ -45,40 +47,32 @@ export interface ReplayHost {
 
 /** What the agent loop tells a replay: the answer to its commit, or to stop. */
 export class Channel {
-  #stopped = false;
-  #committed: agent.AgentCommand_Committed[] = [];
-  #signal = Promise.withResolvers<void>();
+  readonly stopping: Future = new Future();
+  readonly #committed = new Inbox<agent.AgentCommand_Committed>();
 
   get stopped(): boolean {
-    return this.#stopped;
-  }
-
-  #notify(): void {
-    this.#signal.resolve();
-    this.#signal = Promise.withResolvers<void>();
+    return this.stopping.done;
   }
 
   stop(): void {
-    this.#stopped = true;
-    this.#notify();
+    this.stopping.resolve();
   }
 
   committed(c: agent.AgentCommand_Committed): void {
     this.#committed.push(c);
-    this.#notify();
   }
 
   hasCommitted(): boolean {
-    return this.#committed.length > 0;
+    return !this.#committed.empty;
   }
 
   takeCommitted(): agent.AgentCommand_Committed | undefined {
-    return this.#committed.shift();
+    return this.#committed.take();
   }
 
-  /** Resolves at the next `stop` or `committed`. */
-  changed(): Promise<void> {
-    return this.#signal.promise;
+  /** Done once a `committed` arrives. */
+  arrival(): Future {
+    return this.#committed.signal();
   }
 }
 
@@ -153,7 +147,7 @@ function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
       return create(run.EndSchema, { end: { case: "continued", value: continued } });
     }
     return create(run.EndSchema, {
-      end: { case: "failed", value: { error: failureOf(settled.error) } },
+      end: { case: "failed", value: { error: endFailure(settled.error) } },
     });
   }
   let text: string;
@@ -170,6 +164,16 @@ function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
     return create(run.EndSchema, { end: { case: "failed", value: { error: failureOf(e) } } });
   }
   return create(run.EndSchema, { end: { case: "completed", value: { value: jsonValue(json) } } });
+}
+
+/** The failure an error of the code ends its run with. */
+function endFailure(e: unknown) {
+  const failure = failureOf(e);
+  if (!(e instanceof StepFailed)) return failure;
+  // A client's RunFailed reads the step's cause from it, as a StepFailed's from the core.
+  const { type, message, retryable } = e.cause;
+  const details = JSON.stringify({ error: { type, message, retryable } });
+  return { ...failure, details: jsonValue(new TextEncoder().encode(details)) };
 }
 
 /** Records the end of the code: its value, its failure, its cancellation or its
@@ -215,6 +219,7 @@ async function commit(
   emit: Emit,
   channel: Channel,
 ): Promise<boolean> {
+  const clock = shared.clock;
   const n = c.segment?.n;
   emit({ kind: "commit", run: runId, commit: c });
   for (;;) {
@@ -229,22 +234,21 @@ async function commit(
       if (answer.inbox.length > 0) shared.arrived(answer.inbox);
       return true;
     }
-    await channel.changed();
+    await clock.wait([channel.arrival(), channel.stopping], undefined);
   }
 }
 
 /** Performs the read `Next.store` asks for; `undefined` when the replay is stopped meanwhile. */
 async function read(
+  clock: Clock,
   store: Store,
   op: boundary.StoreOp,
   channel: Channel,
+  runId: string,
 ): Promise<boundary.OpResult | undefined> {
-  const reading = perform(store, op);
-  for (;;) {
-    if (channel.stopped) return undefined;
-    const result = await Promise.race([reading, channel.changed().then(() => undefined)]);
-    if (result !== undefined) return result;
-  }
+  const reading = clock.spawn(() => perform(store, op), `read of ${runId}`);
+  await clock.wait([reading, channel.stopping], undefined);
+  return channel.stopped ? undefined : reading.result();
 }
 
 async function drive(
@@ -260,8 +264,9 @@ async function drive(
   const machine = new RunMachine(core, data);
   const stepTimeout = workflow.stepTimeout ?? host.stepTimeout;
   const shared = new Shared(machine, clock, data, data.start, stepTimeout);
-  const attempts = new Set<Promise<void>>();
-  const finished: [bigint, number, run.Outcome][] = [];
+  const attempts = new Set<Future<[bigint, number, run.Outcome]>>();
+  // Aborted as the replay ends: an attempt still in flight is abandoned.
+  const abandoned = new AbortController();
   try {
     let code: Code = spawn(shared, workflow);
     for (;;) {
@@ -280,7 +285,7 @@ async function drive(
       // flight never reported.
       if (shared.diverged !== undefined) {
         code = undefined;
-        finished.length = 0;
+        for (const a of attempts) if (a.done) attempts.delete(a);
       }
       if (shared.fatal !== undefined) {
         throw new ProtocolError(`a call of the code failed: ${shared.fatal}`);
@@ -289,7 +294,11 @@ async function drive(
       if (channel.hasCommitted()) throw new ProtocolError("committed without a commit");
       shared.evaluateWaits();
       if (shared.codeFailure !== undefined) continue;
-      for (const [call, n, outcome] of finished.splice(0)) shared.stepEnded(call, n, outcome);
+      for (const a of attempts) {
+        if (!a.done) continue;
+        attempts.delete(a);
+        shared.stepEnded(...a.result());
+      }
       const next = shared.next().next;
       switch (next.case) {
         case "resolve":
@@ -307,10 +316,13 @@ async function drive(
           if (step === undefined)
             throw new ProtocolError(`execute of call ${e.call} without a step`);
           const timeout = e.timeoutMs === undefined ? undefined : Number(e.timeoutMs);
-          const running: Promise<void> = attempt(step.body, step.key, timeout).then((outcome) => {
-            finished.push([e.call, e.attempt, outcome]);
-            attempts.delete(running);
-          });
+          const running = clock.spawn(async (): Promise<[bigint, number, run.Outcome]> => {
+            return [
+              e.call,
+              e.attempt,
+              await attempt(clock, step.name, step.body, step.key, timeout, abandoned.signal),
+            ];
+          }, `attempt of ${step.key}`);
           attempts.add(running);
           break;
         }
@@ -320,15 +332,11 @@ async function drive(
         case "waitSteps": {
           if (attempts.size === 0) throw new ProtocolError("wait_steps with no step in flight");
           const until = next.value.until;
-          const timer = until === undefined ? undefined : delay(Number(until.ms - clock().ms));
-          const waits: Promise<void>[] = [...attempts, channel.changed()];
-          if (timer !== undefined) waits.push(timer.promise);
-          await Promise.race(waits);
-          timer?.cancel();
+          await clock.wait([...attempts, channel.stopping], until && Number(until.ms));
           break;
         }
         case "store": {
-          const result = await read(host.store, next.value, channel);
+          const result = await read(clock, host.store, next.value, channel, data.run);
           if (result === undefined) return dropped();
           if (result.result.case === "failed") {
             throw new StoreError(
@@ -345,6 +353,7 @@ async function drive(
       }
     }
   } finally {
+    abandoned.abort(abandonedReplay());
     shared.closed = true;
     machine.close();
   }

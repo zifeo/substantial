@@ -47,12 +47,14 @@ class Failure(_message.Message):
     def __init__(self, type: _Optional[str] = ..., message: _Optional[str] = ..., retryable: _Optional[bool] = ..., details: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
 
 class Parent(_message.Message):
-    __slots__ = ("run", "occurrence")
+    __slots__ = ("run", "occurrence", "segment")
     RUN_FIELD_NUMBER: _ClassVar[int]
     OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_FIELD_NUMBER: _ClassVar[int]
     run: str
     occurrence: int
-    def __init__(self, run: _Optional[str] = ..., occurrence: _Optional[int] = ...) -> None: ...
+    segment: int
+    def __init__(self, run: _Optional[str] = ..., occurrence: _Optional[int] = ..., segment: _Optional[int] = ...) -> None: ...
 
 class Seen(_message.Message):
     __slots__ = ("id", "at")
@@ -273,18 +275,20 @@ class Event(_message.Message):
     def __init__(self, step: _Optional[_Union[Step, _Mapping]] = ..., step_retry: _Optional[_Union[StepRetry, _Mapping]] = ..., step_failed: _Optional[_Union[StepFailed, _Mapping]] = ..., timer: _Optional[_Union[Timer, _Mapping]] = ..., fired: _Optional[_Union[Fired, _Mapping]] = ..., message: _Optional[_Union[MessageConsumed, _Mapping]] = ..., child: _Optional[_Union[Child, _Mapping]] = ..., sent: _Optional[_Union[Sent, _Mapping]] = ..., published: _Optional[_Union[Published, _Mapping]] = ..., completed: _Optional[_Union[Completed, _Mapping]] = ..., failed: _Optional[_Union[Failed, _Mapping]] = ..., cancelled: _Optional[_Union[Cancelled, _Mapping]] = ..., continued: _Optional[_Union[Continued, _Mapping]] = ...) -> None: ...
 
 class Segment(_message.Message):
-    __slots__ = ("n", "events", "next_wake", "worker", "created_at")
+    __slots__ = ("n", "events", "next_wake", "worker", "created_at", "retention_ms")
     N_FIELD_NUMBER: _ClassVar[int]
     EVENTS_FIELD_NUMBER: _ClassVar[int]
     NEXT_WAKE_FIELD_NUMBER: _ClassVar[int]
     WORKER_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_MS_FIELD_NUMBER: _ClassVar[int]
     n: int
     events: _containers.RepeatedCompositeFieldContainer[Event]
     next_wake: Time
     worker: str
     created_at: Time
-    def __init__(self, n: _Optional[int] = ..., events: _Optional[_Iterable[_Union[Event, _Mapping]]] = ..., next_wake: _Optional[_Union[Time, _Mapping]] = ..., worker: _Optional[str] = ..., created_at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+    retention_ms: int
+    def __init__(self, n: _Optional[int] = ..., events: _Optional[_Iterable[_Union[Event, _Mapping]]] = ..., next_wake: _Optional[_Union[Time, _Mapping]] = ..., worker: _Optional[str] = ..., created_at: _Optional[_Union[Time, _Mapping]] = ..., retention_ms: _Optional[int] = ...) -> None: ...
 
 class Snapshot(_message.Message):
     __slots__ = ("n", "events", "next_wake")
@@ -335,20 +339,28 @@ class Claim(_message.Message):
     def __init__(self, worker: _Optional[str] = ..., at: _Optional[_Union[Time, _Mapping]] = ..., ttl_ms: _Optional[int] = ...) -> None: ...
 
 class Result(_message.Message):
-    __slots__ = ("status", "value", "error", "reason", "next", "ended_at")
+    __slots__ = ("status", "value", "error", "reason", "next", "ended_at", "written_at")
     STATUS_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
     NEXT_FIELD_NUMBER: _ClassVar[int]
     ENDED_AT_FIELD_NUMBER: _ClassVar[int]
+    WRITTEN_AT_FIELD_NUMBER: _ClassVar[int]
     status: Status
     value: Value
     error: Failure
     reason: str
     next: str
     ended_at: Time
-    def __init__(self, status: _Optional[_Union[Status, str]] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., reason: _Optional[str] = ..., next: _Optional[str] = ..., ended_at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+    written_at: Time
+    def __init__(self, status: _Optional[_Union[Status, str]] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., reason: _Optional[str] = ..., next: _Optional[str] = ..., ended_at: _Optional[_Union[Time, _Mapping]] = ..., written_at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+
+class Gone(_message.Message):
+    __slots__ = ("until",)
+    UNTIL_FIELD_NUMBER: _ClassVar[int]
+    until: Time
+    def __init__(self, until: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
 
 class PublishedValue(_message.Message):
     __slots__ = ("value",)

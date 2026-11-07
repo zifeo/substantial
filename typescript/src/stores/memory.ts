@@ -12,6 +12,16 @@ import {
 
 const namespaces = new Map<string, Map<string, Uint8Array>>();
 
+/** The objects of the namespace `ns`, read at once: for the test environment. */
+export function objectsOf(ns: string): ReadonlyMap<string, Uint8Array> | undefined {
+  return namespaces.get(ns);
+}
+
+/** Forgets the namespace `ns`. */
+export function dropNamespace(ns: string): void {
+  namespaces.delete(ns);
+}
+
 /** `memory://<ns>`: a namespace held by the process, for tests. Every store opened on the same
  * `<ns>` in a process shares its objects. */
 export class MemoryStore implements Store {
@@ -49,6 +59,8 @@ export class MemoryStore implements Store {
   async delete(key: string): Promise<void> {
     this.#objects.delete(key);
   }
+
+  async open(): Promise<void> {}
 
   async close(): Promise<void> {}
 }

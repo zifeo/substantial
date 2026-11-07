@@ -169,6 +169,9 @@ impl Store for Panicking {
     fn capabilities(&self) -> Capabilities {
         self.inner.capabilities()
     }
+    fn open(&self) -> futures::future::BoxFuture<'_, Result<()>> {
+        Store::open(&self.inner)
+    }
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
         self.inner.create(key, bytes)
     }
@@ -208,6 +211,7 @@ async fn a_worker_that_dies_logs_and_fails_the_waits() {
     let run = sub.start(&waiting, ()).await.unwrap();
     let wait = tokio::spawn(async move { run.result().await });
     tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(worker.is_alive() && worker.error().is_none());
     store.armed.store(true, Ordering::SeqCst);
     let failed = tokio::time::timeout(Duration::from_secs(5), wait)
         .await
@@ -217,6 +221,9 @@ async fn a_worker_that_dies_logs_and_fails_the_waits() {
         Err(Error::Protocol(m)) => assert_eq!(m, "the worker panicked: a bug"),
         other => panic!("{other:?}"),
     }
+    // What a readiness probe reads.
+    assert!(!worker.is_alive());
+    assert!(matches!(worker.error(), Some(Error::Protocol(_))));
     let died: Vec<Line> = lines()
         .into_iter()
         .filter(|(_, level, message)| *level == Level::ERROR && message.starts_with("worker died"))

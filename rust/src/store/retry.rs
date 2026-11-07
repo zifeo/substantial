@@ -1,6 +1,7 @@
 //! Retries of transient failures and resolution of ambiguous creates, shared by every adapter.
 
 use std::future::Future;
+use std::time::Duration;
 
 use bytes::Bytes;
 
@@ -18,18 +19,24 @@ pub(crate) enum Fault {
     Permanent(String),
 }
 
-struct Backoff {
+struct Backoff<S> {
     policy: StoreRetry,
-    delay: std::time::Duration,
+    delay: Duration,
     attempt: u32,
+    sleep: S,
 }
 
-impl Backoff {
-    fn new(policy: StoreRetry) -> Self {
+impl<S, SF> Backoff<S>
+where
+    S: FnMut(Duration) -> SF,
+    SF: Future<Output = ()>,
+{
+    fn new(policy: StoreRetry, sleep: S) -> Self {
         Self {
             policy,
             delay: policy.initial,
             attempt: 1,
+            sleep,
         }
     }
 
@@ -48,19 +55,27 @@ impl Backoff {
         }
         self.attempt += 1;
         if sleep {
-            tokio::time::sleep(self.delay).await;
+            (self.sleep)(self.delay).await;
             self.delay = (self.delay * 2).min(self.policy.max);
         }
         Ok(())
     }
 }
 
-pub(crate) async fn with_retry<T, F, Fut>(policy: StoreRetry, mut op: F) -> Result<T, StoreFailure>
+/// Retries `op` on transient faults, waiting each backoff through `sleep`: `tokio::time::sleep`
+/// on the real clock.
+pub(crate) async fn with_retry<T, F, Fut, S, SF>(
+    policy: StoreRetry,
+    mut op: F,
+    sleep: S,
+) -> Result<T, StoreFailure>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, Fault>>,
+    S: FnMut(Duration) -> SF,
+    SF: Future<Output = ()>,
 {
-    let mut backoff = Backoff::new(policy);
+    let mut backoff = Backoff::new(policy, sleep);
     loop {
         match op().await {
             Ok(value) => return Ok(value),
@@ -72,19 +87,22 @@ where
 
 /// A create that never assumes it won or lost: an ambiguous outcome is followed by a `get`,
 /// the same bytes meaning `Created`, other bytes `Exists`, and a missing key creating again.
-pub(crate) async fn create<C, CF, G, GF>(
+pub(crate) async fn create<C, CF, G, GF, S, SF>(
     policy: StoreRetry,
     bytes: &Bytes,
     mut create: C,
     mut get: G,
+    sleep: S,
 ) -> Result<Create, StoreFailure>
 where
     C: FnMut() -> CF,
     CF: Future<Output = Result<Create, Fault>>,
     G: FnMut() -> GF,
     GF: Future<Output = Result<Option<Bytes>, Fault>>,
+    S: FnMut(Duration) -> SF,
+    SF: Future<Output = ()>,
 {
-    let mut backoff = Backoff::new(policy);
+    let mut backoff = Backoff::new(policy, sleep);
     let mut ambiguous = false;
     // An earlier attempt left unanswered may have landed after the get, so a later `Exists` is
     // checked too.
@@ -124,7 +142,6 @@ where
 mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
-    use std::time::Duration;
 
     use super::*;
 
@@ -142,7 +159,7 @@ mod tests {
     async fn transient_failures_are_retried_then_fail() {
         let steps = script(vec![Err(Fault::Transient("a".into())), Ok(7)]);
         let op = || async { steps.lock().unwrap().pop_front().unwrap() };
-        assert_eq!(with_retry(POLICY, op).await, Ok(7));
+        assert_eq!(with_retry(POLICY, op, tokio::time::sleep).await, Ok(7));
 
         let steps = script(
             (0..3)
@@ -150,7 +167,9 @@ mod tests {
                 .collect(),
         );
         let op = || async { steps.lock().unwrap().pop_front().unwrap() };
-        let err = with_retry(POLICY, op).await.unwrap_err();
+        let err = with_retry(POLICY, op, tokio::time::sleep)
+            .await
+            .unwrap_err();
         assert!(err.message.contains("down (after 3 attempts)"), "{err}");
 
         let once = StoreRetry {
@@ -158,7 +177,7 @@ mod tests {
             ..POLICY
         };
         let op = || async { Err::<u8, _>(Fault::Transient("down".into())) };
-        let err = with_retry(once, op).await.unwrap_err();
+        let err = with_retry(once, op, tokio::time::sleep).await.unwrap_err();
         assert!(err.message.ends_with("down (after 1 attempt)"), "{err}");
     }
 
@@ -170,7 +189,7 @@ mod tests {
         ]);
         let op = || async { steps.lock().unwrap().pop_front().unwrap() };
         assert_eq!(
-            with_retry(POLICY, op).await,
+            with_retry(POLICY, op, tokio::time::sleep).await,
             Err(StoreFailure::new("bad key"))
         );
     }
@@ -192,6 +211,7 @@ mod tests {
                     .expect("unexpected create")
             },
             || async { gets.lock().unwrap().pop_front().expect("unexpected get") },
+            tokio::time::sleep,
         )
         .await
     }

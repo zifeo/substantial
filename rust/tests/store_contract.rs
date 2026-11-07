@@ -1,5 +1,5 @@
-//! The store contract of I-26, run against every adapter of this host; on S3 only when
-//! `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`).
+//! The store contract of I-26, run against every adapter of this host; on S3 and Redis only when
+//! their variables are set (see `common`).
 
 mod common;
 
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use bytes::Bytes;
-use common::{retry, s3_url};
+use common::{redis_url, retry, s3_url};
 use substantial::__internal::{
     self as internal, Create, FsStore, ListWait, MemoryStore, Store, StoreRetry,
 };
@@ -42,6 +42,26 @@ fn s3() -> Option<Fixture> {
         store: internal::open(&url, &Credentials::Env, retry()).unwrap(),
         _dir: None,
     })
+}
+
+fn redis_on(topology: &str) -> Option<Fixture> {
+    let url = redis_url(topology)?;
+    Some(Fixture {
+        store: internal::open(&url, &Credentials::None, retry()).unwrap(),
+        _dir: None,
+    })
+}
+
+fn redis() -> Option<Fixture> {
+    redis_on("redis")
+}
+
+fn redis_sentinel() -> Option<Fixture> {
+    redis_on("redis-sentinel")
+}
+
+fn redis_cluster() -> Option<Fixture> {
+    redis_on("redis-cluster")
 }
 
 fn b(s: &str) -> Bytes {
@@ -120,7 +140,10 @@ async fn list_in_byte_order(f: Fixture) {
 }
 
 async fn list_refuses_wait(f: Fixture) {
-    assert!(!f.store.capabilities().wait);
+    if f.store.capabilities().wait {
+        eprintln!("skipping: this store's listings wait");
+        return;
+    }
     let wait = Some(ListWait {
         etag: None,
         seconds: 1,
@@ -189,6 +212,9 @@ macro_rules! contract {
 contract!(memory);
 contract!(fs);
 contract!(s3);
+contract!(redis);
+contract!(redis_sentinel);
+contract!(redis_cluster);
 
 #[tokio::test]
 async fn fs_checks_key_components() {
@@ -325,4 +351,17 @@ fn credentials_go_only_where_a_store_takes_them() {
             .capabilities()
             .wait
     );
+}
+
+#[cfg(not(feature = "redis"))]
+#[test]
+fn redis_urls_without_the_extra_name_it() {
+    let url = "redis://127.0.0.1:1/ns?db=0&replicas=0";
+    match internal::open(url, &Credentials::None, retry()) {
+        Err(Error::ConfigError(m)) => {
+            assert!(m.contains("cargo add substantial --features redis"), "{m}")
+        }
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("opened without the redis feature"),
+    }
 }

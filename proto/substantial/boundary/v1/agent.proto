@@ -13,6 +13,8 @@ message Served {
   repeated uint32 versions = 2;
   // Required.
   optional bool unversioned = 3;
+  // The workflow's own retention; absent, the worker's (settings.retention).
+  Retention retention = 4;
 }
 
 // Creates an agent machine, one per worker.
@@ -37,6 +39,12 @@ message AgentConfig {
   bool store_waits = 15;
   // A waiting listing's wait, 1 to 20 seconds; required on any store, used only on one that waits.
   uint32 wait_seconds = 16;
+  // How long a collected run's id stays taken (7 days in both presets).
+  uint64 tombstone_ms = 17;
+  // The least retention a worker or a workflow may set (1 hour in both presets).
+  uint64 retention_min_ms = 18;
+  // How long a collection that cannot go on yet waits before it checks again (1 day in both presets).
+  uint64 recheck_ms = 19;
 }
 
 message ReplayEnd {

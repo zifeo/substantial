@@ -69,7 +69,9 @@ where
 impl Context {
     /// Runs `f` as the step `name`: recorded once it returns, its recorded value on a replay.
     ///
-    /// `f` may run more than once (attempts, crashes), so it builds a fresh future each time.
+    /// `f` may run more than once (attempts, crashes), so it builds a fresh future each time. An
+    /// attempt the worker abandons, past its timeout or its worker's shutdown grace, is dropped
+    /// at its await: the code after it never runs.
     pub fn step<T, E, F, Fut>(&self, name: &str, f: F) -> Step<T>
     where
         T: Serialize + DeserializeOwned + Send + 'static,
@@ -90,7 +92,8 @@ impl Context {
     }
 
     /// Runs the blocking `f` as the step `name`, on tokio's blocking threads. A thread cannot be
-    /// stopped: past its timeout, an attempt may still finish while the next one runs.
+    /// stopped: an attempt abandoned, past its timeout or its worker's shutdown grace, runs to
+    /// its end with its outcome dropped, maybe while the next one runs.
     pub fn step_blocking<T, E, F>(&self, name: &str, f: F) -> Step<T>
     where
         T: Serialize + DeserializeOwned + Send + 'static,
@@ -101,6 +104,8 @@ impl Context {
         self.step(name, move || {
             let f = f.clone();
             async move {
+                #[cfg(feature = "testing")]
+                crate::testing::threaded();
                 match tokio::task::spawn_blocking(move || f()).await {
                     Ok(result) => result,
                     // A panic goes on in the attempt's task, as it would from an async step.

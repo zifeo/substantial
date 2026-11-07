@@ -1,6 +1,7 @@
 // Steps (I-6): the declared step, the step call, its attempts, and the step key.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { create } from "@bufbuild/protobuf";
+import type { Clock } from "./clock.ts";
 import { Duration } from "./durations.ts";
 import { InvalidArgument, messageOf, NotInWorkflow, typeName } from "./errors.ts";
 import { checkName } from "./names.ts";
@@ -8,15 +9,25 @@ import { capped, decodeValue, jsonText, jsonValue, run } from "./proto.ts";
 import { current, makeCall, type Shared, type StepBody } from "./scheduler.ts";
 import { Permanent, type Retry, retryPolicy } from "./workflow.ts";
 
-const stepKeys = new AsyncLocalStorage<string>();
+/** The key and the signal of the attempt running. */
+const attempts = new AsyncLocalStorage<{ key: string; signal: AbortSignal }>();
 /** The saga the steps called here belong to, set by `c.saga`. */
 export const sagaScope: AsyncLocalStorage<bigint> = new AsyncLocalStorage<bigint>();
 
 /** `<run>/<step>/<occurrence>`, the same for every attempt and replay of the step running. */
 export function stepKey(): string {
-  const key = stepKeys.getStore();
-  if (key === undefined) throw new NotInWorkflow("stepKey is called inside a step");
-  return key;
+  const running = attempts.getStore();
+  if (running === undefined) throw new NotInWorkflow("stepKey is called inside a step");
+  return running.key;
+}
+
+/** The signal of the attempt running, aborted once it is abandoned: its timeout passed, its
+ * worker died, or its worker shut down past its grace. JavaScript cannot stop a body: pass it to
+ * `fetch`, timers and SDK calls, else the body runs to its end, its outcome dropped. */
+export function stepSignal(): AbortSignal {
+  const running = attempts.getStore();
+  if (running === undefined) throw new NotInWorkflow("stepSignal is called inside a step");
+  return running.signal;
 }
 
 interface CommonOptions<T> {
@@ -122,33 +133,31 @@ function failure(type: string, message: string, retryable: boolean): run.Outcome
   });
 }
 
-const TIMEOUT = Symbol("timeout");
-
 /** Runs one attempt of a step with its step key; a `Permanent` error is not retryable. */
 export async function attempt(
+  clock: Clock,
+  name: string,
   body: StepBody,
   key: string,
-  timeoutMs?: number,
+  timeoutMs: number | undefined,
+  abandoned: AbortSignal,
 ): Promise<run.Outcome> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outcome = await clock.attempt(
+    name,
+    key,
+    (signal) => outcomeOf(body, key, signal),
+    timeoutMs,
+    abandoned,
+  );
+  return outcome ?? failure("StepTimeout", `attempt past ${timeoutMs} ms`, true);
+}
+
+async function outcomeOf(body: StepBody, key: string, signal: AbortSignal): Promise<run.Outcome> {
   let value: unknown;
   try {
-    const running = current.exit(() => stepKeys.run(key, async () => await body()));
-    if (timeoutMs === undefined) {
-      value = await running;
-    } else {
-      // The attempt cannot be stopped: its late outcome is discarded.
-      running.catch(() => {});
-      const late = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(TIMEOUT), timeoutMs);
-      });
-      value = await Promise.race([running, late]);
-    }
+    value = await current.exit(() => attempts.run({ key, signal }, async () => await body()));
   } catch (e) {
-    if (e === TIMEOUT) return failure("StepTimeout", `attempt past ${timeoutMs} ms`, true);
     return failure(typeName(e), messageOf(e), !(e instanceof Permanent));
-  } finally {
-    clearTimeout(timer);
   }
   let text: string;
   try {

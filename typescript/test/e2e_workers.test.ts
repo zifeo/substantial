@@ -2,7 +2,14 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createOn, openOn } from "../src/client.ts";
-import { type Context, milliseconds, step, type Workflow, workflow } from "../src/mod.ts";
+import {
+  type Context,
+  milliseconds,
+  step,
+  stepSignal,
+  type Workflow,
+  workflow,
+} from "../src/mod.ts";
 import { eachAdapter, eventually, LONG, Recording, script } from "./helpers.ts";
 
 const FAST = { claimTtl: milliseconds(200), claimSkew: milliseconds(0) };
@@ -79,6 +86,28 @@ eachAdapter("shutdown past the grace loses the step in flight", async (store) =>
   assert.ok(performance.now() - began < 5000);
   await using _ = script(sub, [probe.workflow], settings);
   assert.equal(await run.result({ timeout: LONG }), 2);
+});
+
+eachAdapter("a shutdown past its grace interrupts", async (store) => {
+  const reached: string[] = [];
+  const slow = step("slow", async () => {
+    reached.push("started");
+    try {
+      await sleep(1000, undefined, { signal: stepSignal() });
+    } catch (e) {
+      reached.push("interrupted");
+      throw e;
+    }
+    reached.push("after the await");
+  });
+  const slowly = workflow("slowly", async () => await slow());
+  const sub = await createOn(store, { partitions: 1 });
+  const worker = script(sub, [slowly], { shutdownGrace: milliseconds(100) });
+  await sub.start(slowly);
+  await eventually("the step", () => reached.length === 1);
+  await worker.shutdown();
+  await sleep(1200);
+  assert.deepEqual(reached, ["started", "interrupted"]);
 });
 
 eachAdapter("a timer fires while a step is in flight", async (store) => {

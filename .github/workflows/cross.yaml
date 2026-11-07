@@ -13,6 +13,7 @@ jobs:
       AWS_ACCESS_KEY_ID: substantial
       AWS_SECRET_ACCESS_KEY: substantial-secret
       SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -25,6 +26,7 @@ jobs:
           node-version: "24"
           cache: npm
       - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: docker compose -f dev/redis.compose.yaml up -d --wait
       - run: uv sync --locked
       - run: npm ci
       - run: uv run dev/cross/run.py

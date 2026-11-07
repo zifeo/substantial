@@ -211,5 +211,8 @@ class FsStore:
             STORE_RETRY, lambda: self._blocking(lambda: _delete(self._root, key))
         )
 
+    async def open(self) -> None:
+        pass
+
     async def close(self) -> None:
         pass

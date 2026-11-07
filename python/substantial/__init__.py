@@ -6,6 +6,7 @@ from the loop's thread. The code of each replay runs on a loop of its own that t
 (I-24); step attempts run on the caller's loop, synchronous ones in its default executor.
 """
 
+from substantial import testing
 from substantial.child import Child
 from substantial.client import Run, RunStatus, Substantial
 from substantial.context import Context
@@ -33,13 +34,14 @@ from substantial.errors import (
     ValueTooLarge,
     WaitTimeout,
 )
-from substantial.settings import ContinueAsNewAfter
+from substantial.settings import FOREVER, ContinueAsNewAfter
 from substantial.step import Step, step, step_key
-from substantial.stores import Credentials
+from substantial.stores import Credentials, Password
 from substantial.worker import Worker
 from substantial.workflow import Permanent, Retry, Workflow, workflow
 
 __all__ = [
+    "FOREVER",
     "Cancelled",
     "Child",
     "ConfigError",
@@ -54,6 +56,7 @@ __all__ = [
     "NonDeterminism",
     "NotCompressible",
     "NotInWorkflow",
+    "Password",
     "Permanent",
     "Retry",
     "RolledBack",
@@ -79,5 +82,6 @@ __all__ = [
     "seconds",
     "step",
     "step_key",
+    "testing",
     "workflow",
 ]

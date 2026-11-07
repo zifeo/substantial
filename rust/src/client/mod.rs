@@ -8,9 +8,11 @@ use std::sync::{Arc, Mutex, Weak};
 
 use futures::future::BoxFuture;
 use serde::Serialize;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 pub(crate) use open::Source;
+#[cfg(feature = "testing")]
+pub(crate) use open::attached;
 pub use open::{Create, Open};
 pub use run::{ResultWait, Run, RunStatus, SendMessage};
 
@@ -19,9 +21,10 @@ use crate::error::{Error, Result};
 use crate::names::check_key;
 use crate::plan;
 use crate::proto::boundary::v1::{self as b, plan_input::Plan, plan_step::Step, started};
+use crate::proto::layout::v1::Time;
 use crate::settings::{self, Preset, Settings};
 use crate::store::Store;
-use crate::worker::Worker;
+use crate::worker::{OnDeath, Wakes, Worker};
 use crate::workflow::{AsWorkflow, IntoWorkflows, Workflow, input_object, json};
 
 /// An opened namespace: the store, its partitions, and the workers of this process serving it.
@@ -32,9 +35,12 @@ struct Inner {
     core: Core,
     store: Arc<dyn Store>,
     partitions: u32,
-    workers: Mutex<Vec<Weak<Notify>>>,
+    workers: Mutex<Vec<Weak<dyn Wakes>>>,
     /// The error of the last worker of this handle that died, which fails the waits in progress.
     died: Died,
+    /// The test environment this handle belongs to, whose clock and ids it takes.
+    #[cfg(feature = "testing")]
+    env: Option<crate::testing::Attached>,
 }
 
 pub(crate) type Died = Arc<watch::Sender<Option<Arc<Error>>>>;
@@ -81,6 +87,27 @@ impl Substantial {
         Run::new(self.clone(), chain.to_owned())
     }
 
+    fn now(&self) -> Time {
+        #[cfg(feature = "testing")]
+        if let Some(env) = &self.0.env {
+            return env.now();
+        }
+        crate::time::now()
+    }
+
+    fn ulid(&self, ms: i64) -> String {
+        #[cfg(feature = "testing")]
+        if let Some(env) = &self.0.env {
+            return env.ulid(ms);
+        }
+        plan::ulid(ms)
+    }
+
+    #[cfg(feature = "testing")]
+    pub(crate) fn env(&self) -> Option<&crate::testing::Attached> {
+        self.0.env.as_ref()
+    }
+
     async fn plan(&self, plan: Plan) -> Result<Step> {
         plan::run(&self.0.core, &*self.0.store, plan)
             .await
@@ -90,10 +117,14 @@ impl Substantial {
     /// Wakes the workers of this process, which then list at once instead of after `max_idle`.
     fn wake_workers(&self) {
         let workers = self.0.workers.lock().expect("never poisoned");
-        for wake in workers.iter().filter_map(Weak::upgrade) {
-            wake.notify_one();
+        for worker in workers.iter().filter_map(Weak::upgrade) {
+            worker.wake();
         }
     }
+}
+
+fn datetime(t: &Time) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp_millis(t.ms).expect("a time in chrono's range")
 }
 
 /// A start of a run, awaited to start it.
@@ -125,8 +156,8 @@ impl<O: 'static> IntoFuture for StartRun<O> {
             if let Some(id) = &self.id {
                 check_key("run id", id)?;
             }
-            let now = crate::time::now();
-            let id = self.id.unwrap_or_else(|| plan::ulid(now.ms));
+            let now = self.sub.now();
+            let id = self.id.unwrap_or_else(|| self.sub.ulid(now.ms));
             let start = b::StartPlan {
                 prefix: String::new(),
                 partitions: self.sub.0.partitions,
@@ -141,7 +172,14 @@ impl<O: 'static> IntoFuture for StartRun<O> {
                     started: Some(outcome),
                 }) => match outcome {
                     started::Started::Created(_) | started::Started::Existing(_) => {}
-                    started::Started::RunExists(_) => return Err(Error::RunExists { id }),
+                    started::Started::RunExists(taken) => {
+                        let until = taken.collected_until.map(|t| datetime(&t));
+                        return Err(Error::RunExists {
+                            id,
+                            collected: until.is_some(),
+                            until,
+                        });
+                    }
                     started::Started::Failed(f) => return Err(Error::StoreError(f.message)),
                 },
                 other => return Err(plan::unexpected("start", other)),
@@ -175,9 +213,10 @@ impl WorkerBuilder {
     }
 
     /// Overrides the setting `name` of the preset: `concurrency`, `max_idle`, `shutdown_grace`,
-    /// `claim_ttl` or `continue_as_new_after`. Durations take a unit (`100ms`, `5s`, `10min`,
-    /// `1h`, `7d`); `continue_as_new_after` is `segments,size` (`1000,8MiB`), or `0` to continue
-    /// at every boundary. Any other name, or a value that does not parse, is a `ConfigError` when
+    /// `claim_ttl`, `continue_as_new_after`, `step_timeout` or `retention`. Durations take a unit
+    /// (`100ms`, `5s`, `10min`, `1h`, `7d`); `continue_as_new_after` is `segments,size`
+    /// (`1000,8MiB`), or `0` to continue at every boundary; `retention` a duration of at least
+    /// `1h`, or `forever` (`s::FOREVER`). Any other name, or a value that does not parse, is a `ConfigError` when
     /// the worker starts.
     pub fn set(self, name: &str, value: impl ToString) -> Self {
         self.with(name, value, false)
@@ -207,25 +246,27 @@ impl WorkerBuilder {
         }
         let mut settings = Settings::preset(preset, self.sub.0.store.capabilities().wait);
         for o in &self.overrides {
-            settings.set(&o.name, &o.value)?;
+            settings.apply(&o.name, &o.value)?;
         }
+        settings.validate()?;
         Ok(settings)
     }
 
     /// Starts the worker on the current tokio runtime; `shutdown` stops it.
     pub fn start(self) -> Result<Worker> {
         let settings = self.settings()?;
-        let inner = &self.sub.0;
-        let worker = Worker::start(
-            inner.store.clone(),
-            self.workflows,
-            inner.partitions,
-            settings,
-            inner.died.clone(),
-        )?;
+        let (sub, workflows) = (self.sub, self.workflows);
+        let inner = &sub.0;
+        #[cfg(feature = "testing")]
+        let worker = match &inner.env {
+            Some(env) => env.worker(workflows, settings)?,
+            None => real(&sub, workflows, settings)?,
+        };
+        #[cfg(not(feature = "testing"))]
+        let worker = real(&sub, workflows, settings)?;
         let mut workers = inner.workers.lock().expect("never poisoned");
         workers.retain(|w| w.strong_count() > 0);
-        workers.push(Arc::downgrade(worker.wake_handle()));
+        workers.push(Arc::downgrade(&worker.wakes()));
         Ok(worker)
     }
 
@@ -234,4 +275,23 @@ impl WorkerBuilder {
         let signals = crate::worker::Signals::listen()?;
         self.start()?.serve(signals).await
     }
+}
+
+fn real(
+    sub: &Substantial,
+    workflows: Vec<Workflow<serde_json::Value>>,
+    settings: Settings,
+) -> Result<Worker> {
+    let inner = &sub.0;
+    let died = inner.died.clone();
+    let died: OnDeath = Arc::new(move |e: &Error| {
+        died.send_replace(Some(Arc::new(e.again())));
+    });
+    Worker::start(
+        inner.store.clone(),
+        workflows,
+        inner.partitions,
+        settings,
+        died,
+    )
 }

@@ -41,14 +41,25 @@ export {
 export type { Log } from "./log.ts";
 export type { HandleOptions } from "./messages.ts";
 export { type ResultOptions, Run, type RunStatus, type SendOptions } from "./run.ts";
-export type { Preset, WorkerOptions } from "./settings.ts";
-export { type DeclaredStepOptions, type StepOptions, step, stepKey } from "./step.ts";
+export { FOREVER, type Preset, type Retention, type WorkerOptions } from "./settings.ts";
+export {
+  type DeclaredStepOptions,
+  type StepOptions,
+  step,
+  stepKey,
+  stepSignal,
+} from "./step.ts";
 export {
   Credentials,
   type CredentialsInit,
   type CredentialsProvider,
+  Password,
+  type PasswordInit,
+  type PasswordProvider,
   type ProvidedCredentials,
+  type ProvidedPassword,
 } from "./stores/credentials.ts";
+export * as testing from "./testing/mod.ts";
 export { Worker } from "./worker.ts";
 export {
   Permanent,

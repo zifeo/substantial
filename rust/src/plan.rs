@@ -38,30 +38,66 @@ pub(crate) fn unexpected(plan: &str, outcome: plan_step::Step) -> Error {
 
 const CROCKFORD: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
-/// The time and random part of the last ULID of the process.
-static LAST_ULID: std::sync::Mutex<(u128, u128)> = std::sync::Mutex::new((0, 0));
+/// ULIDs: 48 bits of milliseconds then 80 random bits, in lowercase Crockford base32, as run
+/// and message ids are lowercase (I-17). Monotonic: one made in the same millisecond as the last,
+/// or earlier when the clock went back, is the last plus one, so a client's messages are consumed
+/// in the order sent.
+pub(crate) struct Ulids {
+    /// The time and random part of the last ULID.
+    last: std::sync::Mutex<(u128, u128)>,
+    bits: Bits,
+}
 
-/// A ULID: 48 bits of milliseconds then 80 random bits, in lowercase Crockford base32, as run
-/// and message ids are lowercase (I-17). Monotonic in the process: one made in the same
-/// millisecond as the last, or earlier when the clock went back, is the last plus one, so a
-/// client's messages are consumed in the order sent.
+enum Bits {
+    Random,
+    /// From a test environment's seed and the millisecond.
+    #[cfg(feature = "testing")]
+    Seeded(u64),
+}
+
+/// The ULIDs of the process, monotonic across its clients.
+static ULIDS: Ulids = Ulids::new(Bits::Random);
+
+impl Ulids {
+    const fn new(bits: Bits) -> Self {
+        Self {
+            last: std::sync::Mutex::new((0, 0)),
+            bits,
+        }
+    }
+
+    #[cfg(feature = "testing")]
+    pub(crate) const fn seeded(seed: u64) -> Self {
+        Self::new(Bits::Seeded(seed))
+    }
+
+    pub(crate) fn next(&self, ms: i64) -> String {
+        let ms = u128::try_from(ms).expect("a time after 1970") & ((1 << 48) - 1);
+        let mut last = self.last.lock().expect("never poisoned");
+        let ms = ms.max(last.0);
+        let random = if last.0 == ms {
+            let next = last.1 + 1;
+            assert!(next < 1 << 80, "ULIDs of one millisecond exhausted");
+            next
+        } else {
+            let bits = match self.bits {
+                Bits::Random => u128::from_be_bytes(rand::random::<[u8; 16]>()),
+                #[cfg(feature = "testing")]
+                Bits::Seeded(seed) => crate::testing::ulid_bits(seed, ms),
+            };
+            bits & ((1 << 80) - 1)
+        };
+        *last = (ms, random);
+        let value = (ms << 80) | random;
+        (0..26)
+            .rev()
+            .map(|i| CROCKFORD[((value >> (i * 5)) & 31) as usize] as char)
+            .collect()
+    }
+}
+
 pub(crate) fn ulid(ms: i64) -> String {
-    let ms = u128::try_from(ms).expect("a time after 1970") & ((1 << 48) - 1);
-    let mut last = LAST_ULID.lock().expect("never poisoned");
-    let ms = ms.max(last.0);
-    let random = if last.0 == ms {
-        let next = last.1 + 1;
-        assert!(next < 1 << 80, "ULIDs of one millisecond exhausted");
-        next
-    } else {
-        u128::from_be_bytes(rand::random::<[u8; 16]>()) & ((1 << 80) - 1)
-    };
-    *last = (ms, random);
-    let value = (ms << 80) | random;
-    (0..26)
-        .rev()
-        .map(|i| CROCKFORD[((value >> (i * 5)) & 31) as usize] as char)
-        .collect()
+    ULIDS.next(ms)
 }
 
 #[cfg(test)]

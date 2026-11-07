@@ -1,5 +1,5 @@
 """A fake h3 server on 127.0.0.1: the S3 calls of the store contract on one in-memory bucket, its
-listings held on the wait headers, and the headers of every listing recorded."""
+listings held on the wait headers, every request and the headers of every listing recorded."""
 
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ class FakeH3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.listed: list[Listed] = []
+        # The method and target of every request, in the order received.
+        self.requests: list[tuple[str, str]] = []
         self.holds = 0
         self.omit_etag = False
         self._changed = asyncio.Event()
@@ -88,6 +90,7 @@ class FakeH3:
     async def _answer(
         self, method: str, target: str, headers: dict[str, str], body: bytes
     ) -> Answer:
+        self.requests.append((method, target))
         parts = urlsplit(target)
         path = unquote(parts.path)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))

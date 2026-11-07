@@ -44,27 +44,35 @@ export function outcomeOf<K extends Outcome["case"]>(
 
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
 const MAX_MS = 2n ** 48n - 1n;
-let last = 0n;
 
-/** A ULID: 48 bits of milliseconds then 80 random bits, in lowercase Crockford base32, as run and
- * message ids are lowercase (I-17). Monotonic in the process: one made in the millisecond of the
- * last, or before it, is the last plus one, so a client's messages are consumed in the order
- * sent. */
-export function ulid(ms: number): string {
-  if (!Number.isSafeInteger(ms) || ms < 0) throw new RangeError("a time after 1970");
+function randomBits(): bigint {
   let random = 0n;
   for (const byte of crypto.getRandomValues(new Uint8Array(10))) {
     random = (random << 8n) | BigInt(byte);
   }
-  let value = ((BigInt(ms) & MAX_MS) << 80n) | random;
-  if (value >> 80n <= last >> 80n) {
-    value = last + 1n;
-  }
-  if (value >> 128n !== 0n) throw new RangeError("ULIDs exhausted");
-  last = value;
-  let out = "";
-  for (let i = 25; i >= 0; i--) {
-    out += CROCKFORD[Number((value >> BigInt(i * 5)) & 31n)];
-  }
-  return out;
+  return random;
 }
+
+/** ULIDs: 48 bits of milliseconds then 80 random bits from `bits`, in lowercase Crockford base32,
+ * as run and message ids are lowercase (I-17). Monotonic: one made in the millisecond of the last,
+ * or before it, is the last plus one, so a client's messages are consumed in the order sent. */
+export function ulids(bits: (ms: number) => bigint): (ms: number) => string {
+  let last = 0n;
+  return (ms) => {
+    if (!Number.isSafeInteger(ms) || ms < 0) throw new RangeError("a time after 1970");
+    let value = ((BigInt(ms) & MAX_MS) << 80n) | bits(ms);
+    if (value >> 80n <= last >> 80n) {
+      value = last + 1n;
+    }
+    if (value >> 128n !== 0n) throw new RangeError("ULIDs exhausted");
+    last = value;
+    let out = "";
+    for (let i = 25; i >= 0; i--) {
+      out += CROCKFORD[Number((value >> BigInt(i * 5)) & 31n)];
+    }
+    return out;
+  };
+}
+
+/** The ULIDs of the process, monotonic across its clients. */
+export const ulid: (ms: number) => string = ulids(randomBits);

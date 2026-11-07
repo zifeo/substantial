@@ -2,7 +2,7 @@
 
 Brokerless durable execution for Rust, Python and TypeScript.
 
-Write a workflow as a plain async function. Substantial records the result of each step, so after a crash, a restart or a deploy the function picks up where it was, without running finished steps again. Retries, sleeps of days and messages from the outside wait without holding a process. The only infrastructure is a store: memory, a directory or S3. No broker, no server.
+Write a workflow as a plain async function. Substantial records the result of each step, so after a crash, a restart or a deploy the function picks up where it was, without running finished steps again. Retries, sleeps of days and messages from the outside wait without holding a process. The only infrastructure is a store: memory, a directory, S3 or Redis. No broker, no server.
 
 ## Example
 
@@ -173,30 +173,38 @@ Run it with `node checkout.ts` or `deno run -A checkout.ts`. Steps and workflows
 Python 3.13 or later:
 
 ```sh
-uv add substantial==0.2.0b1         # or: pip install substantial==0.2.0b1
+uv add substantial==0.2.0b2         # or: pip install substantial==0.2.0b2
+uv add "substantial[s3]==0.2.0b2"   # with S3 stores, or: pip install "substantial[s3]==0.2.0b2"
+uv add "substantial[redis]==0.2.0b2"   # with Redis stores, or: pip install "substantial[redis]==0.2.0b2"
 ```
 
-The exact pin installs the pre-release; without one, pip needs `--pre` and uv `--prerelease=allow`.
+The exact pin installs the pre-release; without one, pip needs `--pre` and uv `--prerelease=allow`. The `s3` extra adds aiobotocore, which `s3://` stores need, and the `redis` extra redis-py, which Redis stores need.
 
 Rust 1.97 or later, with what the example uses:
 
 ```sh
-cargo add substantial@0.2.0-beta.1
+cargo add substantial@0.2.0-beta.2
 cargo add tokio --features macros,rt-multi-thread
 cargo add serde --features derive
 cargo add anyhow
 ```
 
+Redis stores need the `redis` feature: `cargo add substantial@0.2.0-beta.2 --features redis`.
+
 TypeScript, on Node 24 or later, or Deno, from [JSR](https://jsr.io/@substantial/substantial):
 
 ```sh
-npx jsr add @substantial/substantial@0.2.0-beta.1
-deno add jsr:@substantial/substantial@0.2.0-beta.1
+npx jsr add @substantial/substantial@0.2.0-beta.2
+deno add jsr:@substantial/substantial@0.2.0-beta.2
 ```
+
+`s3://` stores also need the AWS SDK: `npm install @aws-sdk/client-s3`, or `deno add npm:@aws-sdk/client-s3`. Redis stores need `@redis/client`: `npm install @redis/client`, or `deno add npm:@redis/client`.
 
 ## A tour
 
 The API is the same in every host: `snake_case` in Python and Rust, `camelCase` in TypeScript. The snippets are Python, with Rust and TypeScript folded under each, inside a workflow unless they start from `sub` or `run`. The library is imported as `s` (`import substantial as s`, `import * as s from "@substantial/substantial"`, `use substantial as s;`): `s.` declares, `c.` acts. [The reference][reference] covers each host, and [its table of actions][I-21] gives every call in all three.
+
+[The integration guide][integration] runs the worker inside a web service on several pods, and [the testing guide][testing] tests workflows on a virtual clock.
 
 ### Rules of workflow code
 
@@ -524,11 +532,14 @@ A run started with a version is replayed only by that version's code, so old and
 | `memory://<ns>` | memory, in the process, for tests |
 | `file:<path>` | a directory, for development and one machine |
 | `s3://<endpoint>/<bucket>/<ns>?region=<r>` | S3 with conditional writes: AWS, MinIO, Ceph RGW, R2 |
+| `redis://<host>:<port>/<ns>?db=0&replicas=0`, `redis+sentinel://`, `redis+cluster://` | Redis or Valkey 7.2+ with AOF, one server, Sentinel or a cluster, every create fsynced on every replica; workers wake as soon as a run is started or messaged |
 
 ```python
 sub = await s.Substantial.open("s3://s3.eu-central-1.amazonaws.com/shop/prod?region=eu-central-1",
                                credentials="env")
 sub = await s.Substantial.open(url, credentials=role_keys)   # a function returning s.Credentials
+sub = await s.Substantial.open("redis+sentinel://10.0.0.1:26379,10.0.0.2:26379/shop?master=main&db=0&replicas=all",
+                               credentials=s.Password("...", username="shop"))
 ```
 
 <details>
@@ -537,16 +548,22 @@ sub = await s.Substantial.open(url, credentials=role_keys)   # a function return
 ```rust
 let sub = s::Substantial::open(url).credentials(s::Credentials::Env).await?;
 let sub = s::Substantial::open(url).credentials(s::Credentials::provider(role_keys)).await?;
+let sub = s::Substantial::open(redis_url)
+    .credentials(s::Credentials::Password { password: "...".into(), username: Some("shop".into()) })
+    .await?;
 ```
 
 ```ts
 const sub = await s.Substantial.open(url, { credentials: "env" });
 const sub = await s.Substantial.open(url, { credentials: roleKeys });
+const sub = await s.Substantial.open(redisUrl, {
+  credentials: new s.Password({ password: "...", username: "shop" }),
+});
 ```
 
 </details>
 
-S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Ended runs stay in the store: never delete keys under a namespace, by hand or with a lifecycle rule. More in [I-16].
+S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Redis takes none, `"env"` (`REDIS_PASSWORD`, `REDIS_USERNAME`), a password, or such a function returning one (`s::Credentials::password_provider` in Rust). Ended runs are deleted 30 days after their chain ends, or after the `retention` a worker or a workflow sets, `s.FOREVER` keeping them; never delete keys under a namespace yourself, by hand or with a lifecycle rule. More in [I-16].
 
 ### Workers
 
@@ -572,7 +589,7 @@ await sub.worker([checkout, verify], { preset: "service", concurrency: 32 }).ser
 
 </details>
 
-A preset, `script` or `service`, sets every setting; `concurrency`, `max_idle`, `shutdown_grace`, `claim_ttl`, `continue_as_new_after` and `step_timeout` can be overridden by name. `serve()` stops on SIGTERM or Ctrl-C, letting steps in flight end. A worker logs a warning for each run that ends failed or cancelled, and a worker that dies logs at once and fails the `result()` waits of its process. The runs of a worker that crashed are taken over by the others within 35 seconds. More in [I-18].
+A preset, `script` or `service`, sets every setting; `concurrency`, `max_idle`, `shutdown_grace`, `claim_ttl`, `continue_as_new_after`, `step_timeout` and `retention` can be overridden by name. `serve()` stops on SIGTERM or Ctrl-C, letting steps in flight end. A worker logs a warning for each run that ends failed or cancelled, and a worker that dies logs at once and fails the `result()` waits of its process. The runs of a worker that crashed are taken over by the others within 35 seconds. More in [I-18].
 
 ## How it works
 
@@ -589,6 +606,8 @@ cargo test --workspace
 uv run pytest
 npm ci && npm run check && npm test
 ```
+
+The Redis tests run, in Rust with `--features redis`, when `SUBSTANTIAL_REDIS_URL`, `SUBSTANTIAL_REDIS_SENTINEL_URL` or `SUBSTANTIAL_REDIS_CLUSTER_URL` is set, against the Valkey of `dev/redis.compose.yaml`, `dev/redis-sentinel.compose.yaml` or `dev/redis-cluster.compose.yaml`, whose headers give each URL.
 
 The S3 tests run when `SUBSTANTIAL_S3_URL` is set, against a local RustFS:
 
@@ -623,4 +642,6 @@ Each host has two examples on a file or memory store, `first_workflow` and `back
 [I-18]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-18-workers
 [I-21]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-21-actions-in-each-host
 [I-22]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-22-for-implementers
+[integration]: https://github.com/zifeo/substantial/blob/main/docs/integration.md
 [reference]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md
+[testing]: https://github.com/zifeo/substantial/blob/main/docs/testing.md

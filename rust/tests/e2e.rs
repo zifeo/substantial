@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -130,12 +131,62 @@ async fn unknown_chains_are_not_found() {
     for ns in namespaces() {
         let sub = internal::create(ns.store).partitions(1).await.unwrap();
         let run = sub.run(waiting(), "nobody");
-        let not_found =
-            |r: &Result<_>| matches!(r, Err(Error::RunNotFound { chain }) if chain == "nobody");
+        let not_found = |r: &Result<_>| matches!(r, Err(Error::RunNotFound { chain, collected: false, .. }) if chain == "nobody");
         assert!(not_found(&run.send("by", 1).await), "{}", ns.name);
         assert!(not_found(&run.cancel("x").await));
         assert!(not_found(&run.status().await.map(drop)));
         assert!(not_found(&run.result().timeout(LONG).await.map(drop)));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inputs_are_compared_as_canonical_json() {
+    #[derive(serde::Serialize)]
+    struct Inner {
+        d: f64,
+        c: &'static str,
+    }
+    #[derive(serde::Serialize)]
+    struct Reordered {
+        b: (f64, Inner),
+        a: f64,
+    }
+    let echo = Workflow::new("echo", |_c: Context, input: serde_json::Value| async move {
+        Ok(input)
+    });
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let reordered = Reordered {
+            b: (1.0, Inner { d: 2.0, c: "é" }),
+            a: 0.5,
+        };
+        let first = sub.start(&echo, reordered).id("same").await.unwrap();
+        let written = serde_json::json!({"a": 0.5, "b": [1, {"c": "é", "d": 2}]});
+        let again = sub.start(&echo, &written).id("same").await.unwrap();
+        assert_eq!(first.chain(), again.chain(), "{}", ns.name);
+        for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let refused = sub.start(&echo, HashMap::from([("x", [x])])).await;
+            assert!(
+                matches!(&refused, Err(Error::InvalidArgument(m)) if m.starts_with("the input is not JSON")),
+                "{}: {x}: {refused:?}",
+                ns.name
+            );
+        }
+        for refused in [
+            sub.start(&echo, HashMap::from([("x", [1u64 << 53])])).await,
+            sub.start(&echo, HashMap::from([("x", [-(1i64 << 53)])]))
+                .await,
+        ] {
+            assert!(
+                matches!(&refused, Err(Error::InvalidArgument(m)) if m.starts_with("the input is not JSON")),
+                "{}: {refused:?}",
+                ns.name
+            );
+        }
+        let worker = script(&sub, &echo).start().unwrap();
+        let value: serde_json::Value = first.result().timeout(LONG).await.unwrap();
+        assert_eq!(value, written);
+        worker.shutdown().await.unwrap();
     }
 }
 

@@ -1,7 +1,16 @@
 // Presets and their overrides (I-18), validated strictly; the adapters' retries (I-26).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ConfigError, InvalidArgument, milliseconds, minutes, seconds } from "../src/mod.ts";
+import {
+  ConfigError,
+  days,
+  FOREVER,
+  hours,
+  InvalidArgument,
+  milliseconds,
+  minutes,
+  seconds,
+} from "../src/mod.ts";
 import { type InternalOptions, presetSettings, resolveSettings } from "../src/settings.ts";
 import * as retry from "../src/stores/retry.ts";
 import { Ambiguous, Refused, Transient } from "../src/stores/retry.ts";
@@ -19,6 +28,7 @@ test("presets differ where the table says", () => {
   assert.deepEqual(script.wait, seconds(20));
   assert.equal(script.duePage, 100);
   assert.deepEqual([script.stepTimeout, service.stepTimeout], [minutes(5), minutes(5)]);
+  assert.deepEqual([script.retention, service.retention], [days(30), days(30)]);
 });
 
 test("overrides replace and refuse", () => {
@@ -37,6 +47,15 @@ test("overrides replace and refuse", () => {
   assert.equal(s.concurrency, 4);
   assert.deepEqual(s.commitEvery, milliseconds(250));
   assert.deepEqual(s.continueAsNewAfter, { segments: 0, bytes: 0 });
+  assert.equal(
+    resolveSettings({ preset: "script", retention: FOREVER }, false, false).retention,
+    FOREVER,
+  );
+  // As another loaded copy of the package names it.
+  const theirs = { preset: "script", retention: Symbol.for("substantial.forever") } as const;
+  assert.equal(resolveSettings(theirs as never, false, false).retention, FOREVER);
+  const lowered = { preset: "script", retention: minutes(30), retentionMin: minutes(10) } as const;
+  assert.deepEqual(resolveSettings(lowered, false, true).retention, minutes(30));
   const refused: Record<string, unknown>[] = [
     { concurency: 4 },
     { commitEvery: 250 },
@@ -57,6 +76,11 @@ test("overrides replace and refuse", () => {
     { continueAsNewAfter: 1 },
     { continueAsNewAfter: { segments: 1 } },
     { continueAsNewAfter: { segments: 1, bytes: 2, more: 3 } },
+    { retention: minutes(59) },
+    { retention: "forever" },
+    { retention: 3_600_000 },
+    { tombstone: milliseconds(0) },
+    { retentionMin: days(31) },
   ];
   for (const override of refused) {
     assert.throws(
@@ -80,10 +104,12 @@ test("only the public settings are given to a worker", () => {
       claimTtl: seconds(4),
       continueAsNewAfter: { segments: 5, bytes: 6 },
       stepTimeout: seconds(7),
+      retention: hours(2),
     },
     false,
     false,
   );
+  assert.deepEqual(s.retention, hours(2));
   assert.deepEqual(
     [s.concurrency, s.maxIdle, s.shutdownGrace, s.claimTtl, s.continueAsNewAfter, s.stepTimeout],
     [2, seconds(2), seconds(3), seconds(4), { segments: 5, bytes: 6 }, seconds(7)],
@@ -96,6 +122,9 @@ test("only the public settings are given to a worker", () => {
     duePages: 20,
     snapshotEvery: 8,
     dedupWindow: seconds(1),
+    tombstone: days(1),
+    retentionMin: hours(2),
+    recheck: hours(2),
     snapshotGrace: seconds(1),
     storeRetry: { attempts: 3, initial: milliseconds(10), max: seconds(1) },
   };

@@ -89,6 +89,35 @@ async def test_shutdown_past_the_grace_loses_the_step_in_flight(store: Store) ->
         assert await run.result(timeout=LONG) == 2
 
 
+async def test_a_shutdown_past_its_grace_interrupts(store: Store) -> None:
+    reached: list[str] = []
+
+    @step
+    async def slow() -> None:
+        reached.append("started")
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            reached.append("interrupted")
+            raise
+        reached.append("after the await")
+
+    @workflow
+    async def slowly(c: Context) -> None:
+        await slow()
+
+    sub = await Substantial._create(store, partitions=1)
+    async with script(sub, [slowly], shutdown_grace=timedelta(milliseconds=100)):
+        await sub.start(slowly)
+
+        async def started() -> bool:
+            return reached == ["started"]
+
+        await eventually("the step", started)
+    await asyncio.sleep(1.2)
+    assert reached == ["started", "interrupted"]
+
+
 async def test_a_timer_fires_while_a_step_is_in_flight(store: Store) -> None:
     waited: list[float] = []
 

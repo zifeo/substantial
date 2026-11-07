@@ -1,5 +1,6 @@
 // Creating and opening a namespace (I-16), starting and following runs (I-17), and workers.
 import { create } from "@bufbuild/protobuf";
+import { inputObject } from "./child.ts";
 import { type Core, CoreModule } from "./core.ts";
 import {
   ConfigError,
@@ -11,19 +12,29 @@ import {
 } from "./errors.ts";
 import { checkKey } from "./names.ts";
 import { outcomeOf, runPlan, ulid } from "./plan.ts";
-import { encodeJson, jsonValue, now, plan } from "./proto.ts";
-import { Run } from "./run.ts";
-import { type InternalOptions, resolveSettings, type WorkerOptions } from "./settings.ts";
-import type { Credentials, CredentialsProvider } from "./stores/credentials.ts";
+import { jsonValue, plan, time } from "./proto.ts";
+import { collectedUntil, type Namespace, Run } from "./run.ts";
+import {
+  type InternalOptions,
+  resolveSettings,
+  type Settings,
+  type WorkerOptions,
+} from "./settings.ts";
+import type {
+  Credentials,
+  CredentialsProvider,
+  Password,
+  PasswordProvider,
+} from "./stores/credentials.ts";
 import { openStore } from "./stores/open.ts";
-import type { Store } from "./stores/store.ts";
-import { Worker, wake } from "./worker.ts";
+import { type Store, StoreFailure } from "./stores/store.ts";
+import { realIncarnation, Worker, type WorkerHooks, wake } from "./worker.ts";
 import { type AnyWorkflow, Workflow, Workflows } from "./workflow.ts";
 
 export interface OpenOptions {
   /** `"env"` reads the store's standard variables; a provider is called again before its keys
-   * expire; memory and file stores take none. */
-  readonly credentials?: Credentials | "env" | CredentialsProvider;
+   * or password expire; memory and file stores take none, a Redis server without AUTH none. */
+  readonly credentials?: Credentials | Password | "env" | CredentialsProvider | PasswordProvider;
 }
 
 export interface CreateOptions extends OpenOptions {
@@ -35,7 +46,37 @@ export interface StartOptions {
   readonly id?: string;
 }
 
-function createInput(options: { readonly partitions: number }): plan.PlanInput {
+/** What a namespace's clients and workers run on: the real time and random ids, or the test
+ * environment's. */
+export interface Host {
+  now(): number;
+  ulid(ms: number): string;
+  worker(
+    module: CoreModule,
+    store: Store,
+    workflows: Workflows,
+    partitions: number,
+    settings: Settings,
+    hooks: WorkerHooks,
+  ): Worker;
+  handle<O>(ns: Namespace, workflow: AnyWorkflow, chain: string): Run<O>;
+}
+
+const REAL_HOST: Host = {
+  now: () => Date.now(),
+  ulid,
+  worker: (module, store, workflows, partitions, settings, hooks) =>
+    new Worker(
+      realIncarnation(module.instantiate(), store),
+      workflows,
+      partitions,
+      settings,
+      hooks,
+    ),
+  handle: (ns, workflow, chain) => new Run(ns, workflow, chain),
+};
+
+export function createInput(options: { readonly partitions: number }): plan.PlanInput {
   if ((options as Partial<CreateOptions> | undefined)?.partitions === undefined) {
     throw new ConfigError("create needs partitions, a positive whole number");
   }
@@ -47,7 +88,7 @@ function createInput(options: { readonly partitions: number }): plan.PlanInput {
   return create(plan.PlanInputSchema, { plan: { case: "create", value } });
 }
 
-function openInput(): plan.PlanInput {
+export function openInput(): plan.PlanInput {
   const value = { prefix: "" };
   return create(plan.PlanInputSchema, { plan: { case: "open", value } });
 }
@@ -59,7 +100,21 @@ function deathSignal(): PromiseWithResolvers<never> {
   return signal;
 }
 
-let openedOn: (store: Store, input: plan.PlanInput) => Promise<Substantial>;
+/** Runs `input`, an open or a create, on `store`: the core and the partitions of the namespace. */
+export async function opening(
+  store: Store,
+  input: plan.PlanInput,
+): Promise<{ module: CoreModule; partitions: number }> {
+  const module = await CoreModule.shipped();
+  const outcome = outcomeOf("open", await runPlan(module.instantiate(), store, input), "opened");
+  const opened = outcome.opened;
+  if (opened.case === "layoutError") throw new LayoutError(opened.value);
+  if (opened.case === "failed") throw new StoreError(opened.value.message);
+  if (opened.case !== "partitions") throw new LayoutError("empty open outcome");
+  return { module, partitions: opened.value };
+}
+
+let openedOn: (store: Store, input: plan.PlanInput, host?: Host) => Promise<Substantial>;
 let internalWorker: (
   sub: Substantial,
   workflows: Iterable<AnyWorkflow>,
@@ -75,9 +130,17 @@ export class Substantial {
   readonly #store: Store;
   readonly #owned: boolean;
   readonly #workers: Set<Worker> = new Set();
+  readonly #host: Host;
   #death = deathSignal();
 
-  private constructor(module: CoreModule, store: Store, partitions: number, owned: boolean) {
+  protected constructor(
+    module: CoreModule,
+    store: Store,
+    partitions: number,
+    owned: boolean,
+    host: Host = REAL_HOST,
+  ) {
+    this.#host = host;
     this.#module = module;
     this.#core = module.instantiate();
     this.#store = store;
@@ -99,28 +162,29 @@ export class Substantial {
     return Substantial.#fromUrl(url, options.credentials, openInput());
   }
 
-  static #fromUrl(
+  static async #fromUrl(
     url: string,
     credentials: OpenOptions["credentials"],
     input: plan.PlanInput,
   ): Promise<Substantial> {
     if (typeof url !== "string") throw new ConfigError(`a store is a URL string, not ${url}`);
-    return Substantial.#opened(openStore(url, credentials), true, input);
+    return Substantial.#opened(await openStore(url, credentials), true, input);
   }
 
-  static async #opened(store: Store, owned: boolean, input: plan.PlanInput): Promise<Substantial> {
+  static async #opened(
+    store: Store,
+    owned: boolean,
+    input: plan.PlanInput,
+    host?: Host,
+  ): Promise<Substantial> {
     try {
-      const module = await CoreModule.shipped();
-      const outcome = outcomeOf(
-        "open",
-        await runPlan(module.instantiate(), store, input),
-        "opened",
-      );
-      const opened = outcome.opened;
-      if (opened.case === "layoutError") throw new LayoutError(opened.value);
-      if (opened.case === "failed") throw new StoreError(opened.value.message);
-      if (opened.case !== "partitions") throw new LayoutError("empty open outcome");
-      return new Substantial(module, store, opened.value, owned);
+      try {
+        await store.open();
+      } catch (e) {
+        throw e instanceof StoreFailure ? new StoreError(e.message) : e;
+      }
+      const { module, partitions } = await opening(store, input);
+      return new Substantial(module, store, partitions, owned, host);
     } catch (e) {
       if (owned) await store.close();
       throw e;
@@ -128,7 +192,7 @@ export class Substantial {
   }
 
   static {
-    openedOn = (store, input) => Substantial.#opened(store, false, input);
+    openedOn = (store, input, host) => Substantial.#opened(store, false, input, host);
     internalWorker = (sub, workflows, options) => sub.#worker(workflows, options, true);
   }
 
@@ -150,16 +214,22 @@ export class Substantial {
 
   #worker(workflows: Iterable<AnyWorkflow>, options: InternalOptions, internal: boolean): Worker {
     const settings = resolveSettings(options, this.#store.capabilities.wait, internal);
-    const served = new Workflows(workflows);
-    const core = this.#module.instantiate();
-    const worker: Worker = new Worker(core, this.#store, served, this.partitions, settings, {
-      stopped: () => this.#workers.delete(worker),
-      died: (error) => {
-        const death = this.#death;
-        this.#death = deathSignal();
-        death.reject(error);
+    const served = new Workflows(workflows, settings.retentionMin);
+    const worker: Worker = this.#host.worker(
+      this.#module,
+      this.#store,
+      served,
+      this.partitions,
+      settings,
+      {
+        stopped: () => this.#workers.delete(worker),
+        died: (error) => {
+          const death = this.#death;
+          this.#death = deathSignal();
+          death.reject(error);
+        },
       },
-    });
+    );
     this.#workers.add(worker);
     return worker;
   }
@@ -172,27 +242,25 @@ export class Substantial {
     if (!(workflow instanceof Workflow)) {
       throw new InvalidArgument(`start takes a workflow, not ${workflow}`);
     }
-    const object = input === undefined ? {} : input;
-    if (typeof object !== "object" || object === null || Array.isArray(object)) {
-      throw new InvalidArgument(`an input is a JSON object, not ${JSON.stringify(object)}`);
-    }
+    const json = inputObject(input);
     onlyOptions(options, ["id"], "start");
     checkKey("workflow name", workflow.name);
-    const at = now();
-    const chain = options.id === undefined ? ulid(Number(at.ms)) : checkKey("run id", options.id);
+    const at = time(this.#host.now());
+    const chain =
+      options.id === undefined ? this.#host.ulid(Number(at.ms)) : checkKey("run id", options.id);
     const value = {
       prefix: "",
       partitions: this.partitions,
       workflow: workflow.name,
       ...(workflow.version === undefined ? {} : { version: workflow.version }),
-      input: jsonValue(encodeJson(object, "the input")),
+      input: jsonValue(json),
       id: chain,
       now: at,
     };
     const plan_ = create(plan.PlanInputSchema, { plan: { case: "start", value } });
     const started = outcomeOf("start", await this.#plan(plan_), "started").started;
     if (started.case === "runExists") {
-      throw new RunExists(`id ${chain} is taken by another workflow, version or input`);
+      throw new RunExists(chain, collectedUntil(started.value.collectedUntil));
     }
     if (started.case === "failed") throw new StoreError(started.value.message);
     this.#wake();
@@ -207,8 +275,10 @@ export class Substantial {
       plan: (input: plan.PlanInput) => this.#plan(input),
       wake: () => this.#wake(),
       died: () => this.#death.promise,
+      now: () => time(this.#host.now()),
+      ulid: (ms: number) => this.#host.ulid(ms),
     };
-    return new Run<O>(namespace, workflow, id);
+    return this.#host.handle<O>(namespace, workflow, id);
   }
 
   #plan(input: plan.PlanInput): ReturnType<typeof runPlan> {
@@ -229,9 +299,9 @@ export async function createOn(
   return openedOn(store, createInput(options));
 }
 
-/** Opens the namespace on a store object its caller keeps: for tests. */
-export async function openOn(store: Store): Promise<Substantial> {
-  return openedOn(store, openInput());
+/** Opens the namespace on a store object its caller keeps: for tests, on `host`'s clock. */
+export async function openOn(store: Store, host?: Host): Promise<Substantial> {
+  return openedOn(store, openInput(), host);
 }
 
 /** A worker taking every setting, the hidden ones included: for tests. */

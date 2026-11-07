@@ -5,7 +5,7 @@ import inspect
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Literal
 
 from substantial.errors import ConfigError
@@ -30,13 +30,33 @@ class Credentials:
             raise ConfigError("Credentials need an access key id and a secret access key")
         if self.session_token is not None and not isinstance(self.session_token, str):
             raise ConfigError("a session token is a string")
-        at = self.expires_at
-        if at is not None and (not isinstance(at, datetime) or at.utcoffset() is None):
-            raise ConfigError(f"expires_at is an aware datetime, not {at!r}")
+        _check_expiry(self.expires_at)
 
 
-Provider = Callable[[], Credentials | Awaitable[Credentials]]
-CredentialsArg = Credentials | Literal["env"] | Provider | None
+@dataclass(frozen=True)
+class Password:
+    """A Redis password, for the ACL user `username` or for the default user without one; and
+    `expires_at`, an aware datetime, when a provider returns it."""
+
+    password: str = field(repr=False)
+    username: str | None = None
+    expires_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.password, str) or not self.password:
+            raise ConfigError("a Password needs a password")
+        if self.username is not None and (not isinstance(self.username, str) or not self.username):
+            raise ConfigError(f"a username is a non-empty string, not {self.username!r}")
+        _check_expiry(self.expires_at)
+
+
+def _check_expiry(at: datetime | None) -> None:
+    if at is not None and (not isinstance(at, datetime) or at.utcoffset() is None):
+        raise ConfigError(f"expires_at is an aware datetime, not {at!r}")
+
+
+Provider = Callable[[], Credentials | Password | Awaitable[Credentials | Password]]
+CredentialsArg = Credentials | Password | Literal["env"] | Provider | None
 
 
 def refuse(url: str, credentials: CredentialsArg) -> None:
@@ -44,8 +64,18 @@ def refuse(url: str, credentials: CredentialsArg) -> None:
         raise ConfigError(f"{url!r} takes no credentials")
 
 
-def _static(credentials: CredentialsArg) -> Credentials:
-    """The keys given once: explicit, or read from the standard variables."""
+def _required(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ConfigError(f"{name} is not set")
+    return value
+
+
+def resolve(credentials: CredentialsArg) -> Credentials | Provider:
+    """The keys given once, explicit or read from the standard variables, or the provider to ask
+    for them."""
+    if callable(credentials) and not isinstance(credentials, Credentials | Password):
+        return credentials
     if credentials is None:
         raise ConfigError('an S3 store needs credentials, "env", Credentials(...) or a provider')
     if isinstance(credentials, Credentials):
@@ -56,52 +86,38 @@ def _static(credentials: CredentialsArg) -> Credentials:
         raise ConfigError(
             f'credentials are "env", Credentials(...) or a provider, not {credentials!r}'
         )
-
-    def required(name: str) -> str:
-        value = os.environ.get(name)
-        if not value:
-            raise ConfigError(f"{name} is not set")
-        return value
-
     return Credentials(
-        access_key_id=required("AWS_ACCESS_KEY_ID"),
-        secret_access_key=required("AWS_SECRET_ACCESS_KEY"),
+        access_key_id=_required("AWS_ACCESS_KEY_ID"),
+        secret_access_key=_required("AWS_SECRET_ACCESS_KEY"),
         session_token=os.environ.get("AWS_SESSION_TOKEN") or None,
     )
 
 
-class Keys:
-    """The keys an S3 store signs with: given once, or a provider's, fetched at the first request
-    and again before any request made within `REFRESH_BEFORE` of their `expires_at`."""
+def resolve_password(credentials: CredentialsArg) -> Password | Provider | None:
+    """A Redis store's password given once, explicit or read from `REDIS_PASSWORD` and
+    `REDIS_USERNAME`, the provider to ask for it, or `None` for a server without AUTH."""
+    if credentials is None:
+        return None
+    if callable(credentials) and not isinstance(credentials, Credentials | Password):
+        return credentials
+    if isinstance(credentials, Password):
+        if credentials.expires_at is not None:
+            raise ConfigError("expires_at is for the password a provider returns")
+        return credentials
+    if credentials != "env":
+        raise ConfigError(
+            f'a Redis store takes "env", Password(...), a provider or None, not {credentials!r}'
+        )
+    return Password(_required("REDIS_PASSWORD"), os.environ.get("REDIS_USERNAME") or None)
 
-    def __init__(self, credentials: CredentialsArg) -> None:
-        if callable(credentials) and not isinstance(credentials, Credentials):
-            self._provider: Provider = credentials
-        else:
-            given = _static(credentials)
-            self._provider = lambda: given
-        self._current: Credentials | None = None
-        self._lock = asyncio.Lock()
 
-    def _usable(self) -> Credentials | None:
-        c = self._current
-        if c is None or c.expires_at is None:
-            return c
-        return c if datetime.now(UTC) < c.expires_at - REFRESH_BEFORE else None
-
-    async def get(self) -> Credentials:
-        """The keys to sign with; what the provider raises propagates, and the next call asks it
-        again."""
-        async with self._lock:
-            current = self._usable()
-            if current is not None:
-                return current
-            # A synchronous provider may block, as a metadata endpoint does: a thread keeps the
-            # worker going.
-            result = await asyncio.to_thread(self._provider)
-            if inspect.isawaitable(result):
-                result = await result
-            if not isinstance(result, Credentials):
-                raise ConfigError(f"a credentials provider returns Credentials, not {result!r}")
-            self._current = result
-            return result
+async def provide[T: (Credentials, Password)](provider: Provider, kind: type[T]) -> T:
+    """What a provider returns, of the kind its store takes."""
+    # A synchronous provider may block, as a metadata endpoint does: a thread keeps the worker
+    # going.
+    result = await asyncio.to_thread(provider)
+    if inspect.isawaitable(result):
+        result = await result
+    if not isinstance(result, kind):
+        raise ConfigError(f"a credentials provider returns {kind.__name__}, not {result!r}")
+    return result

@@ -1,6 +1,6 @@
 [package]
 name = "substantial"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,20 +12,29 @@ description = "Brokerless durable execution: the Rust host of the Substantial co
 # The cross-language test program, run by dev/cross/run.py, not shipped.
 exclude = ["examples/cross.rs"]
 
+[features]
+# `substantial::testing`: a namespace in memory on a virtual clock, for tests.
+testing = []
+# Redis and Valkey stores: `redis://`, `redis+sentinel://`, `redis+cluster://` and their TLS forms.
+redis = ["dep:redis", "dep:crc16"]
+
 [dependencies]
 anyhow = "1"
 aws-credential-types = "1.3"
 aws-sdk-s3 = { version = "1.153", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio"] }
 bytes = "1.12"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+crc16 = { version = "0.4", optional = true }
 futures = "0.3"
 hex = "0.4"
 prost = "0.14"
 rand = "0.10"
+redis = { version = "1.8", optional = true, default-features = false, features = ["script", "tokio-comp", "tokio-rustls-comp"] }
 serde = { version = "1", features = ["derive"] }
+serde_jcs = "0.2"
 serde_json = "1"
 sha2 = "0.11"
-substantial-macros = { version = "0.2.0-beta.1", path = "macros" }
+substantial-macros = { version = "0.2.0-beta.2", path = "macros" }
 thiserror = "2"
 tokio = { version = "1.54", features = ["fs", "macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
@@ -43,3 +52,43 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tempfile = "3"
 tokio = { version = "1.54", features = ["full", "test-util"] }
+
+[[test]]
+name = "redis"
+required-features = ["redis"]
+
+[[test]]
+name = "redis_ambiguous"
+required-features = ["redis"]
+
+[[test]]
+name = "redis_failover"
+required-features = ["redis"]
+
+[[test]]
+name = "testing"
+required-features = ["testing"]
+
+[[test]]
+name = "retention"
+required-features = ["testing"]
+
+[[test]]
+name = "testing_app"
+required-features = ["testing"]
+
+[[test]]
+name = "testing_faults"
+required-features = ["testing"]
+
+[[test]]
+name = "testing_seeds"
+required-features = ["testing"]
+
+[[test]]
+name = "testing_steps"
+required-features = ["testing"]
+
+[[test]]
+name = "testing_workers"
+required-features = ["testing"]

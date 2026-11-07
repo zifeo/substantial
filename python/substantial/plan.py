@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from substantial._proto import plan
@@ -53,24 +54,32 @@ def outcome_of(name: str, which: str, outcome: Any, expected: str) -> tuple[str,
 
 
 _CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
-_LOCK = threading.Lock()
-_last = 0
 
 
-def ulid(ms: int) -> str:
-    """A ULID: 48 bits of milliseconds then 80 random bits, in lowercase Crockford base32, as run
-    and message ids are lowercase (I-17).
+class Ulids:
+    """ULIDs: 48 bits of milliseconds then 80 random bits from `bits`, in lowercase Crockford
+    base32, as run and message ids are lowercase (I-17).
 
-    Monotonic in the process: one made in the millisecond of the last, or before it, is the last
-    plus one, so a client's messages are consumed in the order sent."""
-    global _last
-    if ms < 0:
-        raise ValueError("a time after 1970")
-    with _LOCK:
-        value = ((ms & ((1 << 48) - 1)) << 80) | secrets.randbits(80)
-        if value >> 80 <= _last >> 80:
-            value = _last + 1
-        if value >> 128:
-            raise ValueError("ULIDs exhausted")
-        _last = value
-    return "".join(_CROCKFORD[(value >> (i * 5)) & 31] for i in reversed(range(26)))
+    Monotonic: one made in the millisecond of the last, or before it, is the last plus one, so a
+    client's messages are consumed in the order sent."""
+
+    def __init__(self, bits: Callable[[int], int]) -> None:
+        self._bits = bits
+        self._lock = threading.Lock()
+        self._last = 0
+
+    def __call__(self, ms: int) -> str:
+        if ms < 0:
+            raise ValueError("a time after 1970")
+        with self._lock:
+            value = ((ms & ((1 << 48) - 1)) << 80) | self._bits(ms)
+            if value >> 80 <= self._last >> 80:
+                value = self._last + 1
+            if value >> 128:
+                raise ValueError("ULIDs exhausted")
+            self._last = value
+        return "".join(_CROCKFORD[(value >> (i * 5)) & 31] for i in reversed(range(26)))
+
+
+# The ULIDs of the process, monotonic across its clients.
+ulid = Ulids(lambda _: secrets.randbits(80))

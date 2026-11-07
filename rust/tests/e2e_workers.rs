@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{Hidden, LONG, Recording, eventually, namespaces, script};
+use common::{Hidden, Interrupted, LONG, Recording, eventually, namespaces, script};
 use substantial::__internal::{self as internal, Create};
 use substantial::{Context, Error, RunStatus, Substantial, Workflow};
 use tokio::sync::Notify;
@@ -106,6 +106,46 @@ async fn shutdown_lets_a_step_end_within_the_grace() {
             ns.name
         );
         next.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shutdown_past_its_grace_interrupts() {
+    for ns in namespaces() {
+        let reached: Arc<Mutex<Vec<&str>>> = Arc::default();
+        let r = reached.clone();
+        let slowly = Workflow::without_input("slowly", move |c| {
+            let r = r.clone();
+            async move {
+                c.step("slow", move || {
+                    let r = r.clone();
+                    async move {
+                        r.lock().unwrap().push("started");
+                        let interrupted = Interrupted(r.clone());
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        r.lock().unwrap().push("after the await");
+                        std::mem::forget(interrupted);
+                        Ok::<_, Error>(())
+                    }
+                })
+                .await
+            }
+        });
+        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let worker = script(&sub, &slowly)
+            .set("shutdown_grace", "100ms")
+            .start()
+            .unwrap();
+        sub.start(&slowly, ()).await.unwrap();
+        eventually("the step", async || reached.lock().unwrap().len() == 1).await;
+        worker.shutdown().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(
+            *reached.lock().unwrap(),
+            ["started", "interrupted"],
+            "{}",
+            ns.name
+        );
     }
 }
 

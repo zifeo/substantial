@@ -2,24 +2,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
-
-use super::replay::{Host, ReplayEvent, ToReplay, replay};
+use super::Event;
+use super::replay::{Host, ToReplay, replay};
+use crate::clock::{Clock, Inbox, Task};
 use crate::core::Core;
 use crate::proto::boundary::v1::{self as b, replay_end};
 use crate::store::Store;
 use crate::workflow::Workflows;
-use crate::workflow::scheduler::Clock;
 
-/// The replays of a worker, each a task of its own talking to the agent loop through channels.
+/// The replays of a worker, each a task of its own talking to the agent loop through inboxes;
+/// those still running when it is dropped are aborted.
 pub(crate) struct Replays {
     host: Host,
     workflows: Workflows,
     /// The worker's `step_timeout`, for the workflows that set none.
     step_timeout: Duration,
-    running: HashMap<String, mpsc::UnboundedSender<ToReplay>>,
-    events_tx: mpsc::UnboundedSender<ReplayEvent>,
-    events_rx: mpsc::UnboundedReceiver<ReplayEvent>,
+    running: HashMap<String, (Arc<Inbox<ToReplay>>, Task<()>)>,
+    events: Arc<Inbox<Event>>,
 }
 
 impl Replays {
@@ -29,15 +28,14 @@ impl Replays {
         workflows: Workflows,
         step_timeout: Duration,
         clock: Clock,
+        events: Arc<Inbox<Event>>,
     ) -> Self {
-        let (events_tx, events_rx) = mpsc::unbounded_channel();
         Self {
             host: Host { core, store, clock },
             workflows,
             step_timeout,
             running: HashMap::new(),
-            events_tx,
-            events_rx,
+            events,
         }
     }
 
@@ -54,40 +52,41 @@ impl Replays {
                 ?version,
                 "replay of a workflow this worker does not serve"
             );
-            let _ = self.events_tx.send(ReplayEvent::Ended(
-                run,
-                replay_end::End::Dropped(b::Empty {}),
-            ));
+            self.events
+                .push(Event::Ended(run, replay_end::End::Dropped(b::Empty {})));
             return;
         };
-        let (tx, rx) = mpsc::unbounded_channel();
-        if self.running.insert(run.clone(), tx).is_some() {
-            tracing::error!(run, "a second replay of a run in replay");
-        }
-        let events = self.events_tx.clone();
+        let inbox = Arc::new(Inbox::default());
         let step_timeout = workflow.step_timeout().unwrap_or(self.step_timeout);
-        tokio::spawn(replay(
-            self.host.clone(),
-            workflow,
-            step_timeout,
-            input,
-            events,
-            rx,
-        ));
+        let clock = &self.host.clock;
+        clock.replayed(&run);
+        let task = clock.spawn(
+            format_args!("replay of {run}"),
+            replay(
+                self.host.clone(),
+                workflow,
+                step_timeout,
+                input,
+                self.events.clone(),
+                inbox.clone(),
+            ),
+        );
+        if let Some((inbox, _)) = self.running.insert(run.clone(), (inbox, task)) {
+            tracing::error!(run, "a second replay of a run in replay");
+            inbox.push(ToReplay::Stop);
+        }
     }
 
     pub(crate) fn tell(&self, run: &str, message: ToReplay) {
         match self.running.get(run) {
-            Some(tx) => {
-                let _ = tx.send(message);
-            }
+            Some((inbox, _)) => inbox.push(message),
             None => tracing::warn!(run, ?message, "no replay of this run"),
         }
     }
 
     pub(crate) fn stop_all(&self) {
-        for tx in self.running.values() {
-            let _ = tx.send(ToReplay::Stop);
+        for (inbox, _) in self.running.values() {
+            inbox.push(ToReplay::Stop);
         }
     }
 
@@ -95,15 +94,15 @@ impl Replays {
         self.running.is_empty()
     }
 
-    pub(crate) async fn next(&mut self) -> ReplayEvent {
-        let event = self
-            .events_rx
-            .recv()
-            .await
-            .expect("the sender lives in self");
-        if let ReplayEvent::Ended(run, _) = &event {
-            self.running.remove(run);
+    pub(crate) fn ended(&mut self, run: &str) {
+        self.running.remove(run);
+    }
+}
+
+impl Drop for Replays {
+    fn drop(&mut self) {
+        for (_, task) in self.running.values() {
+            task.abort();
         }
-        event
     }
 }

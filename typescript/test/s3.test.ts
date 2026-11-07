@@ -1,6 +1,9 @@
-// What the S3 adapter does beyond the shared contract; all but URL parsing, signing and the mock h3
-// server run only when `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`).
+// What the S3 adapter does beyond the shared contract; all but URL parsing and the fake h3 server
+// run only when `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`).
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { type AddressInfo, createServer } from "node:net";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   ConfigError,
@@ -10,12 +13,11 @@ import {
   Substantial,
   workflow,
 } from "../src/mod.ts";
-import { STORE_RETRY } from "../src/settings.ts";
 import { openStore } from "../src/stores/open.ts";
-import { parseS3Url, S3Store } from "../src/stores/s3.ts";
-import { sign } from "../src/stores/sigv4.ts";
+import { parseS3Url } from "../src/stores/s3.ts";
 import { StoreFailure } from "../src/stores/store.ts";
-import { LONG, NO_S3, s3Url, script } from "./helpers.ts";
+import { FakeH3, signedHeaders } from "./fake_h3.ts";
+import { LONG, NO_S3, s3Url, script, tempDir } from "./helpers.ts";
 
 test("URLs need every part", () => {
   assert.deepEqual(parseS3Url("h3+http://127.0.0.1:9/b/ns/sub?region=r"), {
@@ -32,10 +34,17 @@ test("URLs need every part", () => {
   assert.equal(parseS3Url("s3+http://[::1]:9000/b/ns?region=r").endpoint, "http://[::1]:9000");
   assert.equal(parseS3Url("s3://h:443/b/ns?region=r").host, "h", "the default port is implied");
   assert.equal(parseS3Url("h3://h/b/ns?region=r").wait, true);
+  assert.equal(parseS3Url(`s3://h/b/ns?region=${"r".repeat(63)}`).region, "r".repeat(63));
   const refused = [
     "s3://h/b/ns",
     "s3://h/b/ns?region=",
     "s3://h/b/ns?region=r&region=s",
+    "s3://h/b/ns?region=us_east",
+    "s3://h/b/ns?region=US-EAST-1",
+    "s3://h/b/ns?region=-r",
+    "s3://h/b/ns?region=r-",
+    "s3://h/b/ns?region=us%20east",
+    `s3://h/b/ns?region=${"r".repeat(64)}`,
     "s3://h/b/ns?region=r&endpoint=http://h",
     "s3://h/b/ns?region=r&wait=true",
     "s3://h/b?region=r",
@@ -47,6 +56,8 @@ test("URLs need every part", () => {
     "s3://h/b/a//c?region=r",
     "s3:///b/ns?region=r",
     "s3://k:s@h/b/ns?region=r",
+    "s3://@h/b/ns?region=r",
+    "s3://:@h/b/ns?region=r",
     "s3://h/b/ns?region=r#x",
     "s3://h:port/b/ns?region=r",
     "s3+https://h/b/ns?region=r",
@@ -55,26 +66,115 @@ test("URLs need every part", () => {
   for (const url of refused) assert.throws(() => parseS3Url(url), ConfigError, url);
 });
 
-test("the signature matches the AWS example", async () => {
-  // The GET Object example of the S3 SigV4 documentation, with its credentials and time.
-  const credentials = new Credentials({
-    accessKeyId: "AKIAIOSFODNN7EXAMPLE",
-    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-  });
-  const headers = await sign({
-    method: "GET",
-    host: "examplebucket.s3.amazonaws.com",
-    path: "/test.txt",
-    query: "",
-    headers: { range: "bytes=0-9" },
-    payload: new Uint8Array(),
-    credentials,
-    region: "us-east-1",
-    at: new Date(Date.UTC(2013, 4, 24)),
-  });
-  const expected = "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41";
-  assert.ok(headers.authorization?.endsWith(`Signature=${expected}`), headers.authorization);
+test("each operation is one request", async () => {
+  const h3 = await FakeH3.start();
+  const credentials = new Credentials({ accessKeyId: "fake", secretAccessKey: "fake-secret" });
+  const store = await openStore(h3.url("ns"), credentials);
+  try {
+    const a = new TextEncoder().encode("a");
+    assert.equal(await store.create("q/a", a), "created");
+    assert.equal(await store.create("q/a", new TextEncoder().encode("b")), "exists");
+    assert.deepEqual(await store.get("q/a"), a);
+    assert.equal(await store.get("q/b"), undefined);
+    assert.deepEqual((await store.list("q/", { maxKeys: 10 })).keys, ["q/a"]);
+    await store.list("q/", { maxKeys: 10, wait: { seconds: 0 } });
+    await store.delete("q/a");
+    assert.deepEqual(h3.methods, ["PUT", "PUT", "GET", "GET", "GET", "GET", "DELETE"]);
+  } finally {
+    await store.close();
+    await h3.close();
+  }
 });
+
+/** A server on 127.0.0.1 answering every request with `answer`, then closing the connection;
+ * gives its URL and the method of every request. */
+async function rawServer(
+  answer: string,
+): Promise<{ url: string; methods: string[]; close(): void }> {
+  const methods: string[] = [];
+  const server = createServer((socket) => {
+    let head = "";
+    socket.on("data", (chunk) => {
+      head += chunk.toString();
+      if (!head.includes("\r\n\r\n")) return;
+      methods.push(head.split(" ")[0] as string);
+      head = "";
+      socket.end(answer);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `s3+http://127.0.0.1:${port}/b/ns?region=us-east-1`,
+    methods,
+    close: () => server.close(),
+  };
+}
+
+const fake = new Credentials({ accessKeyId: "fake", secretAccessKey: "fake-secret" });
+
+test("a body cut short is retried as transient", async () => {
+  const server = await rawServer("HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nabc");
+  const store = await openStore(server.url, fake);
+  try {
+    await assert.rejects(
+      store.get("k"),
+      (e) => e instanceof StoreFailure && /\(after 5 attempts\)/.test(e.message),
+    );
+    assert.deepEqual(server.methods, ["GET", "GET", "GET", "GET", "GET"]);
+  } finally {
+    await store.close();
+    server.close();
+  }
+});
+
+test("a listing without IsTruncated is complete", async () => {
+  const body =
+    '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>' +
+    "<Contents><Key>ns/q/a</Key></Contents></ListBucketResult>";
+  const server = await rawServer(
+    `HTTP/1.1 200 OK\r\ncontent-length: ${body.length}\r\n\r\n${body}`,
+  );
+  const store = await openStore(server.url, fake);
+  try {
+    assert.deepEqual((await store.list("q/", { maxKeys: 10 })).keys, ["q/a"]);
+    assert.deepEqual(server.methods, ["GET"]);
+  } finally {
+    await store.close();
+    server.close();
+  }
+});
+
+// Settings of the AWS environment and shared files that would change how the SDK reaches the
+// endpoint, the profile's `s3` section included.
+const AMBIENT: Record<string, string>[] = [
+  { AWS_PROFILE: "absent" },
+  { AWS_CONFIG_FILE: "accelerate" },
+  { AWS_USE_FIPS_ENDPOINT: "true" },
+  { AWS_USE_DUALSTACK_ENDPOINT: "true" },
+];
+
+for (const ambient of AMBIENT) {
+  const [name, value] = Object.entries(ambient)[0] as [string, string];
+  test(`the AWS environment and files are not read: ${name}`, async () => {
+    const config = join(tempDir(), "config");
+    writeFileSync(config, "[default]\ns3 =\n  use_accelerate_endpoint = true\n");
+    const before = process.env[name];
+    process.env[name] = value === "accelerate" ? config : value;
+    const h3 = await FakeH3.start();
+    const credentials = new Credentials({ accessKeyId: "fake", secretAccessKey: "fake-secret" });
+    const store = await openStore(h3.url("ambient"), credentials);
+    try {
+      assert.equal(await store.create("q/a", new TextEncoder().encode("a")), "created");
+      assert.deepEqual(await store.get("q/a"), new TextEncoder().encode("a"));
+    } finally {
+      await store.close();
+      await h3.close();
+      if (before === undefined) delete process.env[name];
+      else process.env[name] = before;
+    }
+  });
+}
 
 const live = { skip: NO_S3 };
 
@@ -87,7 +187,7 @@ test("create and open run the probe", live, async () => {
   assert.equal(opened.partitions, 2);
   await created.close();
   await opened.close();
-  const store = openStore(url, "env");
+  const store = await openStore(url, "env");
   assert.deepEqual(
     (await store.list("probe/", { maxKeys: 10 })).keys,
     ["probe/exclusive"],
@@ -113,14 +213,14 @@ test("wrong credentials are a store error", live, async () => {
 test("a missing bucket is a store error, not a missing key", live, async () => {
   const url = s3Url();
   const missing = url.replace(/^([^:]+:\/\/[^/]+)\/[^/]+/, "$1/substantial-no-such-bucket");
-  const store = openStore(missing, "env");
+  const store = await openStore(missing, "env");
   await assert.rejects(store.get("runs/a/start"), StoreFailure);
   await assert.rejects(store.delete("runs/a/start"), StoreFailure);
   await store.close();
 });
 
 test("listings go past one page", live, async () => {
-  const store = openStore(s3Url(), "env");
+  const store = await openStore(s3Url(), "env");
   const keys = Array.from({ length: 1005 }, (_, i) => `due/${String(i).padStart(5, "0")}`);
   for (let i = 0; i < keys.length; i += 32) {
     const batch = keys.slice(i, i + 32).map((k) => store.create(k, new Uint8Array()));
@@ -134,7 +234,7 @@ test("listings go past one page", live, async () => {
 });
 
 test("h3 needs the listing etag of a waiting listing", live, async () => {
-  const store = openStore(s3Url("h3"), "env");
+  const store = await openStore(s3Url("h3"), "env");
   assert.equal(store.capabilities.wait, true);
   await store.create("q/a", new TextEncoder().encode("a"));
   assert.deepEqual((await store.list("q/", { maxKeys: 10 })).keys, ["q/a"]);
@@ -146,45 +246,40 @@ test("h3 needs the listing etag of a waiting listing", live, async () => {
 });
 
 test("waiting listings send and answer the wait headers", async () => {
-  const seen: Request[] = [];
-  const answer = async (input: string | URL | Request, init?: RequestInit) => {
-    seen.push(new Request(input, init));
-    const body =
-      "<ListBucketResult><IsTruncated>false</IsTruncated>" +
-      "<Contents><Key>ns/q/a&amp;b</Key></Contents></ListBucketResult>";
-    return new Response(body, { status: 200, headers: { "x-substantial-listing-etag": "e2" } });
-  };
-  const credentials = new Credentials({ accessKeyId: "id", secretAccessKey: "s" });
-  const h3 = parseS3Url("h3+http://h:1/b/ns?region=r");
-  const store = new S3Store(h3, credentials, STORE_RETRY, answer as typeof fetch);
-  const listing = await store.list("q/", { maxKeys: 10, wait: { seconds: 20, etag: "e1" } });
-  assert.deepEqual(listing, { keys: ["q/a&b"], etag: "e2" });
-  const headers = (seen[0] as Request).headers;
-  assert.deepEqual(
-    [headers.get("x-substantial-wait-seconds"), headers.get("x-substantial-wait-etag")],
-    ["20", "e1"],
-  );
-  const signed = /SignedHeaders=([^,]+)/.exec(headers.get("authorization") ?? "")?.[1]?.split(";");
-  assert.ok(
-    signed?.includes("x-substantial-wait-seconds") && signed.includes("x-substantial-wait-etag"),
-  );
-  const first = await store.list("q/", { maxKeys: 10, wait: { seconds: 5 } });
-  assert.equal((seen[1] as Request).headers.get("x-substantial-wait-etag"), null);
-  assert.equal(first.etag, "e2");
-  for (const wait of [{ seconds: 21 }, { seconds: 5, etag: "e\n1" }]) {
-    await assert.rejects(store.list("q/", { maxKeys: 10, wait }), StoreFailure);
+  const h3 = await FakeH3.start();
+  const credentials = new Credentials({ accessKeyId: "fake", secretAccessKey: "fake-secret" });
+  const store = await openStore(h3.url("ns"), credentials);
+  const s3 = await openStore(h3.url("ns").replace("h3+http", "s3+http"), credentials);
+  try {
+    await store.create("q/a&b", new TextEncoder().encode("x"));
+    const first = await store.list("q/", { maxKeys: 10, wait: { seconds: 5 } });
+    assert.deepEqual(first.keys, ["q/a&b"]);
+    assert.ok(first.etag);
+    assert.equal(h3.listed.at(-1)?.headers["x-substantial-wait-etag"], undefined);
+    const listing = await store.list("q/", { maxKeys: 10, wait: { seconds: 0, etag: "e1" } });
+    assert.deepEqual(listing, first);
+    const headers = h3.listed.at(-1)?.headers ?? {};
+    assert.deepEqual(
+      [headers["x-substantial-wait-seconds"], headers["x-substantial-wait-etag"]],
+      ["0", "e1"],
+    );
+    for (const name of ["x-substantial-wait-seconds", "x-substantial-wait-etag"]) {
+      assert.ok(signedHeaders(headers).includes(name), name);
+    }
+    const sent = h3.requests.length;
+    for (const wait of [{ seconds: 21 }, { seconds: 5, etag: "e\n1" }]) {
+      await assert.rejects(store.list("q/", { maxKeys: 10, wait }), StoreFailure);
+    }
+    await assert.rejects(store.list("q/", { maxKeys: 1001, wait: { seconds: 5 } }), StoreFailure);
+    assert.equal(h3.requests.length, sent, "refused before any request");
+    await assert.rejects(s3.list("q/", { maxKeys: 10, wait: { seconds: 5 } }), StoreFailure);
+    await store.close();
+    await assert.rejects(store.get("k"), /closed/, "a closed store refuses every operation");
+  } finally {
+    await store.close();
+    await s3.close();
+    await h3.close();
   }
-  await assert.rejects(store.list("q/", { maxKeys: 1001, wait: { seconds: 5 } }), StoreFailure);
-  assert.equal(seen.length, 2, "refused before any request");
-  const s3 = new S3Store(
-    parseS3Url("s3+http://h:1/b/ns?region=r"),
-    credentials,
-    STORE_RETRY,
-    answer as typeof fetch,
-  );
-  await assert.rejects(s3.list("q/", { maxKeys: 10, wait: { seconds: 5 } }), StoreFailure);
-  await store.close();
-  await assert.rejects(store.get("k"), /closed/, "a closed store refuses every operation");
 });
 
 test("a credentials provider near expiry is called before each request", live, async () => {

@@ -113,21 +113,72 @@ export class RunFailed extends SubstantialError {
   readonly run: string;
   readonly status: EndedStatus;
   readonly error: Failure;
-  constructor(run: string, status: EndedStatus, error: Failure) {
+  /** The `StepFailed.cause` of the step that failed the run, else `undefined`. */
+  override readonly cause: Failure | undefined;
+  constructor(run: string, status: EndedStatus, error: Failure, cause: Failure | undefined) {
     const hint = error.type === "NonDeterminism" ? `; ${NEW_VERSION}` : "";
     super(`run ${run} ${status}: ${error.type}: ${error.message}${hint}`);
     this.run = run;
     this.status = status;
     this.error = error;
+    this.cause = cause;
   }
+}
+
+/** The failure a `StepFailed`'s details wrap, `{ error: {...} }`; `undefined` if they hold none. */
+export function wrappedFailure(details: unknown): Failure | undefined {
+  const error = (details as Record<string, unknown> | undefined)?.error as
+    | Record<string, unknown>
+    | undefined;
+  const { type, message, retryable } = error ?? {};
+  if (typeof type !== "string" || typeof message !== "string" || typeof retryable !== "boolean") {
+    return undefined;
+  }
+  return { type, message, retryable };
+}
+
+/** The cause of a run failed with `type`: a `StepFailed`'s wraps it in its details. */
+export function runFailedCause(type: string, details: unknown): Failure | undefined {
+  if (type !== "StepFailed") return undefined;
+  const cause = wrappedFailure(details);
+  if (cause === undefined) {
+    throw new ProtocolError(`a run failed with StepFailed with details ${JSON.stringify(details)}`);
+  }
+  return cause;
 }
 
 export class NonDeterminism extends SubstantialError {}
 export class NotInWorkflow extends SubstantialError {}
-export class RunExists extends SubstantialError {}
+/** `collected` when the id is taken by a run collected, `until` then. */
+export class RunExists extends SubstantialError {
+  readonly collected: boolean;
+  readonly until: Date | undefined;
+  constructor(id: string, until: Date | undefined) {
+    const by =
+      until === undefined
+        ? "another workflow, version or input"
+        : `a run collected, until ${until.toISOString()}`;
+    super(`id ${id} is taken by ${by}`);
+    this.collected = until !== undefined;
+    this.until = until;
+  }
+}
 export class InvalidArgument extends SubstantialError {}
 export class RunEnded extends SubstantialError {}
-export class RunNotFound extends SubstantialError {}
+/** `collected` when the chain's first run was collected, its id taken `until` then. */
+export class RunNotFound extends SubstantialError {
+  readonly collected: boolean;
+  readonly until: Date | undefined;
+  constructor(chain: string, until: Date | undefined) {
+    const collected =
+      until === undefined
+        ? ""
+        : `: it was collected, and its id is taken until ${until.toISOString()}`;
+    super(`no chain ${chain}${collected}`);
+    this.collected = until !== undefined;
+    this.until = until;
+  }
+}
 export class WaitTimeout extends SubstantialError {}
 export class StoreError extends SubstantialError {}
 export class LayoutError extends SubstantialError {}

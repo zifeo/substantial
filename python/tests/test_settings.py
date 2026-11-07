@@ -5,7 +5,16 @@ from datetime import timedelta
 
 import pytest
 
-from substantial import ConfigError, ContinueAsNewAfter, Substantial, minutes, seconds, workflow
+from substantial import (
+    FOREVER,
+    ConfigError,
+    ContinueAsNewAfter,
+    Substantial,
+    days,
+    minutes,
+    seconds,
+    workflow,
+)
 from substantial.settings import Settings
 
 
@@ -19,6 +28,7 @@ def test_presets_differ_where_the_table_says() -> None:
     assert (script.shutdown_grace, service.shutdown_grace) == (seconds(5), seconds(25))
     assert script.continue_as_new_after == ContinueAsNewAfter(1000, 8 * 1024 * 1024)
     assert script.step_timeout == service.step_timeout == minutes(5)
+    assert script.retention == service.retention == days(30)
 
 
 def test_override_replaces_and_refuses() -> None:
@@ -29,8 +39,11 @@ def test_override_replaces_and_refuses() -> None:
         claim_ttl=seconds(40),
         continue_as_new_after=0,
         step_timeout=seconds(30),
+        retention=FOREVER,
     )
     assert s.step_timeout == seconds(30)
+    assert s.retention is FOREVER
+    assert s.override(retention=days(90)).retention == days(90)
     assert (s.concurrency, s.max_idle, s.shutdown_grace) == (4, seconds(2), seconds(3))
     assert s.claim_ttl == seconds(40)
     assert s.continue_as_new_after == ContinueAsNewAfter(0, 0)
@@ -46,6 +59,9 @@ def test_override_replaces_and_refuses() -> None:
         {"step_timeout": 300},
         {"continue_as_new_after": 1},
         {"continue_as_new_after": (1, 2)},
+        {"retention": minutes(59)},
+        {"retention": None},
+        {"retention": "forever"},
     ]
     for override in refused:
         with pytest.raises(ConfigError):
@@ -68,6 +84,9 @@ async def test_a_worker_refuses_the_settings_of_the_preset_only() -> None:
         "due_pages",
         "snapshot_every",
         "dedup_window",
+        "tombstone",
+        "retention_min",
+        "recheck",
         "snapshot_grace",
         "store_retry",
     ]:
@@ -83,6 +102,8 @@ def test_the_hidden_settings_are_still_checked() -> None:
         {"wait": timedelta(0)},
         {"wait": seconds(21)},
         {"wait": timedelta(milliseconds=1500)},
+        {"tombstone": timedelta(0)},
+        {"retention_min": days(31)},
     ]:
         with pytest.raises(ConfigError):
             dataclasses.replace(s, **hidden).validate()

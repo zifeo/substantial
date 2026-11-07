@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import secrets
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -14,6 +15,8 @@ def load(name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(f"example_{name}", EXAMPLES / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # Dataclasses look their module up by name.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 

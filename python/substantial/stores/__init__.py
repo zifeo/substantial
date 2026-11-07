@@ -14,10 +14,12 @@ from substantial.stores.base import (
     Store,
     StoreFailure,
 )
-from substantial.stores.credentials import Credentials, CredentialsArg, refuse
+from substantial.stores.credentials import Credentials, CredentialsArg, Password, refuse
 from substantial.stores.fs import FsStore
 from substantial.stores.memory import MemoryStore
-from substantial.stores.s3 import S3Location, S3Store
+from substantial.stores.redis import SCHEMES as REDIS_SCHEMES
+from substantial.stores.redis import RedisLocation
+from substantial.stores.s3 import S3Location
 
 __all__ = [
     "Capabilities",
@@ -27,8 +29,9 @@ __all__ = [
     "ListWait",
     "Listing",
     "MemoryStore",
+    "Password",
+    "RedisLocation",
     "S3Location",
-    "S3Store",
     "Store",
     "StoreFailure",
     "open_store",
@@ -62,14 +65,38 @@ def open_store(url: str, credentials: CredentialsArg) -> Store:
         refuse(url, credentials)
         return FsStore(path)
     if url.startswith(("s3://", "s3+http://", "h3://", "h3+http://")):
-        return S3Store(S3Location.parse(url), credentials)
-    for scheme in ("redis://", "sqlite:", "postgres://", "mysql://"):
+        location = S3Location.parse(url)
+        try:
+            from substantial.stores.s3_store import S3Store
+        except ModuleNotFoundError as e:
+            if e.name is None or e.name.partition(".")[0] != "aiobotocore":
+                raise
+            raise ConfigError(
+                f'{url!r} needs aiobotocore, which `pip install "substantial[s3]"` installs'
+            ) from e
+        return S3Store(location, credentials)
+    if url.startswith(tuple(f"{scheme}://" for scheme in REDIS_SCHEMES)):
+        location = RedisLocation.parse(url)
+        try:
+            from substantial.stores.redis_store import RedisStore
+        except ModuleNotFoundError as e:
+            if e.name is None or e.name.partition(".")[0] != "redis":
+                raise
+            raise ConfigError(
+                f'{url!r} needs redis-py, which `pip install "substantial[redis]"` installs'
+            ) from e
+        return RedisStore(location, credentials)
+    for scheme in ("sqlite:", "postgres://", "mysql://"):
         if url.startswith(scheme):
             raise ConfigError(f"{scheme} stores are not available in this host yet; {_SUPPORTED}")
     raise ConfigError(f"unknown scheme in {url!r}; {_SUPPORTED}")
 
 
-_SUPPORTED = "the supported schemes are memory://, file:, s3://, s3+http://, h3:// and h3+http://"
+_SUPPORTED = (
+    "the supported schemes are memory://, file:, s3://, s3+http://, h3://, h3+http://, "
+    "redis://, rediss://, redis+sentinel://, rediss+sentinel://, redis+cluster:// and "
+    "rediss+cluster://"
+)
 
 
 async def _perform(store: Store, op: boundary.StoreOp) -> boundary.OpResult:

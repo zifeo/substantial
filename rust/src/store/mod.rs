@@ -5,6 +5,7 @@ mod fs;
 pub(crate) mod h3;
 mod memory;
 mod names;
+mod redis;
 pub(crate) mod retry;
 mod s3;
 
@@ -13,10 +14,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::future::BoxFuture;
 
-pub use credentials::{Credentials, Keys};
+pub use credentials::{Credentials, Keys, Password};
 pub use fs::FsStore;
 pub use memory::MemoryStore;
+#[cfg(feature = "redis")]
+pub use redis::RedisStore;
+pub use redis::{RedisLocation, Topology};
 pub use s3::{S3Location, S3Store};
 
 use crate::error::{Error, Result};
@@ -69,6 +74,9 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreFailure
 /// `async fn` in a trait does not allow.
 pub trait Store: Send + Sync {
     fn capabilities(&self) -> Capabilities;
+    /// Connects, failing with `ConfigError` on a store the adapter cannot use; the operations
+    /// connect too when it was not called.
+    fn open(&self) -> BoxFuture<'_, Result<()>>;
     /// Atomic and exclusive: of concurrent creates of a key, exactly one gets `Created`.
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create>;
     fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>>;
@@ -108,7 +116,13 @@ pub fn open(url: &str, credentials: &Credentials, retry: StoreRetry) -> Result<A
         let location = S3Location::parse(url)?;
         return Ok(Arc::new(S3Store::open(location, credentials, retry)?));
     }
-    let planned = ["redis://", "sqlite:", "postgres://", "mysql://"];
+    if redis::SCHEMES
+        .iter()
+        .any(|(scheme, ..)| url.starts_with(&format!("{scheme}://")))
+    {
+        return redis::open(url, credentials, retry);
+    }
+    let planned = ["sqlite:", "postgres://", "mysql://"];
     if let Some(scheme) = planned.iter().find(|scheme| url.starts_with(**scheme)) {
         return Err(Error::ConfigError(format!(
             "{scheme} stores are not available in this host yet; {SUPPORTED}"
@@ -119,8 +133,9 @@ pub fn open(url: &str, credentials: &Credentials, retry: StoreRetry) -> Result<A
     )))
 }
 
-const SUPPORTED: &str =
-    "the supported schemes are memory://, file:, s3://, s3+http://, h3:// and h3+http://";
+const SUPPORTED: &str = "the supported schemes are memory://, file:, s3://, s3+http://, h3://, \
+     h3+http://, redis://, rediss://, redis+sentinel://, rediss+sentinel://, redis+cluster:// and \
+     rediss+cluster://";
 
 fn refuse_query(url: &str, rest: &str) -> Result<()> {
     if rest.contains('?') {

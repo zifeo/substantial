@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from datetime import timedelta
 
@@ -174,6 +175,22 @@ async def test_starts_are_idempotent_by_id(store: Store) -> None:
     async with script(sub, [counted]):
         assert await first.result(timeout=LONG) == {"x": 1}
     assert len(runs) == 1, "one run"
+
+
+async def test_inputs_are_compared_as_canonical_json(store: Store) -> None:
+    @workflow
+    async def echo(c: Context, **fields: object) -> dict[str, object]:
+        return fields
+
+    sub = await Substantial._create(store, partitions=1)
+    first = await sub.start(echo, {"b": [1.0, {"d": 2, "c": "é"}], "a": 0.5}, id="same")
+    again = await sub.start(echo, {"a": 0.5, "b": [1, {"c": "é", "d": 2.0}]}, id="same")
+    assert first.chain == again.chain
+    for bad in (math.nan, math.inf, -math.inf, 2**53, -(2**53)):
+        with pytest.raises(InvalidArgument, match="the input is not JSON"):
+            await sub.start(echo, {"x": [bad]})
+    async with script(sub, [echo]):
+        assert await first.result(timeout=LONG) == {"a": 0.5, "b": [1, {"c": "é", "d": 2}]}
 
 
 async def test_names_outside_the_rules_are_invalid_arguments(store: Store) -> None:

@@ -13,6 +13,7 @@ jobs:
       AWS_ACCESS_KEY_ID: substantial
       AWS_SECRET_ACCESS_KEY: substantial-secret
       SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -20,9 +21,11 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: docker compose -f dev/redis.compose.yaml up -d --wait
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
       - run: cargo package --workspace
 
   python:
@@ -31,12 +34,14 @@ jobs:
       AWS_ACCESS_KEY_ID: substantial
       AWS_SECRET_ACCESS_KEY: substantial-secret
       SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.13"
       - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: docker compose -f dev/redis.compose.yaml up -d --wait
       - run: uv sync --locked
       - run: uv run ruff format --check
       - run: uv run ruff check
@@ -54,6 +59,7 @@ jobs:
       AWS_ACCESS_KEY_ID: substantial
       AWS_SECRET_ACCESS_KEY: substantial-secret
       SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -61,6 +67,7 @@ jobs:
           node-version: "24"
           cache: npm
       - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: docker compose -f dev/redis.compose.yaml up -d --wait
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx biome ci

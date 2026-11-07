@@ -46,7 +46,7 @@ class PlanInput(_message.Message):
     def __init__(self, send: _Optional[_Union[SendPlan, _Mapping]] = ..., create: _Optional[_Union[CreatePlan, _Mapping]] = ..., open: _Optional[_Union[OpenPlan, _Mapping]] = ..., start: _Optional[_Union[StartPlan, _Mapping]] = ..., result: _Optional[_Union[ResultPlan, _Mapping]] = ..., status: _Optional[_Union[StatusPlan, _Mapping]] = ..., cancel: _Optional[_Union[CancelPlan, _Mapping]] = ..., read: _Optional[_Union[ReadPlan, _Mapping]] = ...) -> None: ...
 
 class SendPlan(_message.Message):
-    __slots__ = ("prefix", "partitions", "chain", "name", "value", "id", "now")
+    __slots__ = ("prefix", "partitions", "chain", "name", "value", "id", "now", "ord")
     PREFIX_FIELD_NUMBER: _ClassVar[int]
     PARTITIONS_FIELD_NUMBER: _ClassVar[int]
     CHAIN_FIELD_NUMBER: _ClassVar[int]
@@ -54,6 +54,7 @@ class SendPlan(_message.Message):
     VALUE_FIELD_NUMBER: _ClassVar[int]
     ID_FIELD_NUMBER: _ClassVar[int]
     NOW_FIELD_NUMBER: _ClassVar[int]
+    ORD_FIELD_NUMBER: _ClassVar[int]
     prefix: str
     partitions: int
     chain: str
@@ -61,7 +62,8 @@ class SendPlan(_message.Message):
     value: _layout_pb2.Value
     id: str
     now: _layout_pb2.Time
-    def __init__(self, prefix: _Optional[str] = ..., partitions: _Optional[int] = ..., chain: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ...) -> None: ...
+    ord: str
+    def __init__(self, prefix: _Optional[str] = ..., partitions: _Optional[int] = ..., chain: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., ord: _Optional[str] = ...) -> None: ...
 
 class CreatePlan(_message.Message):
     __slots__ = ("prefix", "partitions")
@@ -120,20 +122,22 @@ class StatusPlan(_message.Message):
     def __init__(self, prefix: _Optional[str] = ..., partitions: _Optional[int] = ..., chain: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ...) -> None: ...
 
 class CancelPlan(_message.Message):
-    __slots__ = ("prefix", "partitions", "chain", "reason", "id", "now")
+    __slots__ = ("prefix", "partitions", "chain", "reason", "id", "now", "ord")
     PREFIX_FIELD_NUMBER: _ClassVar[int]
     PARTITIONS_FIELD_NUMBER: _ClassVar[int]
     CHAIN_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
     ID_FIELD_NUMBER: _ClassVar[int]
     NOW_FIELD_NUMBER: _ClassVar[int]
+    ORD_FIELD_NUMBER: _ClassVar[int]
     prefix: str
     partitions: int
     chain: str
     reason: str
     id: str
     now: _layout_pb2.Time
-    def __init__(self, prefix: _Optional[str] = ..., partitions: _Optional[int] = ..., chain: _Optional[str] = ..., reason: _Optional[str] = ..., id: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ...) -> None: ...
+    ord: str
+    def __init__(self, prefix: _Optional[str] = ..., partitions: _Optional[int] = ..., chain: _Optional[str] = ..., reason: _Optional[str] = ..., id: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., ord: _Optional[str] = ...) -> None: ...
 
 class ReadPlan(_message.Message):
     __slots__ = ("prefix", "partitions", "chain", "key")
@@ -155,6 +159,18 @@ class PlanRequest(_message.Message):
     feed: _boundary_pb2.OpResult
     def __init__(self, next: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., feed: _Optional[_Union[_boundary_pb2.OpResult, _Mapping]] = ...) -> None: ...
 
+class NoChain(_message.Message):
+    __slots__ = ("collected_until",)
+    COLLECTED_UNTIL_FIELD_NUMBER: _ClassVar[int]
+    collected_until: _layout_pb2.Time
+    def __init__(self, collected_until: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ...) -> None: ...
+
+class RunExists(_message.Message):
+    __slots__ = ("collected_until",)
+    COLLECTED_UNTIL_FIELD_NUMBER: _ClassVar[int]
+    collected_until: _layout_pb2.Time
+    def __init__(self, collected_until: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ...) -> None: ...
+
 class Sent(_message.Message):
     __slots__ = ("accepted", "refused", "no_chain", "failed")
     class Refused(_message.Message):
@@ -170,9 +186,9 @@ class Sent(_message.Message):
     FAILED_FIELD_NUMBER: _ClassVar[int]
     accepted: str
     refused: Sent.Refused
-    no_chain: _boundary_pb2.Empty
+    no_chain: NoChain
     failed: _boundary_pb2.StoreFailure
-    def __init__(self, accepted: _Optional[str] = ..., refused: _Optional[_Union[Sent.Refused, _Mapping]] = ..., no_chain: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
+    def __init__(self, accepted: _Optional[str] = ..., refused: _Optional[_Union[Sent.Refused, _Mapping]] = ..., no_chain: _Optional[_Union[NoChain, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
 
 class Opened(_message.Message):
     __slots__ = ("partitions", "layout_error", "failed")
@@ -192,9 +208,9 @@ class Started(_message.Message):
     FAILED_FIELD_NUMBER: _ClassVar[int]
     created: _boundary_pb2.Empty
     existing: _boundary_pb2.Empty
-    run_exists: _boundary_pb2.Empty
+    run_exists: RunExists
     failed: _boundary_pb2.StoreFailure
-    def __init__(self, created: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., existing: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., run_exists: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
+    def __init__(self, created: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., existing: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., run_exists: _Optional[_Union[RunExists, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
 
 class RunResult(_message.Message):
     __slots__ = ("ended", "no_chain", "failed", "not_ended")
@@ -217,10 +233,10 @@ class RunResult(_message.Message):
     FAILED_FIELD_NUMBER: _ClassVar[int]
     NOT_ENDED_FIELD_NUMBER: _ClassVar[int]
     ended: RunResult.Ended
-    no_chain: _boundary_pb2.Empty
+    no_chain: NoChain
     failed: _boundary_pb2.StoreFailure
     not_ended: RunResult.NotEnded
-    def __init__(self, ended: _Optional[_Union[RunResult.Ended, _Mapping]] = ..., no_chain: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ..., not_ended: _Optional[_Union[RunResult.NotEnded, _Mapping]] = ...) -> None: ...
+    def __init__(self, ended: _Optional[_Union[RunResult.Ended, _Mapping]] = ..., no_chain: _Optional[_Union[NoChain, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ..., not_ended: _Optional[_Union[RunResult.NotEnded, _Mapping]] = ...) -> None: ...
 
 class RunState(_message.Message):
     __slots__ = ("status", "no_chain", "failed")
@@ -235,9 +251,9 @@ class RunState(_message.Message):
     NO_CHAIN_FIELD_NUMBER: _ClassVar[int]
     FAILED_FIELD_NUMBER: _ClassVar[int]
     status: RunState.Of
-    no_chain: _boundary_pb2.Empty
+    no_chain: NoChain
     failed: _boundary_pb2.StoreFailure
-    def __init__(self, status: _Optional[_Union[RunState.Of, _Mapping]] = ..., no_chain: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
+    def __init__(self, status: _Optional[_Union[RunState.Of, _Mapping]] = ..., no_chain: _Optional[_Union[NoChain, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
 
 class ReadValue(_message.Message):
     __slots__ = ("value", "none", "failed")

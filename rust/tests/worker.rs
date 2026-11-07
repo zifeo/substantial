@@ -148,6 +148,9 @@ async fn a_store_that_accepts_two_creates_fails_the_probe() {
         fn capabilities(&self) -> Capabilities {
             self.0.capabilities()
         }
+        fn open(&self) -> futures::future::BoxFuture<'_, substantial::Result<()>> {
+            Store::open(&self.0)
+        }
         fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
             Box::pin(async move {
                 self.0.delete(key).await?;
@@ -177,5 +180,20 @@ async fn a_store_that_accepts_two_creates_fails_the_probe() {
         matches!(created, Err(Error::LayoutError(_))),
         "{:?}",
         created.err()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_worker_stops_serving() {
+    let store = Arc::new(MemoryStore::open("worker-dropped").unwrap());
+    let sub = internal::create(store).partitions(1).await.unwrap();
+    let worker = script(&sub, workflows()).start().unwrap();
+    drop(worker);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let run = sub.start(&workflows()[0], ()).await.unwrap();
+    let served = tokio::time::timeout(Duration::from_secs(2), run.result()).await;
+    assert!(
+        served.is_err(),
+        "the dropped worker still serves: {served:?}"
     );
 }

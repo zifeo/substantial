@@ -1,0 +1,100 @@
+# Valkey with Sentinel for the Redis tests: a primary and two replicas on 127.0.0.1:39511 to
+# 39513, three sentinels on 39521 to 39523, master `substantial`, AOF fsynced at every write.
+#
+#   docker compose -f dev/redis-sentinel.compose.yaml up -d --wait
+#   SUBSTANTIAL_REDIS_SENTINEL_URL='redis+sentinel://127.0.0.1:39521,127.0.0.1:39522,127.0.0.1:39523/tests?master=substantial&db=0&replicas=all' uv run pytest
+#   docker compose -f dev/redis-sentinel.compose.yaml down -v
+#
+# Every process shares the network namespace of `net`, so each one reaches the others, and the
+# host reaches each one, at the same 127.0.0.1:<port>: Sentinel hands clients the addresses the
+# nodes announce. The failover tests stop the container of the primary, substantial-sentinel-<port>,
+# and start it again; a node is healthy as a primary or as a replica linked to one, whichever it is
+# after a failover.
+name: substantial-redis-sentinel
+
+x-node: &node
+  image: valkey/valkey:8.1
+  network_mode: service:net
+  depends_on: [net]
+
+services:
+  net:
+    image: valkey/valkey:8.1
+    container_name: substantial-sentinel-net
+    init: true
+    command: ["sleep", "infinity"]
+    ports:
+      - "127.0.0.1:39511-39513:39511-39513"
+      - "127.0.0.1:39521-39523:39521-39523"
+
+  node-39511:
+    <<: *node
+    container_name: substantial-sentinel-39511
+    command: &server
+      - valkey-server
+      - --port
+      - "39511"
+      - --protected-mode
+      - "no"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - always
+      - --maxmemory-policy
+      - noeviction
+      - --replica-announce-ip
+      - 127.0.0.1
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p 39511 info replication | grep -Eq 'role:master|master_link_status:up'"]
+      interval: 1s
+      retries: 30
+
+  node-39512:
+    <<: *node
+    container_name: substantial-sentinel-39512
+    command: [valkey-server, --port, "39512", --replicaof, 127.0.0.1, "39511", --protected-mode, "no", --appendonly, "yes", --appendfsync, always, --maxmemory-policy, noeviction, --replica-announce-ip, 127.0.0.1]
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p 39512 info replication | grep -Eq 'role:master|master_link_status:up'"]
+      interval: 1s
+      retries: 30
+
+  node-39513:
+    <<: *node
+    container_name: substantial-sentinel-39513
+    command: [valkey-server, --port, "39513", --replicaof, 127.0.0.1, "39511", --protected-mode, "no", --appendonly, "yes", --appendfsync, always, --maxmemory-policy, noeviction, --replica-announce-ip, 127.0.0.1]
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p 39513 info replication | grep -Eq 'role:master|master_link_status:up'"]
+      interval: 1s
+      retries: 30
+
+  sentinel-39521: &sentinel
+    <<: *node
+    container_name: substantial-sentinel-39521
+    environment:
+      PORT: "39521"
+    # Sentinel rewrites its configuration file, so each one writes its own at start.
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' "port $$PORT" "protected-mode no" "sentinel announce-ip 127.0.0.1" \
+          "sentinel monitor substantial 127.0.0.1 39511 2" \
+          "sentinel down-after-milliseconds substantial 1000" \
+          "sentinel failover-timeout substantial 5000" > /tmp/sentinel.conf
+        exec valkey-sentinel /tmp/sentinel.conf
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p $$PORT sentinel ckquorum substantial | grep -q 'OK 3' && valkey-cli -p $$PORT sentinel master substantial | grep -A1 -x num-slaves | grep -qx 2"]
+      interval: 1s
+      retries: 60
+
+  sentinel-39522:
+    <<: *sentinel
+    container_name: substantial-sentinel-39522
+    environment:
+      PORT: "39522"
+
+  sentinel-39523:
+    <<: *sentinel
+    container_name: substantial-sentinel-39523
+    environment:
+      PORT: "39523"

@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import weakref
 from collections.abc import Coroutine, Generator, Iterable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Self
 
 from substantial._proto import json_value, layout, plan
+from substantial.child import input_object
+from substantial.clock import REAL, Clock
 from substantial.core import Core
-from substantial.durations import now
 from substantial.errors import (
     ConfigError,
     Failure,
@@ -25,11 +27,12 @@ from substantial.errors import (
     RunNotFound,
     StoreError,
     WaitTimeout,
+    run_failed_cause,
 )
 from substantial.names import check_key, check_name, check_str
 from substantial.plan import outcome_of, run_plan, ulid
 from substantial.scheduler import decode_json
-from substantial.settings import Settings
+from substantial.settings import RETENTION_MIN, Settings
 from substantial.stores import Store, StoreFailure, open_store
 from substantial.stores.credentials import CredentialsArg
 from substantial.stores.s3 import result_created
@@ -63,6 +66,8 @@ class Substantial:
         self._core = core
         self._store = store
         self._owned = owned
+        self._clock: Clock = REAL
+        self._ulid = ulid
         self.partitions = partitions
         self._workers: weakref.WeakSet[Worker] = weakref.WeakSet()
         # The futures of the `result` waits in progress, given the error of a worker that dies.
@@ -108,6 +113,10 @@ class Substantial:
     @classmethod
     async def _opened(cls, store: Store, owned: bool, data: plan.PlanInput) -> Substantial:
         try:
+            try:
+                await store.open()
+            except StoreFailure as e:
+                raise StoreError(e.message) from None
             core = Core.new()
             case, value = outcome_of("open", *await run_plan(core, store, data), "opened")
             if case == "layout_error":
@@ -134,7 +143,11 @@ class Substantial:
     def _worker(self, workflows: Iterable[Workflow[..., Any]], settings: Settings) -> Worker:
         """A worker with every setting given, public or not."""
         worker = Worker(
-            self._store, Workflows(workflows), self.partitions, settings, self._worker_died
+            self._store,
+            Workflows(workflows, settings.retention_min),
+            self.partitions,
+            settings,
+            self._worker_died,
         )
         self._workers.add(worker)
         return worker
@@ -154,33 +167,33 @@ class Substantial:
         """Starts a run of `workflow`, idempotently under `id`, a ULID when none is given."""
         if not isinstance(workflow, Workflow):
             raise InvalidArgument(f"start takes a workflow, not {workflow!r}")
-        if input is None:
-            input = {}
-        if not isinstance(input, dict):
-            raise InvalidArgument(f"an input is a JSON object, not {input!r}")
+        data_input = input_object(input)
         check_key("workflow name", workflow.name)
-        at = now()
-        chain = ulid(at.ms) if id is None else check_key("run id", id)
+        at = self._clock.now()
+        chain = self._ulid(at.ms) if id is None else check_key("run id", id)
         data = plan.StartPlan(
             prefix="",
             partitions=self.partitions,
             workflow=workflow.name,
             version=workflow.version,
-            input=json_value(_encode(input, "the input")),
+            input=json_value(data_input),
             id=chain,
             now=at,
         )
         case, value = outcome_of("start", *await self._plan(plan.PlanInput(start=data)), "started")
         if case == "run_exists":
-            raise RunExists(f"id {chain} is taken by another workflow, version or input")
+            raise RunExists(chain, until=_collected_until(value))
         if case == "failed":
             raise StoreError(value.message)
         self._wake_workers()
-        return Run(self, workflow, chain)
+        return self._handle(workflow, chain)
 
     def run[R](self, workflow: Workflow[..., R], id: str) -> Run[R]:
         """A handle on an existing chain."""
-        return Run(self, workflow, id)
+        return self._handle(workflow, id)
+
+    def _handle[R](self, workflow: Workflow[..., R], chain: str) -> Run[R]:
+        return Run(self, workflow, chain)
 
     async def _plan(self, data: plan.PlanInput) -> tuple[str, object]:
         return await run_plan(self._core, self._store, data)
@@ -211,6 +224,18 @@ class Opening:
         await self._sub.close()
 
 
+def _collected_until(value: Any) -> datetime | None:
+    """The `collected_until` of a `NoChain` or a `RunExists`."""
+    if not value.HasField("collected_until"):
+        return None
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=value.collected_until.ms)
+
+
+# A wait follows its chain from the first run again this often, as polling one run's `result`
+# never sees that run collected (I-17).
+REFOLLOW = RETENTION_MIN.total_seconds() / 2
+
+
 def _create_plan(partitions: int | None) -> plan.PlanInput:
     if partitions is None:
         raise ConfigError("create needs partitions, a positive whole number")
@@ -231,12 +256,13 @@ class Run[R]:
         self._sub = sub
         self.workflow = workflow
         self.chain = chain
+        self._refollow = REFOLLOW
 
     def __repr__(self) -> str:
         return f"<run {self.chain} of {self.workflow.name}>"
 
-    def _not_found(self) -> RunNotFound:
-        return RunNotFound(f"no chain {self.chain}")
+    def _not_found(self, no_chain: Any) -> RunNotFound:
+        return RunNotFound(self.chain, until=_collected_until(no_chain))
 
     async def send(self, name: str, value: Any = None, *, id: str | None = None) -> None:
         """Sends a message, delivered once per `id`, a ULID when none is given."""
@@ -244,15 +270,17 @@ class Run[R]:
         check_name("message name", name)
         if id is not None:
             check_key("message id", id)
-        at = now()
+        at = self._sub._clock.now()
+        ord = self._sub._ulid(at.ms)
         data = plan.SendPlan(
             prefix="",
             partitions=self._sub.partitions,
             chain=self.chain,
             name=name,
             value=json_value(_encode(value, "the message")),
-            id=ulid(at.ms) if id is None else id,
+            id=ord if id is None else id,
             now=at,
+            ord=ord,
         )
         await self._sent(plan.PlanInput(send=data))
 
@@ -260,14 +288,16 @@ class Run[R]:
         """Cancels the run: it raises `Cancelled` at every call it is blocked on."""
         check_key("run id", self.chain)
         check_str("a reason", reason)
-        at = now()
+        at = self._sub._clock.now()
+        ord = self._sub._ulid(at.ms)
         data = plan.CancelPlan(
             prefix="",
             partitions=self._sub.partitions,
             chain=self.chain,
             reason=reason,
-            id=ulid(at.ms),
+            id=ord,
             now=at,
+            ord=ord,
         )
         await self._sent(plan.PlanInput(cancel=data))
 
@@ -278,20 +308,20 @@ class Run[R]:
         elif case == "refused":
             raise RunEnded(f"run {value.run} has ended")
         elif case == "no_chain":
-            raise self._not_found()
+            raise self._not_found(value)
         else:
             raise StoreError(value.message)
 
     async def status(self) -> RunStatus:
         check_key("run id", self.chain)
         data = plan.StatusPlan(
-            prefix="", partitions=self._sub.partitions, chain=self.chain, now=now()
+            prefix="", partitions=self._sub.partitions, chain=self.chain, now=self._sub._clock.now()
         )
         case, value = outcome_of(
             "status", *await self._sub._plan(plan.PlanInput(status=data)), "status"
         )
         if case == "no_chain":
-            raise self._not_found()
+            raise self._not_found(value)
         if case == "failed":
             raise StoreError(value.message)
         name = plan.RunStatus.Name(value.status).removeprefix("RUN_STATUS_").lower()
@@ -321,13 +351,17 @@ class Run[R]:
         try:
             async with asyncio.timeout(None if timeout is None else timeout.total_seconds()):
                 delay, last = 0.01, None
+                followed = time.monotonic()
                 while True:
+                    if time.monotonic() - followed >= self._refollow:
+                        last, followed = None, time.monotonic()
                     ended, value = await self._ended(last)
                     if ended:
                         return value
                     last = value.run
                     if self._sub._store.capabilities.wait:
-                        await self._result_created(value.result_key, died)
+                        left = self._refollow - (time.monotonic() - followed)
+                        await self._result_created(value.result_key, died, left)
                     else:
                         await asyncio.wait({died}, timeout=delay)
                         delay = min(delay * 2, 30.0)
@@ -338,10 +372,14 @@ class Run[R]:
         finally:
             self._sub._waits.discard(died)
 
-    async def _result_created(self, key: str, died: asyncio.Future[BaseException]) -> None:
+    async def _result_created(
+        self, key: str, died: asyncio.Future[BaseException], timeout: float
+    ) -> None:
         waiting = asyncio.ensure_future(result_created(self._sub._store, key))
         try:
-            await asyncio.wait({died, waiting}, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(
+                {died, waiting}, timeout=max(timeout, 0), return_when=asyncio.FIRST_COMPLETED
+            )
         finally:
             waiting.cancel()
         if waiting.done() and not waiting.cancelled():
@@ -362,14 +400,19 @@ class Run[R]:
         if case == "not_ended":
             return False, value
         if case == "no_chain":
-            raise self._not_found()
+            raise self._not_found(value)
         if case == "failed":
             raise StoreError(value.message)
         run_id, result = value.run, value.result
         if result.status == layout.STATUS_COMPLETED:
             return True, decode_json(result.value if result.HasField("value") else None)
         if result.status == layout.STATUS_FAILED:
-            raise RunFailed(run_id, RunStatus.FAILED, Failure.from_proto(result.error))
+            error = Failure.from_proto(result.error)
+            details = decode_json(
+                result.error.details if result.error.HasField("details") else None
+            )
+            cause = run_failed_cause(error.type, details)
+            raise RunFailed(run_id, RunStatus.FAILED, error, cause)
         if result.status == layout.STATUS_CANCELLED:
-            raise RunFailed(run_id, RunStatus.CANCELLED, Failure("Cancelled", result.reason))
+            raise RunFailed(run_id, RunStatus.CANCELLED, Failure("Cancelled", result.reason), None)
         raise ProtocolError(f"result of {run_id} with status {result.status}")

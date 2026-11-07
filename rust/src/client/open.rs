@@ -143,6 +143,22 @@ impl IntoFuture for Open {
 }
 
 async fn opened(store: Arc<dyn Store>, plan: Plan) -> Result<Substantial> {
+    attached(
+        store,
+        plan,
+        #[cfg(feature = "testing")]
+        None,
+    )
+    .await
+}
+
+/// Opens or creates a namespace, for a test environment when `env` is given.
+pub(crate) async fn attached(
+    store: Arc<dyn Store>,
+    plan: Plan,
+    #[cfg(feature = "testing")] env: Option<crate::testing::Attached>,
+) -> Result<Substantial> {
+    store.open().await?;
     let core = Core::new()?;
     let partitions = match plan::run(&core, &*store, plan).await? {
         Step::Opened(b::Opened {
@@ -160,6 +176,8 @@ async fn opened(store: Arc<dyn Store>, plan: Plan) -> Result<Substantial> {
         partitions,
         workers: Mutex::default(),
         died: Arc::new(tokio::sync::watch::channel(None).0),
+        #[cfg(feature = "testing")]
+        env,
     };
     Ok(Substantial(Arc::new(inner)))
 }

@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::Substantial;
-use crate::error::{Error, Failure, Result};
+use crate::error::{Error, Failure, Result, run_failed_cause};
 use crate::names::{check_key, check_name};
 use crate::plan;
 use crate::proto::boundary::v1::{
@@ -80,10 +80,6 @@ impl<O> std::fmt::Debug for Run<O> {
     }
 }
 
-fn ulid() -> String {
-    plan::ulid(crate::time::now().ms)
-}
-
 impl<O> Run<O> {
     pub(super) fn new(sub: Substantial, chain: String) -> Self {
         Self {
@@ -111,13 +107,16 @@ impl<O> Run<O> {
     /// Cancels the run: it raises `Cancelled` at every call it is blocked on.
     pub async fn cancel(&self, reason: &str) -> Result<()> {
         self.check_chain()?;
+        let now = self.sub.now();
+        let ord = self.sub.ulid(now.ms);
         let cancel = b::CancelPlan {
             prefix: String::new(),
             partitions: self.sub.partitions(),
             chain: self.chain.clone(),
             reason: reason.to_owned(),
-            id: ulid(),
-            now: Some(crate::time::now()),
+            id: ord.clone(),
+            now: Some(now),
+            ord,
         };
         self.sent(Plan::Cancel(cancel)).await
     }
@@ -130,8 +129,8 @@ impl<O> Run<O> {
         check_key("run id", &self.chain)
     }
 
-    fn not_found(&self) -> Error {
-        not_found(&self.chain)
+    fn not_found(&self, no_chain: b::NoChain) -> Error {
+        not_found(&self.chain, no_chain)
     }
 
     pub async fn status(&self) -> Result<RunStatus> {
@@ -140,16 +139,21 @@ impl<O> Run<O> {
             prefix: String::new(),
             partitions: self.sub.partitions(),
             chain: self.chain.clone(),
-            now: Some(crate::time::now()),
+            now: Some(self.sub.now()),
         };
-        match self.sub.plan(Plan::Status(status)).await? {
+        let status = match self.sub.plan(Plan::Status(status)).await? {
             Step::Status(b::RunState { state: Some(state) }) => match state {
                 run_state::State::Status(of) => of.status().try_into(),
-                run_state::State::NoChain(_) => Err(self.not_found()),
+                run_state::State::NoChain(n) => Err(self.not_found(n)),
                 run_state::State::Failed(f) => Err(Error::StoreError(f.message)),
             },
             other => Err(plan::unexpected("status", other)),
+        }?;
+        #[cfg(feature = "testing")]
+        if let Some(env) = self.sub.env() {
+            env.read(&self.chain, status);
         }
+        Ok(status)
     }
 
     /// The last value published under `key` by any run of the chain, `None` before the first.
@@ -177,6 +181,7 @@ impl<O> Run<O> {
         ResultWait {
             run: self.clone(),
             timeout: None,
+            refollow: REFOLLOW,
         }
     }
 
@@ -204,26 +209,29 @@ impl<O> Run<O> {
                     (e.run, result)
                 }
                 run_result::Result::NotEnded(live) => return Ok(Ended::Live(live)),
-                run_result::Result::NoChain(_) => return Err(self.not_found()),
+                run_result::Result::NoChain(n) => return Err(self.not_found(n)),
                 run_result::Result::Failed(f) => return Err(Error::StoreError(f.message)),
             },
             other => return Err(plan::unexpected("result", other)),
         };
         let status = result.status();
-        let failed = |status, error| {
+        let failed = |status, error, cause| {
             Err(Error::RunFailed {
                 run: run.clone(),
                 status,
                 error,
+                cause,
             })
         };
         match status {
             Status::Completed => decode(result.value).map(Ended::Value),
             Status::Failed => {
-                let error = result
+                let mut error = result
                     .error
                     .ok_or_else(|| Error::Protocol("failed without an error".into()))?;
-                failed(RunStatus::Failed, error.into())
+                let details = error.details.take().map(|v| decode(Some(v))).transpose()?;
+                let cause = run_failed_cause(&error.r#type, details)?;
+                failed(RunStatus::Failed, error.into(), cause)
             }
             Status::Cancelled => {
                 let error = Failure {
@@ -231,7 +239,7 @@ impl<O> Run<O> {
                     message: result.reason,
                     retryable: false,
                 };
-                failed(RunStatus::Cancelled, error)
+                failed(RunStatus::Cancelled, error, None)
             }
             other => Err(Error::Protocol(format!(
                 "result of {run} with status {other:?}"
@@ -246,9 +254,12 @@ enum Ended<O> {
     Live(run_result::NotEnded),
 }
 
-fn not_found(chain: &str) -> Error {
+fn not_found(chain: &str, no_chain: b::NoChain) -> Error {
+    let until = no_chain.collected_until.map(|t| super::datetime(&t));
     Error::RunNotFound {
         chain: chain.to_owned(),
+        collected: until.is_some(),
+        until,
     }
 }
 
@@ -265,7 +276,7 @@ async fn sent(sub: &Substantial, chain: &str, plan: Plan) -> Result<()> {
                 status: ended(r.status())?,
                 run: r.run,
             }),
-            sent::Sent::NoChain(_) => Err(not_found(chain)),
+            sent::Sent::NoChain(n) => Err(not_found(chain, n)),
             sent::Sent::Failed(f) => Err(Error::StoreError(f.message)),
         },
         other => Err(plan::unexpected("send", other)),
@@ -301,14 +312,17 @@ impl IntoFuture for SendMessage {
             if let Some(id) = &self.id {
                 check_key("message id", id)?;
             }
+            let now = self.sub.now();
+            let ord = self.sub.ulid(now.ms);
             let send = b::SendPlan {
                 prefix: String::new(),
                 partitions: self.sub.partitions(),
                 chain: self.chain.clone(),
                 name: self.name,
                 value: Some(json(self.value?)?),
-                id: self.id.unwrap_or_else(ulid),
-                now: Some(crate::time::now()),
+                id: self.id.unwrap_or_else(|| ord.clone()),
+                now: Some(now),
+                ord,
             };
             sent(&self.sub, &self.chain, Plan::Send(send)).await
         })
@@ -321,6 +335,7 @@ impl IntoFuture for SendMessage {
 pub struct ResultWait<T> {
     run: Run<T>,
     timeout: Option<Duration>,
+    refollow: Duration,
 }
 
 impl<T> ResultWait<T> {
@@ -328,31 +343,49 @@ impl<T> ResultWait<T> {
         self.timeout = Some(timeout);
         self
     }
+
+    pub(crate) fn refollow(mut self, refollow: Duration) -> Self {
+        self.refollow = refollow;
+        self
+    }
 }
 
 const FIRST_POLL: Duration = Duration::from_millis(10);
 const MAX_POLL: Duration = Duration::from_secs(30);
+/// A wait follows its chain from the first run again this often, as polling one run's `result`
+/// never sees that run collected (I-17).
+const REFOLLOW: Duration = Duration::from_secs(crate::settings::RETENTION_MIN.as_secs() / 2);
 
 impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
     type Output = Result<T>;
     type IntoFuture = BoxFuture<'static, Result<T>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        #[cfg(feature = "testing")]
+        if let Some(env) = self.run.sub.env().cloned() {
+            return Box::pin(settled(self.run, env, self.timeout));
+        }
         Box::pin(async move {
             let mut died = self.run.sub.0.died.subscribe();
             let store = &*self.run.sub.0.store;
             let polled = async {
                 let (mut delay, mut last) = (FIRST_POLL, None);
+                let mut followed = tokio::time::Instant::now();
                 loop {
+                    if followed.elapsed() >= self.refollow {
+                        (last, followed) = (None, tokio::time::Instant::now());
+                    }
                     let live = match self.run.ended(last.take()).await? {
                         Ended::Value(value) => return Ok(value),
                         Ended::Live(live) => live,
                     };
                     last = Some(live.run);
                     if store.capabilities().wait {
-                        h3::result_created(store, &live.result_key)
-                            .await
-                            .map_err(|e| Error::StoreError(e.message))?;
+                        let created = h3::result_created(store, &live.result_key);
+                        let left = self.refollow.saturating_sub(followed.elapsed());
+                        if let Ok(created) = tokio::time::timeout(left, created).await {
+                            created.map_err(|e| Error::StoreError(e.message))?;
+                        }
                     } else {
                         tokio::time::sleep(delay).await;
                         delay = (delay * 2).min(MAX_POLL);
@@ -375,6 +408,29 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
                 None => poll.await,
             }
         })
+    }
+}
+
+/// In a test environment: settles, then the value the chain ended with; `Stuck` naming what it
+/// waits on if it has not ended, `WaitTimeout` instead when a timeout is given. The clock does
+/// not move.
+#[cfg(feature = "testing")]
+async fn settled<T: DeserializeOwned>(
+    run: Run<T>,
+    env: crate::testing::Attached,
+    timeout: Option<Duration>,
+) -> Result<T> {
+    env.settle().await?;
+    match run.ended(None).await {
+        Ok(Ended::Value(value)) => Ok(value),
+        Ok(Ended::Live(_)) if timeout.is_some() => Err(Error::WaitTimeout),
+        Ok(Ended::Live(live)) => Err(env.stuck(&run.chain, &live.run)),
+        Err(e) => {
+            if let Error::RunFailed { status, .. } = &e {
+                env.read(&run.chain, *status);
+            }
+            Err(e)
+        }
     }
 }
 

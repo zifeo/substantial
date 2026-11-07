@@ -6,12 +6,14 @@ import asyncio
 import functools
 import inspect
 import json
+import weakref
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, overload
 
 from substantial._proto import json_value, layout, run
+from substantial.clock import Clock
 from substantial.durations import millis
 from substantial.errors import InvalidArgument, NotInWorkflow, ValueTooLarge
 from substantial.names import check_name
@@ -25,6 +27,9 @@ CURRENT: ContextVar[Context] = ContextVar("substantial.context")
 # The saga the steps called here belong to, set by `async with c.saga()`.
 SAGA: ContextVar[int | None] = ContextVar("substantial.saga", default=None)
 _STEP_KEY: ContextVar[str] = ContextVar("substantial.step_key")
+# The tasks whose step body runs in a thread, which cannot be interrupted: the testing environment
+# waits for them rather than cancelling them.
+THREADED: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
 
 
 def current() -> Context:
@@ -61,7 +66,14 @@ def body_of(fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any
     if _is_async(fn):
         return functools.partial(fn, *args, **kwargs)
     # Synchronous functions run in a thread, so a blocking call never stops the worker.
-    return functools.partial(asyncio.to_thread, fn, *args, **kwargs)
+    return functools.partial(_in_thread, fn, *args, **kwargs)
+
+
+async def _in_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    task = asyncio.current_task()
+    if task is not None:
+        THREADED.add(task)
+    return await asyncio.to_thread(fn, *args, **kwargs)
 
 
 def call_step(
@@ -158,7 +170,11 @@ def step(
     undo: Callable[..., Any] | None = None,
 ) -> Step[..., Any] | _StepDecorator:
     """`@step` or `@step(name=, retry=, timeout=, undo=)`; `undo` takes the step's value then its
-    arguments."""
+    arguments.
+
+    An attempt the worker abandons, past its timeout or its worker's shutdown grace, is cancelled
+    at its `await` when `async`; a plain `def`, run in a thread, cannot be stopped and runs to its
+    end, its outcome dropped."""
     if fn is not None:
         return Step(fn)
     return lambda f: Step(f, name=name, retry=retry, timeout=timeout, undo=undo)
@@ -168,21 +184,26 @@ def _failure(type_: str, message: str, retryable: bool) -> run.Outcome:
     return run.Outcome(error=layout.Failure(type=type_, message=message, retryable=retryable))
 
 
-async def attempt(body: StepBody, key: str, timeout_ms: int | None) -> run.Outcome:
+async def attempt(
+    clock: Clock, name: str, body: StepBody, key: str, timeout_ms: int | None
+) -> run.Outcome:
     """Runs one attempt of a step with its step key; a `Permanent` error is not retryable."""
     _STEP_KEY.set(key)
-    timeout = asyncio.timeout(None if timeout_ms is None else timeout_ms / 1000)
+    outcome = await clock.attempt(name, key, lambda: _outcome(body), timeout_ms)
+    if outcome is None:
+        return _failure("StepTimeout", f"attempt past {timeout_ms} ms", True)
+    return outcome
+
+
+async def _outcome(body: StepBody) -> run.Outcome:
     try:
-        async with timeout:
-            value = await body()
-            # A sync function such as `lambda: charge(card)` may return a coroutine to await.
-            if inspect.isawaitable(value):
-                value = await value
+        value = await body()
+        # A sync function such as `lambda: charge(card)` may return a coroutine to await.
+        if inspect.isawaitable(value):
+            value = await value
     except Permanent as e:
         return _failure(type(e).__name__, str(e), False)
     except Exception as e:
-        if isinstance(e, TimeoutError) and timeout.expired():
-            return _failure("StepTimeout", f"attempt past {timeout_ms} ms", True)
         return _failure(type(e).__name__, str(e), True)
     try:
         data = json.dumps(value, allow_nan=False).encode()

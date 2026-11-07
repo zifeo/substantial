@@ -13,7 +13,7 @@ const U32 = 0xffff_ffff;
 export const Kind = { RUN: 1, AGENT: 2, PLAN: 3 } as const;
 export type Kind = (typeof Kind)[keyof typeof Kind];
 
-async function read(url: URL): Promise<Uint8Array> {
+export async function read(url: URL): Promise<Uint8Array> {
   try {
     if (url.protocol === "file:") {
       // A path, not the URL: under Deno the global URL is not the one node:fs declares.

@@ -63,6 +63,10 @@ impl Store for Recording {
         self.inner.capabilities()
     }
 
+    fn open(&self) -> futures::future::BoxFuture<'_, substantial::Result<()>> {
+        self.inner.open()
+    }
+
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
         Box::pin(async move {
             if key.contains("/log/")
@@ -182,6 +186,10 @@ impl Store for Counting {
         self.inner.capabilities()
     }
 
+    fn open(&self) -> futures::future::BoxFuture<'_, substantial::Result<()>> {
+        self.inner.open()
+    }
+
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
         let len = bytes.len();
         Box::pin(self.timed(Kind::Put, key, len, self.inner.create(key, bytes)))
@@ -290,7 +298,43 @@ pub fn namespaces() -> Vec<Namespace> {
             _dir: None,
         });
     }
+    for (name, _) in REDIS_URLS {
+        if let Some(url) = redis_url(name) {
+            namespaces.push(Namespace {
+                name,
+                store: internal::open(&url, &Credentials::None, retry()).unwrap(),
+                _dir: None,
+            });
+        }
+    }
     namespaces
+}
+
+/// The variable naming the namespace of each Redis topology. See `dev/redis*.compose.yaml`.
+pub const REDIS_URLS: [(&str, &str); 3] = [
+    ("redis", "SUBSTANTIAL_REDIS_URL"),
+    ("redis-sentinel", "SUBSTANTIAL_REDIS_SENTINEL_URL"),
+    ("redis-cluster", "SUBSTANTIAL_REDIS_CLUSTER_URL"),
+];
+
+/// A fresh namespace under the one the variable of `topology` names; `None`, said on stderr,
+/// when it is not set.
+pub fn redis_url(topology: &str) -> Option<String> {
+    let (_, variable) = REDIS_URLS
+        .iter()
+        .find(|(name, _)| *name == topology)
+        .unwrap_or_else(|| panic!("no Redis topology {topology}"));
+    let url = match std::env::var(variable) {
+        Ok(url) => url,
+        Err(std::env::VarError::NotPresent) => {
+            eprintln!("skipping the Redis store: {variable} is not set");
+            return None;
+        }
+        Err(e) => panic!("{variable}: {e}"),
+    };
+    let (path, query) = url.split_once('?').unwrap_or((&url, ""));
+    let unique = hex::encode(rand::random::<[u8; 8]>());
+    Some(format!("{path}/{unique}?{query}"))
 }
 
 pub const S3_URL: &str = "SUBSTANTIAL_S3_URL";
@@ -354,3 +398,13 @@ pub async fn eventually(what: &str, mut check: impl AsyncFnMut() -> bool) {
 }
 
 pub const LONG: Duration = Duration::from_secs(10);
+
+/// Pushes `interrupted` when dropped: held across an `.await`, it tells a future dropped there;
+/// forgotten once the code after it ran.
+pub struct Interrupted(pub Arc<Mutex<Vec<&'static str>>>);
+
+impl Drop for Interrupted {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().push("interrupted");
+    }
+}

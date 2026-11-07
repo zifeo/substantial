@@ -10,28 +10,46 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
-from substantial._proto import agent, boundary, run
+from substantial._proto import agent, boundary, layout, run
+from substantial.clock import REAL, Clock, Inbox
 from substantial.core import Core
-from substantial.durations import millis, now, until
+from substantial.durations import millis
 from substantial.errors import ProtocolError
 from substantial.machines import AgentMachine
 from substantial.replay import Channel, Replay, dropped, replay
-from substantial.scheduler import Clock
-from substantial.settings import Settings
+from substantial.settings import FOREVER, Retention, Settings
 from substantial.stores import Store, perform
 from substantial.workflow import Workflows
 
 log = logging.getLogger("substantial")
 
+# The name of a replay's task, before its run.
+REPLAY = "replay of "
 # How many times the core reissues an operation that still failed after the adapter's own
 # retries (I-26).
 OP_RETRIES = 5
 
 
+def retention(r: Retention) -> run.Retention:
+    if r is FOREVER:
+        return run.Retention(forever=boundary.Empty())
+    return run.Retention(ms=millis(r))
+
+
 def agent_config(
-    worker: str, workflows: Workflows, partitions: int, s: Settings, store_waits: bool
+    worker: str,
+    workflows: Workflows,
+    partitions: int,
+    s: Settings,
+    store_waits: bool,
+    seed: bytes | None = None,
 ) -> agent.AgentConfig:
-    served = [agent.Served(name=n, versions=v, unversioned=u) for n, v, u in workflows.served()]
+    served = [
+        agent.Served(name=n, versions=v, unversioned=u)
+        if (r := workflows.retentions[n]) is None
+        else agent.Served(name=n, versions=v, unversioned=u, retention=retention(r))
+        for n, v, u in workflows.served()
+    ]
     return agent.AgentConfig(
         prefix="",
         partitions=partitions,
@@ -45,15 +63,19 @@ def agent_config(
         due_pages=s.due_pages,
         snapshot_every=s.snapshot_every,
         op_retries=OP_RETRIES,
-        seed=secrets.token_bytes(32),
+        seed=secrets.token_bytes(32) if seed is None else seed,
         settings=run.RunSettings(
             commit_every_ms=millis(s.commit_every),
             continue_as_new_after_segments=s.continue_as_new_after.segments,
             continue_as_new_after_bytes=s.continue_as_new_after.bytes,
             dedup_window_ms=millis(s.dedup_window),
+            retention=retention(s.retention),
         ),
         store_waits=store_waits,
         wait_seconds=s.wait // timedelta(seconds=1),
+        tombstone_ms=millis(s.tombstone),
+        retention_min_ms=millis(s.retention_min),
+        recheck_ms=millis(s.recheck),
     )
 
 
@@ -66,7 +88,7 @@ class _Replays:
         store: Store,
         workflows: Workflows,
         clock: Clock,
-        events: asyncio.Queue,
+        events: Inbox[tuple[Any, ...]],
         step_timeout: timedelta,
     ):
         self.replay = Replay(core, store, clock, events.put_nowait, step_timeout)
@@ -90,7 +112,9 @@ class _Replays:
         if run_id in self.running:
             log.error("a second replay of %s, in replay", run_id)
         channel = Channel()
-        task = asyncio.create_task(replay(self.replay, workflow, data, channel))
+        task = self.replay.clock.spawn(
+            replay(self.replay, workflow, data, channel), f"{REPLAY}{run_id}"
+        )
         self.running[run_id] = (channel, task)
 
     def committed(self, c: agent.AgentCommand.Committed) -> None:
@@ -104,11 +128,11 @@ class _Replays:
         if run_id not in self.running:
             log.warning("stop for %s, which has no replay", run_id)
             return
-        self.running[run_id][0].stop.set()
+        self.running[run_id][0].stop_replay()
 
     def stop_all(self) -> None:
         for channel, _ in self.running.values():
-            channel.stop.set()
+            channel.stop_replay()
 
     def cancel_all(self) -> None:
         for _, task in self.running.values():
@@ -125,17 +149,36 @@ class Worker:
         partitions: int,
         settings: Settings,
         died: Callable[[BaseException], None],
+        clock: Clock = REAL,
+        id: str | None = None,
+        seed: bytes | None = None,
     ):
         settings.validate()
-        self._id = secrets.token_hex(8)
+        self._id = secrets.token_hex(8) if id is None else id
+        # The core's seed, each replay's derived from it; a fresh one for each worker when `None`.
+        self._seed = seed
+        self._clock = clock
         self._died = died
         self._store = store
         self._workflows = workflows
         self._partitions = partitions
         self._settings = settings
-        self._events: asyncio.Queue[tuple[Any, ...]] = asyncio.Queue()
+        self._events: Inbox[tuple[Any, ...]] = Inbox()
         self._task: asyncio.Task | None = None
         self._wake_pending = False
+
+    @property
+    def alive(self) -> bool:
+        """Whether its loop runs: started, and neither stopped nor dead."""
+        return self._task is not None and not self._task.done()
+
+    @property
+    def error(self) -> BaseException | None:
+        """The error that killed its loop, else `None`."""
+        task = self._task
+        if task is None or not task.done() or task.cancelled():
+            return None
+        return task.exception()
 
     async def __aenter__(self) -> Worker:
         self._start()
@@ -149,9 +192,11 @@ class Worker:
             raise RuntimeError(f"worker {self._id} was started already")
         core = Core.new()
         waits = self._store.capabilities.wait
-        config = agent_config(self._id, self._workflows, self._partitions, self._settings, waits)
+        config = agent_config(
+            self._id, self._workflows, self._partitions, self._settings, waits, self._seed
+        )
         machine = AgentMachine(core, config)
-        self._task = asyncio.create_task(self._run(core, machine))
+        self._task = self._clock.spawn(self._run(core, machine), f"worker {self._id}")
         self._task.add_done_callback(self._stopped)
         return self._task
 
@@ -192,23 +237,23 @@ class Worker:
                 loop.remove_signal_handler(sig)
 
     async def _run(self, core: Core, machine: AgentMachine) -> None:
+        clock, events = self._clock, self._events
         replays = _Replays(
-            core, self._store, self._workflows, now, self._events, self._settings.step_timeout
+            core, self._store, self._workflows, clock, events, self._settings.step_timeout
         )
         ops: set[asyncio.Task] = set()
-        grace = self._settings.shutdown_grace / timedelta(seconds=1)
-        grace_ends: float | None = None
-        loop = asyncio.get_running_loop()
+        grace = 0
+        grace_ends: int | None = None
 
         async def store_op(op_id: int, op: boundary.StoreOp) -> None:
-            self._events.put_nowait(("feed", op_id, await perform(self._store, op)))
+            events.put_nowait(("feed", op_id, await perform(self._store, op)))
 
         try:
             while True:
-                command = machine.next(now())
+                command = machine.next(clock.now())
                 which = command.WhichOneof("command")
                 if which == "store":
-                    task = asyncio.create_task(store_op(command.store.id, command.store.op))
+                    task = clock.spawn(store_op(command.store.id, command.store.op), "store op")
                     ops.add(task)
                     task.add_done_callback(ops.discard)
                 elif which == "replay":
@@ -218,20 +263,19 @@ class Worker:
                 elif which == "stop_replay":
                     replays.stop(command.stop_replay)
                 elif which == "wait_until":
-                    timeout = until(command.wait_until, now())
+                    at = command.wait_until
                     past_grace = grace_ends is not None and bool(replays.running)
                     if past_grace:
-                        timeout = min(timeout, max(0.0, grace_ends - loop.time()))
-                    try:
-                        event = self._events.get_nowait()
-                    except asyncio.QueueEmpty:
-                        try:
-                            event = await asyncio.wait_for(self._events.get(), timeout)
-                        except TimeoutError:
-                            if past_grace and loop.time() >= grace_ends:  # type: ignore[operator]
-                                replays.stop_all()
-                                grace_ends = loop.time() + grace
-                            continue
+                        left = max(0, grace_ends - clock.elapsed())  # type: ignore[operator]
+                        at = layout.Time(ms=min(at.ms, clock.now().ms + left))
+                    if events.empty():
+                        await clock.wait({events.signal()}, at)
+                    if events.empty():
+                        if past_grace and clock.elapsed() >= grace_ends:  # type: ignore[operator]
+                            replays.stop_all()
+                            grace_ends = clock.elapsed() + grace
+                        continue
+                    event = events.get_nowait()
                     kind = event[0]
                     if kind == "feed":
                         machine.feed(event[1], event[2])
@@ -244,7 +288,8 @@ class Worker:
                         self._wake_pending = False
                         machine.wake()
                     elif kind == "shutdown" and grace_ends is None:
-                        grace_ends = loop.time() + grace
+                        grace = millis(self._settings.shutdown_grace)
+                        grace_ends = clock.elapsed() + grace
                         machine.shutdown()
                 elif which == "stop":
                     return

@@ -40,6 +40,11 @@ class Store(Protocol):
     @property
     def capabilities(self) -> Capabilities: ...
 
+    async def open(self) -> None:
+        """Connects, raising `ConfigError` on a store the adapter cannot use; the operations
+        connect too when it was not called."""
+        ...
+
     async def create(self, key: str, data: bytes) -> Create:
         """Atomic and exclusive: of concurrent creates of a key, exactly one gets "created"."""
         ...

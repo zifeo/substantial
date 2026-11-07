@@ -6,7 +6,8 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from enum import Enum
+from typing import Any, Literal
 
 from substantial.errors import ConfigError
 
@@ -20,7 +21,41 @@ PUBLIC = (
     "claim_ttl",
     "continue_as_new_after",
     "step_timeout",
+    "retention",
 )
+# The least retention of the presets; a `result` wait follows its chain again within half of it.
+RETENTION_MIN = timedelta(hours=1)
+# The longest retention, 100 years; longer is `FOREVER`. A collection's due key names its year in
+# 4 digits, which far longer retentions would pass.
+RETENTION_MAX = timedelta(days=36_500)
+
+
+class Forever(Enum):
+    """`FOREVER`, a run kept until its namespace is deleted."""
+
+    FOREVER = "forever"
+
+
+FOREVER = Forever.FOREVER
+
+type Retention = timedelta | Literal[Forever.FOREVER]
+
+
+def check_retention(retention: object, minimum: timedelta, what: str) -> None:
+    if retention is FOREVER:
+        return
+    if not isinstance(retention, timedelta):
+        raise ConfigError(f"{what} must be a timedelta or s.FOREVER, not {retention!r}")
+    if retention < minimum:
+        raise ConfigError(
+            f"{what} must be at least {minimum // timedelta(milliseconds=1)} ms or forever, "
+            f"not {retention // timedelta(milliseconds=1)} ms"
+        )
+    if retention > RETENTION_MAX:
+        raise ConfigError(
+            f"{what} must be at most {RETENTION_MAX // timedelta(milliseconds=1)} ms or forever, "
+            f"not {retention // timedelta(milliseconds=1)} ms"
+        )
 
 
 def _is_int(value: object) -> bool:
@@ -55,6 +90,10 @@ class Settings:
     continue_as_new_after: ContinueAsNewAfter
     dedup_window: timedelta
     step_timeout: timedelta
+    retention: Retention
+    tombstone: timedelta
+    retention_min: timedelta
+    recheck: timedelta
 
     @staticmethod
     def preset(preset: str, *, waiting_store: bool) -> Settings:
@@ -80,6 +119,10 @@ class Settings:
             continue_as_new_after=ContinueAsNewAfter(segments=1000, bytes=8 * MIB),
             dedup_window=timedelta(days=7),
             step_timeout=timedelta(minutes=5),
+            retention=timedelta(days=30),
+            tombstone=timedelta(days=7),
+            retention_min=RETENTION_MIN,
+            recheck=timedelta(days=1),
         )
 
     def override(self, **settings: Any) -> Settings:
@@ -87,7 +130,7 @@ class Settings:
         refused.
 
         `continue_as_new_after` takes a `ContinueAsNewAfter`, or `0` to compress at every
-        boundary.
+        boundary; `retention` a `timedelta` or `FOREVER`.
         """
         unknown = sorted(set(settings) - set(PUBLIC))
         if unknown:
@@ -115,7 +158,14 @@ class Settings:
                 raise ConfigError(f"{name} must be positive")
         if self.due_page > 1000:
             raise ConfigError(f"due_page must be at most 1000, an S3 page: {self.due_page!r}")
-        for name in ("claim_ttl", "max_idle", "step_timeout"):
+        for name in (
+            "claim_ttl",
+            "max_idle",
+            "step_timeout",
+            "tombstone",
+            "retention_min",
+            "recheck",
+        ):
             if getattr(self, name) == timedelta(0):
                 raise ConfigError(f"{name} must be positive")
         if not timedelta(seconds=1) <= self.wait <= timedelta(seconds=20) or self.wait % timedelta(
@@ -125,3 +175,4 @@ class Settings:
         c = self.continue_as_new_after
         if not isinstance(c, ContinueAsNewAfter):
             raise ConfigError(f"continue_as_new_after must be a ContinueAsNewAfter or 0, not {c!r}")
+        check_retention(self.retention, self.retention_min, "retention")

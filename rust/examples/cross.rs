@@ -4,6 +4,7 @@
 //! ```text
 //! cargo run -p substantial --example cross -- worker <url>   # serves the workflow until SIGTERM
 //! cargo run -p substantial --example cross -- client <url>   # starts a run, messages it, prints its result
+//! cargo run -p substantial --example cross -- start <url>    # starts the run `same-input`, its input written its own way
 //! ```
 
 use std::time::Duration;
@@ -17,6 +18,13 @@ const LANGUAGE: &str = "rust";
 struct Input {
     name: String,
     delay_ms: u64,
+}
+
+/// The input of `Input`, its fields in another order and its number a float.
+#[derive(Serialize)]
+struct Written {
+    delay_ms: f64,
+    name: &'static str,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -58,7 +66,7 @@ async fn cross(c: Context, input: Input) -> Result<Output> {
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [mode, url] = args.as_slice() else {
-        anyhow::bail!("usage: cross worker|client <url>");
+        anyhow::bail!("usage: cross worker|client|start <url>");
     };
     let create = Substantial::create(url.as_str()).partitions(1);
     let sub = if url.starts_with("s3") {
@@ -89,7 +97,19 @@ async fn main() -> anyhow::Result<()> {
                 serde_json::json!({ "result": result, "status": status, "client": LANGUAGE });
             println!("{line}");
         }
-        _ => anyhow::bail!("usage: cross worker|client <url>"),
+        "start" => {
+            let written = Written {
+                delay_ms: 200.0,
+                name: "ada",
+            };
+            let run = sub.start(cross, written).id("same-input").await?;
+            let status = format!("{:?}", run.status().await?).to_lowercase();
+            println!(
+                "{}",
+                serde_json::json!({ "chain": run.chain(), "status": status })
+            );
+        }
+        _ => anyhow::bail!("usage: cross worker|client|start <url>"),
     }
     Ok(())
 }

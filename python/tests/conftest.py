@@ -1,5 +1,6 @@
 """Stores and helpers shared by the tests; S3 only when `SUBSTANTIAL_S3_URL` is set (see
-`dev/rustfs.compose.yaml`)."""
+`dev/rustfs.compose.yaml`), Redis only when the variable of its topology is (see
+`dev/redis*.compose.yaml`)."""
 
 from __future__ import annotations
 
@@ -23,7 +24,12 @@ from substantial.worker import Worker
 
 S3_URL = "SUBSTANTIAL_S3_URL"
 LONG = timedelta(seconds=10)
-ADAPTERS = ["memory", "file", "s3"]
+REDIS_URLS = {
+    "redis": "SUBSTANTIAL_REDIS_URL",
+    "redis-sentinel": "SUBSTANTIAL_REDIS_SENTINEL_URL",
+    "redis-cluster": "SUBSTANTIAL_REDIS_CLUSTER_URL",
+}
+ADAPTERS = ["memory", "file", "s3", *REDIS_URLS]
 
 
 def s3_url(scheme: str = "s3") -> str | None:
@@ -49,12 +55,31 @@ def require_s3(scheme: str = "s3") -> str:
     return url
 
 
+def redis_url(topology: str) -> str | None:
+    """A fresh namespace under the one the variable of `topology` names; `None` when it is not
+    set."""
+    url = os.environ.get(REDIS_URLS[topology])
+    if url is None:
+        return None
+    path, _, query = url.partition("?")
+    return f"{path}/{secrets.token_hex(8)}?{query}"
+
+
+def require_redis(topology: str) -> str:
+    url = redis_url(topology)
+    if url is None:
+        pytest.skip(f"{REDIS_URLS[topology]} is not set")
+    return url
+
+
 def fresh_store(adapter: str, tmp_path: Path) -> Store:
     """A fresh namespace in an adapter of this host."""
     if adapter == "memory":
         return MemoryStore(f"test-{secrets.token_hex(8)}")
     if adapter == "file":
         return FsStore(tmp_path / f"ns-{secrets.token_hex(4)}")
+    if adapter in REDIS_URLS:
+        return open_store(require_redis(adapter), None)
     return open_store(require_s3(), "env")
 
 
@@ -132,6 +157,9 @@ class Recording:
     async def delete(self, key: str) -> None:
         await self._gate()
         await self.inner.delete(key)
+
+    async def open(self) -> None:
+        await self.inner.open()
 
     async def close(self) -> None:
         await self.inner.close()

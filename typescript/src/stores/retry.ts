@@ -20,13 +20,18 @@ export class Ambiguous extends Fault {}
 /** Trying again cannot help: an invalid key, a refused permission. */
 export class Refused extends Fault {}
 
+/** How a backoff waits, in ms: a timer on the real clock. */
+export type Sleep = (ms: number) => Promise<void>;
+
 class Backoff {
   readonly #policy: StoreRetry;
+  readonly #sleep: Sleep;
   #delay: number;
   #attempt = 1;
 
-  constructor(policy: StoreRetry) {
+  constructor(policy: StoreRetry, wait: Sleep) {
     this.#policy = policy;
+    this.#sleep = wait;
     this.#delay = policy.initial.ms;
   }
 
@@ -38,7 +43,7 @@ class Backoff {
     }
     this.#attempt += 1;
     if (wait) {
-      await sleep(this.#delay);
+      await this.#sleep(this.#delay);
       this.#delay = Math.min(this.#delay * 2, this.#policy.max.ms);
     }
   }
@@ -49,8 +54,12 @@ function faultOf(e: unknown): Fault {
   throw e;
 }
 
-export async function withRetry<T>(policy: StoreRetry, op: () => Promise<T>): Promise<T> {
-  const backoff = new Backoff(policy);
+export async function withRetry<T>(
+  policy: StoreRetry,
+  op: () => Promise<T>,
+  wait: Sleep = sleep,
+): Promise<T> {
+  const backoff = new Backoff(policy, wait);
   for (;;) {
     try {
       return await op();
@@ -73,8 +82,9 @@ export async function create(
   data: Uint8Array,
   attempt: () => Promise<Create>,
   get: () => Promise<Uint8Array | undefined>,
+  wait: Sleep = sleep,
 ): Promise<Create> {
-  const backoff = new Backoff(policy);
+  const backoff = new Backoff(policy, wait);
   let ambiguous = false;
   // An earlier attempt left unanswered may land after the get, so a later "exists" is checked.
   let wasAmbiguous = false;

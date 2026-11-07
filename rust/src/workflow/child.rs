@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use super::context::Context;
 use super::scheduler::Answer;
 use super::{AsWorkflow, decode, input_object, json};
+use crate::client::RunStatus;
 use crate::error::{Error, Result};
 use crate::names::{check_key, check_name};
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
@@ -169,11 +170,18 @@ impl<O> Child<O> {
     where
         O: DeserializeOwned,
     {
-        decode(
-            self.ctx
-                .resolved(Call::ChildResult(self.chain.clone()))
-                .await?,
-        )
+        let resolved = self
+            .ctx
+            .resolved(Call::ChildResult(self.chain.clone()))
+            .await;
+        if let Err(Error::RunFailed {
+            status: RunStatus::Failed,
+            ..
+        }) = &resolved
+        {
+            self.ctx.shared.clock().failure_read(&self.chain);
+        }
+        decode(resolved?)
     }
 
     /// Sends the child a message, as `Context::send`.

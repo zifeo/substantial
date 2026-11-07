@@ -3,6 +3,7 @@
 // promises one `Next` at a time and lets the microtask queue drain before it asks for the next.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
+import type { Clock } from "./clock.ts";
 import type { Duration } from "./durations.ts";
 import {
   Cancelled,
@@ -17,14 +18,15 @@ import {
   RunEnded,
   RunFailed,
   RunNotFound,
+  runFailedCause,
   StepFailed,
   typeName,
   ValueTooLarge,
+  wrappedFailure,
 } from "./errors.ts";
 import type { RunMachine } from "./machines.ts";
-import { decodeValue, type layout, run } from "./proto.ts";
+import { decodeValue, type layout, run, time } from "./proto.ts";
 
-export type Clock = () => layout.Time;
 export type Decode = (value: layout.Value | undefined) => unknown;
 export type StepBody = () => unknown;
 /** An undo, given the value of the step it undoes, as the body of its step. */
@@ -83,30 +85,47 @@ function settle(decode: Decode, value: layout.Value | undefined): Promise<unknow
   }
 }
 
+function runNotFound(f: layout.Failure): Error {
+  const d = f.details?.kind.case === "json" ? decodeValue(f.details) : undefined;
+  const { run, until } = (d ?? {}) as Record<string, unknown>;
+  const at = typeof until === "string" ? new Date(until) : undefined;
+  if (
+    typeof run !== "string" ||
+    (until !== undefined && (at === undefined || Number.isNaN(at.getTime())))
+  )
+    return new ProtocolError(`RunNotFound with details ${JSON.stringify(d)}`);
+  return new RunNotFound(run, at);
+}
+
 function runFailed(f: layout.Failure): Error {
   const d = f.details?.kind.case === "json" ? decodeValue(f.details) : undefined;
   const { run, status, error, reason } = (d ?? {}) as Record<string, unknown>;
   if (typeof run !== "string") return new ProtocolError(`RunFailed of ${JSON.stringify(d)}`);
   if (status === "failed" && typeof error === "object" && error !== null) {
-    const { type, message, retryable } = error as Failure;
-    return new RunFailed(run, status, { type, message, retryable });
+    const { type, message, retryable, details } = error as Failure & { details?: unknown };
+    try {
+      return new RunFailed(
+        run,
+        status,
+        { type, message, retryable },
+        runFailedCause(type, details),
+      );
+    } catch (e) {
+      return e as Error;
+    }
   }
   if (status === "cancelled" && typeof reason === "string") {
-    return new RunFailed(run, status, { type: "Cancelled", message: reason, retryable: false });
+    const failure = { type: "Cancelled", message: reason, retryable: false };
+    return new RunFailed(run, status, failure, undefined);
   }
   return new ProtocolError(`RunFailed with details ${JSON.stringify(d)}`);
 }
 
 function stepFailed(f: layout.Failure, failure: Failure): Error {
   const d = f.details?.kind.case === "json" ? decodeValue(f.details) : undefined;
-  const error = (d as Record<string, unknown> | undefined)?.error as
-    | Record<string, unknown>
-    | undefined;
-  const { type, message, retryable } = error ?? {};
-  if (typeof type !== "string" || typeof message !== "string" || typeof retryable !== "boolean") {
-    return new ProtocolError(`StepFailed with details ${JSON.stringify(d)}`);
-  }
-  return new StepFailed(failure, { type, message, retryable });
+  const cause = wrappedFailure(d);
+  if (cause === undefined) return new ProtocolError(`StepFailed with details ${JSON.stringify(d)}`);
+  return new StepFailed(failure, cause);
 }
 
 /** The error a call resolved with a failure throws in the code. */
@@ -118,7 +137,7 @@ export function errorFromFailure(f: layout.Failure): Error {
     case "StepFailed":
       return stepFailed(f, failure);
     case "RunNotFound":
-      return new RunNotFound(f.message);
+      return runNotFound(f);
     case "RunEnded":
       return new RunEnded(f.message);
     default:
@@ -137,8 +156,8 @@ export class Shared {
   /** Whether the code went past the recorded history, so that its logs are written (I-14). */
   live: boolean;
   readonly slots: Map<bigint, Slot> = new Map();
-  /** The steps pending, with their step key. */
-  readonly steps: Map<bigint, { body: StepBody; key: string }> = new Map();
+  /** The steps pending, with their name and step key. */
+  readonly steps: Map<bigint, { body: StepBody; name: string; key: string }> = new Map();
   /** The undos of every step call of the replay, by call, for a rollback. */
   readonly undos: Map<bigint, NonNullable<StepSpec["undo"]>> = new Map();
   /** The children whose chain ended. */
@@ -184,7 +203,7 @@ export class Shared {
     if (this.diverged !== undefined) throw new NonDeterminism(this.diverged);
     let called: run.Called;
     try {
-      called = this.machine.call(call, this.clock());
+      called = this.machine.call(call, time(this.clock.now()));
     } catch (e) {
       if (e instanceof NonDeterminism) {
         this.diverged = `${e.message}; ${NEW_VERSION}`;
@@ -224,8 +243,9 @@ export class Shared {
         throw this.protocol("step call answered without its occurrence");
       }
       if (answer.case === "pending" && call.call.case === "step") {
-        const key = `${this.run}/${call.call.value.name}/${called.occurrence}`;
-        this.steps.set(answer.value, { body: spec.body, key });
+        const name = call.call.value.name;
+        const key = `${this.run}/${name}/${called.occurrence}`;
+        this.steps.set(answer.value, { body: spec.body, name, key });
         if (spec.undo !== undefined) this.undos.set(answer.value, spec.undo);
       }
     }
@@ -325,7 +345,7 @@ export class Shared {
   }
 
   stepEnded(call: bigint, attempt: number, outcome: run.Outcome): void {
-    this.machine.stepEnded(call, attempt, outcome, this.clock());
+    this.machine.stepEnded(call, attempt, outcome, time(this.clock.now()));
   }
 
   arrived(messages: run.InboxMessage[]): void {
@@ -333,7 +353,7 @@ export class Shared {
   }
 
   next(): run.Next {
-    const next = this.machine.next(this.clock());
+    const next = this.machine.next(time(this.clock.now()));
     this.live = next.live;
     return next;
   }

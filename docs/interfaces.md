@@ -381,6 +381,7 @@ async def backup_v2(c: s.Context, source: str, target: str) -> dict: ...
 | Option | Meaning |
 |---|---|
 | `name` | the workflow's identity in the store; the function's name unless given; the first argument in TypeScript, where bundlers rename functions |
+| `retention` | optional. How long the runs of the workflow are kept after their chain ends, instead of the worker's `retention` (I-16, I-18): a duration of at least 1 hour and at most 100 years, or `s.FOREVER` (Rust `s::FOREVER`) to keep them; TypeScript `{ retention }`, Rust `.with_retention(d)` or `#[s::workflow(retention = ..)]`. A shorter or longer duration raises `ConfigError` when a worker is given the workflow, as do versions of one name giving different retentions to one worker. A continued run takes the retention of its own workflow |
 | `step_timeout` | optional. The timeout of every attempt of the workflow's steps and undos that set none, instead of the worker's `step_timeout` (I-18); TypeScript `{ stepTimeout }`, Rust `.with_step_timeout(d)` or `#[s::workflow(step_timeout = ..)]`. A zero duration is refused where the workflow is declared: `InvalidArgument` in Python and TypeScript, a panic in Rust, as for a zero `tokio::time::interval` |
 | `version` | optional. A run started with a version is replayed only by the code of that version, so old and new code run side by side through a deploy, the old one served until its runs end. A run without a version is replayed by the code registered under its name; an incompatible change fails it with `NonDeterminism`: at the first call the history does not answer, the host stops the code and the run ends failed |
 
@@ -435,7 +436,7 @@ sizes = await asyncio.gather(*[c.step("size", os.path.getsize, f) for f in files
 |---|---|
 | `name` | the step's identity: for a declared step, the function's bare name unless given, in every host; for an inline step, the first argument of `c.step` |
 | `retry` | `s.Retry(max_attempts, initial, max, multiplier)` (TypeScript a plain object `{ maxAttempts, initial, max, multiplier }`, Rust `s::Retry { .. }`), every field required, exponential backoff; none means one attempt |
-| `timeout` | per attempt, enforced by the host; it wins over the workflow's and the worker's `step_timeout`, larger or smaller, so every attempt has one, 5 minutes unless set (I-18); a late attempt fails with a retryable `StepTimeout` and its result is discarded |
+| `timeout` | per attempt, enforced by the host; it wins over the workflow's and the worker's `step_timeout`, larger or smaller, so every attempt has one, 5 minutes unless set (I-18); a late attempt is interrupted (Abandoned attempts below) and fails with a retryable `StepTimeout` |
 | `undo` | a function taking the step's value then its arguments, run by a rollback (Undo, rollback and sagas) |
 | `decode` | TypeScript only, as types are erased: a function of the JSON value giving the step's value. Rust decodes with serde into the step's type; Python gives the JSON value |
 
@@ -444,6 +445,7 @@ sizes = await asyncio.gather(*[c.step("size", os.path.getsize, f) for f in files
 - **Same value every time.** The value is encoded to JSON and decoded before the code sees it, the first time too, so the first run and every replay see the same value of the same type.
 - **Permanent errors.** `raise s.Permanent(...)` (TypeScript `throw new s.Permanent(...)`, Rust `Err(s::Permanent::new(e).into())`) fails the step at once, attempts left or not: a 404, an invalid input.
 - **Step key.** `s.step_key()`, called inside a step, returns `<run>/<step>/<occurrence>`, the same for every attempt and replay: pass it to a payment provider, an `Idempotency-Key` header, a database unique key. An undo's is `<run>/<step>.undo/<occurrence>`, the occurrence of the step it undoes.
+- **Abandoned attempts.** An attempt the worker abandons, past its timeout or its worker's `shutdown_grace` (I-18), is interrupted: its outcome is not recorded, and the code after the point it stopped at never runs. Python cancels an `async` step at its `await` (`asyncio.CancelledError`), Rust drops the step's future at its `.await`. JavaScript cannot stop a function: TypeScript aborts `s.stepSignal()`, the attempt's `AbortSignal`, and stops awaiting the body, so pass the signal to `fetch`, timers and SDK calls, or the body runs to its end, its outcome dropped. A thread cannot be interrupted either: a Python plain `def` and a Rust `step_blocking` run to their end, their outcome dropped, maybe while the next attempt runs. An interrupted step may leave its effect half done: keep it idempotent, or keyed with `s.step_key()`.
 - **Synchronous functions.** Python runs them in a thread (`asyncio.to_thread`), so a blocking call never stops the worker. A thread cannot be stopped: past its timeout, the attempt may still finish while the next one runs, so its effect may happen twice. A synchronous function that returns an awaitable, such as `lambda: ship(order, address)` calling an async function, has it awaited after the call. TypeScript runs them on the event loop, where a blocking call stops the worker until it returns. A Rust step is an `async fn`; blocking code is an inline `c.step_blocking(name, move || -> Result<T, E> { .. })`, which runs on tokio's blocking threads with the same past-the-timeout caveat, or goes through `tokio::task::spawn_blocking`.
 - A declared step called outside a workflow raises `NotInWorkflow`.
 - **Types.** In Python, a type checker (pyright, mypy) sees a declared step as an `s.Step[P, R]`, called with the function's parameters and awaited to an `R`, and `c.step` checks the arguments given after the function against it. In Rust and TypeScript, the step's value has the function's type.
@@ -482,6 +484,7 @@ approved = await c.wait_until(lambda: len(approvers) >= 2, timeout=s.days(1))   
 - Durations are `s.seconds(n)`, `s.minutes(n)`, `s.hours(n)`, `s.days(n)` in every host (`s::seconds(n)` in Rust): a `timedelta` in Python, which also takes any `timedelta`; a `Duration` in TypeScript, whole milliseconds, also `s.milliseconds(n)` and `new s.Duration(ms)`; a `std::time::Duration` in Rust, which also takes any.
 - A sleep's end is fixed when it first runs, and its firing is recorded, so a replay never sleeps again and a worker with a slow clock replays it the same.
 - `wait_until` evaluates its predicate after each message, child end and timer, and returns `True` once it holds, or `False` when its timeout passes first. It is the only call with a timeout: to receive with a timeout, bind a handler and wait on it.
+- A `wait_until`'s timeout is fixed when the call first runs, as a sleep's end: a loop that waits again after each message gets a new timeout from each call, which makes a debounce ([Integration](integration.md#a-durable-debounce)). For a deadline, pass `deadline - await c.now()` once checked not negative: a negative duration raises `InvalidArgument`.
 - Several things at once: one predicate over them (`lambda: child.done or bool(stopped)`), or branches with `asyncio.wait`, `Promise.race`, `tokio::select!`.
 
 ## I-9 Messages
@@ -500,9 +503,10 @@ await notify(url, callback=c.chain)                 # where to send the answer
 
 - A message is a name and a JSON value (`None` when sent without one): `run.send(name, value, id=)` from a client, `c.send(run, name, value, id=)` from a workflow, `run` being a chain id (Rust: `c.send(run, name, value).id(..).await?`). A message sent again with the same `id` is delivered once, within `dedup_window` (I-18). A workflow's send is delivered once, its run crashing after it or not, while workers serve due runs within `dedup_window`.
 - A workflow's send raises `RunNotFound` or `RunEnded` at the call, as a client's does: before its commit the replay reads the chain up to its last run, with no write, and records the outcome, so every replay gives the code the same one. A child this run started is accepted before its start exists. The target may still end between that read and the delivery, the same window a client's send has: the message is then never consumed.
+- A message sent to a collected chain raises `RunNotFound` (I-16). Within 7 days of the collection it never reaches a new run under the same id.
 - `c.chain` (Rust `c.chain()`) is the run's chain id, the one a client gives `sub.run`, the same through continuations: pass it to whoever must send the run a message back.
 - A replay consumes every message waiting in the inbox, in order, whether the code asks for it yet or not, and records it. On every replay the code sees the same messages at the same place.
-- **Order.** A run consumes its messages in the order of the sender's clock, then the message id; one client's messages, whose ids are monotonic (I-17), in the order it sent them.
+- **Order.** A run consumes its messages in the order of the sender's clock, then in the order one sender sent them: the sends of one client process, ids given or not, and a run's own sends in call order. Across processes within one millisecond, the order is arbitrary.
 - **Order is not kept across a continue-as-new.** A message that reaches a run after its last replay, as it continues as new, is forwarded to the next run of the chain, and may be consumed there after a message sent later. Nothing is lost. When order matters across continuations, number the values and let the code sort them.
 - **Binding delivers the past first.** `c.handle(name, cb)` first delivers every message of its name consumed so far, in order, then each new one as it is consumed.
 - **Binding several names at once.** `c.handle({"add": f, "remove": g})` (TypeScript `c.handle({ add, remove })`, without `decode`; Rust `c.handle_all(s::Handlers::new().on("add", f).on("remove", g))?`) binds them together: their past messages come in the order they arrived, across names, then each new one. Separate `handle` calls deliver each name's past messages grouped, all of the first name's before the second's. In Rust, a name given twice to one `handle_all` raises `InvalidArgument`.
@@ -547,7 +551,7 @@ ok = await check.result()                              # raises RunFailed if it 
 
 - A workflow started from a workflow is a child of the run: the same `c.start` as `sub.start`, the parent recorded in the child's `start`. Its id is derived from the parent's, or given with `id=`; in Rust `c.start(&verify, input).id(..).await?` and `check.send(name, value).id(..).await?`, as `sub.start(..).id(..)` and `run.send(..).id(..)`. `check.chain` (Rust `check.chain()`) is the child's chain id, as `c.chain` is the parent's.
 - A child may be a workflow of another language, started through a stub (I-5).
-- An `id=` already taken by a run that is not this child makes the child end failed with `RunExists`: its `result()` raises `RunFailed`, and the other run is left untouched. Starting two children with the same id from one run raises `InvalidArgument`.
+- An `id=` already taken by a run that is not this child, or by a run collected less than 7 days ago (I-17), makes the child end failed with `RunExists`: its `result()` raises `RunFailed`, and the other run is left untouched. Starting two children with the same id from one run raises `InvalidArgument`.
 - A child not awaited goes on after its parent ends. A parent that is cancelled cancels its children still running.
 - `check.done` says whether the child ended, for a `wait_until` over several things; `check.done()` in Rust. It turns true when the run consumes the child's end, at the same place on every replay.
 
@@ -586,7 +590,8 @@ async def backup_bucket(c: s.Context, source: str, target: str) -> int:
 ```
 
 - The state is a JSON object, anything else raises `InvalidArgument`: in Python a dataclass or a `dict`. `iterate` yields the same object at each iteration, and `break` ends the loop. After the loop, it holds its last value.
-- **Only the state crosses a compression**, in every host. A counter or a list kept beside the loop starts again from its value before the loop in the next run: what the loop needs belongs in the state. A state that does not serialize to JSON fails the run with `NotCompressible`, while the full history still exists; in Python, keep the `str()` of a `datetime` or a `UUID` (I-7). Tests compress at every iteration (Testing), so a slip shows before production.
+- **Only the state crosses a compression**, in every host. A counter or a list kept beside the loop starts again from its value before the loop in the next run: what the loop needs belongs in the state. A state that does not serialize to JSON fails the run with `NotCompressible`, while the full history still exists; in Python, keep the `str()` of a `datetime` or a `UUID` (I-7). A worker with `continue_as_new_after=0` compresses at every iteration (I-19): test a loop with it, so a slip shows before production.
+- **A handler's list does not cross a compression.** Messages reach a handler while an iteration runs, during its steps too, after the code read the list: move the list into the state as the iteration's last statement (`state.queue += ops; ops.clear()`), or the messages it holds are lost when the run continues ([Integration](integration.md#a-durable-debounce)).
 - Code before the loop runs again in each run of the chain, with the chain's input.
 - A loop that never ends is a cron:
 
@@ -665,7 +670,12 @@ sub = await s.Substantial.open("h3://s3.example.ch/backups/nightly?region=ch-1",
 - `create` makes the namespace, or opens it if it exists with the same `partitions`; other partitions raise `LayoutError`, and none, or one that is not a positive whole number, `ConfigError`. `open` raises `LayoutError` on a namespace that does not exist, so a typo never makes an empty one.
 - **Partitions** split the queue of due runs of each workflow: a run's due entries go to one partition, and every worker lists every partition of every workflow it serves, at most `due_page` keys each, once per `max_idle` when idle. More partitions read more due runs per listing round and cost more listings while idle. The count is fixed at create: another count is another namespace. 1 suits a script or a small service. What a partition costs on S3 is in [Architecture](architecture.md#monthly-cost-on-s3).
 - Both run the probe of I-26: a store that accepts two creates of one key raises `LayoutError`.
-- **Nothing collects ended runs.** Their histories stay in the namespace, which grows with every run: a `file:` directory fills its disk over time. Never delete keys under a namespace, by hand or with a lifecycle rule: runs still going read keys of runs that ended, and deleting them by age can make a child run twice.
+- **Ended runs are collected.** A run is kept while its chain runs and for at least its `retention` after the chain's last run ends, 30 days unless the worker or the workflow says otherwise (I-5, I-18). Then a worker serving its workflow deletes it, no sooner than 2 hours after the run ended: a `retention` of 1 hour collects at about 2 hours. A run is kept longer while a child it started is kept. The first run of a chain that continued keeps its `start` and `result` while the chain lives.
+- `retention` is at least 1 hour and at most 100 years (36,500 days), or `s.FOREVER` (Rust `s::FOREVER`, the string `"forever"` in `set`), which keeps the runs: their histories then stay in the namespace, which grows with every run. No retention means the worker's, never forever.
+- A worker serving the workflow's name collects its runs, whatever their version: keep a worker serving a name while it has ended runs, or they stay. A collection whose checks cannot pass yet, a child still kept or a parent still starting it, tries again a day later.
+- The id of a collected chain stays taken for 7 days, its tombstone (I-17), then starts a new run.
+- These hold while no client or worker stalls more than 7 days between reading an id and writing under it, and while workers serve due entries within 7 days.
+- Never delete keys under a namespace, by hand or with a lifecycle rule: runs still going read keys of runs that ended, and deleting them by age can make a child run twice.
 
 A store is named by its URL only:
 
@@ -675,15 +685,20 @@ A store is named by its URL only:
 | `file:<path>`, `file:///<path>` | file system | the directory | no |
 | `s3://<endpoint>/<bucket>/<ns>?region=<r>` | S3 with conditional writes | the prefix | no |
 | `h3://<endpoint>/<bucket>/<ns>?region=<r>` | an S3-compatible store whose listings can wait | the prefix | yes |
+| `redis://<host>:<port>/<ns>?db=<n>&replicas=<n>` | one Redis or Valkey server | the hash tag `{<ns>}` | yes |
+| `redis+sentinel://<host>:<port>,<host>:<port>/<ns>?master=<name>&db=<n>&replicas=all` | Redis or Valkey with Sentinel | the hash tag `{<ns>}` | yes |
+| `redis+cluster://<host>:<port>,<host>:<port>/<ns>?replicas=all` | a Redis or Valkey cluster | the hash tag `{<ns>}` | yes |
 
 - An unknown scheme raises `ConfigError` with the supported ones.
 - A `file:` path is used as given: one starting with `~` raises `ConfigError`, as nothing expands it to a home directory; give an absolute or relative path.
-- Every part shown is required: the endpoint and the region too, on AWS as anywhere else (`s3://s3.eu-central-1.amazonaws.com/<bucket>/<ns>?region=eu-central-1`). `<endpoint>` is a host, with a port if needed, reached over HTTPS; `s3+http://` and `h3+http://` name plain HTTP, for a local server in development.
+- Every part shown is required: the endpoint and the region too, on AWS as anywhere else (`s3://s3.eu-central-1.amazonaws.com/<bucket>/<ns>?region=eu-central-1`). `<endpoint>` is a host, with a port if needed, reached over HTTPS; `s3+http://` and `h3+http://` name plain HTTP, for a local server in development. The region is named as AWS names them, 1 to 63 lowercase letters, digits and hyphens, neither starting nor ending with a hyphen; another raises `ConfigError` at open.
 - `s3://` and `h3://` open the same adapter on the same S3 API: `h3://` only declares that the store's listings can wait, returning once their page changes or after at most 20 s. Workers then long-poll instead of listing every `max_idle`, and `result` sees a run's end as soon as it is written.
+- Redis stores need, in Python, the `redis` extra (`pip install "substantial[redis]"`), in Rust, the `redis` feature (`cargo add substantial --features redis`), and in TypeScript, `@redis/client` (`npm install @redis/client`); without it, a Redis URL raises `ConfigError` naming what to install. They need Redis or Valkey 7.2 or later with AOF on and `maxmemory-policy noeviction` (I-26). Every parameter shown is required, and an unknown one raises `ConfigError`. `<host>:<port>` names the server, the sentinels asked for the primary `master`, or the cluster nodes asked for the primary of the namespace's slot. `replicas` is how many replicas fsync a create before it is acknowledged: a number or `all` on one server, and only `all` on Sentinel and Cluster, so a promoted replica holds every acknowledged create; there, a primary with no replica online acknowledges no create. `<ns>` is made of `[A-Za-z0-9._-]` components separated by `/`. `rediss://`, `rediss+sentinel://` and `rediss+cluster://` reach every server over TLS, verified against the default certificate authorities of the host, and no other can be given: in Python, those of OpenSSL's default locations, or of `SSL_CERT_FILE` and `SSL_CERT_DIR`; in Rust, the operating system's, or those of `SSL_CERT_FILE` and `SSL_CERT_DIR`; in TypeScript, Node's, its bundled Mozilla list unless `--use-system-ca`, plus `NODE_EXTRA_CA_CERTS`, or Deno's. Sentinel and Cluster need at least 2 replicas per primary for any operation to go on after one failover.
 - `credentials`, required by `s3://` and `h3://`, and refused by `memory` and `file`, is one of:
   - `"env"`, the store's standard variables: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` when it is set; a missing one raises `ConfigError` at open;
   - explicit keys, read once;
-  - a provider, a function, sync or async, returning keys with an optional `expires_at`. It is called at open, and again before any request made less than 5 minutes before the last keys' `expires_at`; keys without one are never refreshed. A provider that raises fails that request as a store failure, and the next request calls it again. Use it for roles, web identity or any temporary keys.
+  - a provider, a function, sync or async, returning keys with an optional `expires_at`. It is called at open, and again before any request made less than 5 minutes before the last keys' `expires_at`; keys without one are never refreshed. A provider that raises fails that request as a store failure, and the next request calls it again; one that has not answered after 60 s, the timeout of a store request, fails that attempt, which is retried like a lost connection. Use it for roles, web identity or any temporary keys.
+- The URL and `credentials` alone define an S3 store: no other AWS setting is read, neither a profile nor `~/.aws/config` nor variables such as `AWS_USE_FIPS_ENDPOINT`.
 
 ```python
 s.Credentials(access_key_id="...", secret_access_key="...", session_token=None)
@@ -694,6 +709,26 @@ async def role_keys() -> s.Credentials:        # or a plain def, run in a thread
                          session_token=k.token, expires_at=k.expiration)    # an aware datetime
 
 sub = await s.Substantial.open(url, credentials=role_keys)
+```
+
+- On a Redis store, `credentials` is optional: none for a server without `AUTH` (Rust `Credentials::None`), `"env"` for `REDIS_PASSWORD`, and `REDIS_USERNAME` when it is set, a missing or empty `REDIS_PASSWORD` raising `ConfigError` at open, a password, or a provider returning one with an optional `expires_at`. A password is `s.Password(password, username=None)` in Python, `Credentials::Password { password, username }` in Rust and `new s.Password({ password, username })` in TypeScript, the default user without a username. A provider returns `s.Password` in Python, sync or async, `s::Password { password, username, expires_at }` in Rust, async, given as `Credentials::password_provider(f)`, and `{ password, username?, expiresAt? }` in TypeScript, sync or async. It is called at the first connection, and again by any connection opened less than 5 minutes before the last password's `expires_at`; connections already open keep theirs. A provider that raises fails that operation as a store failure, without retries; one that has not answered after 60 s fails that attempt, which is retried. Sentinels are asked for the primary without a password: sentinels that require one are not supported yet.
+
+```python
+sub = await s.Substantial.open("redis+sentinel://10.0.0.1:26379,10.0.0.2:26379/shop?master=main&db=0&replicas=all",
+                               credentials=s.Password("...", username="shop"))
+```
+
+```rust
+let sub = s::Substantial::open("redis+sentinel://10.0.0.1:26379,10.0.0.2:26379/shop?master=main&db=0&replicas=all")
+    .credentials(s::Credentials::Password { password: "...".into(), username: Some("shop".into()) })
+    .await?;
+```
+
+```ts
+const sub = await s.Substantial.open(
+  "redis+sentinel://10.0.0.1:26379,10.0.0.2:26379/shop?master=main&db=0&replicas=all",
+  { credentials: new s.Password({ password: "...", username: "shop" }) },
+);
 ```
 
 ```ts
@@ -738,16 +773,17 @@ await run.cancel("not needed")
 run = sub.run(backup, "backup-2026-10-31")      # a handle on an existing chain
 ```
 
-- **Names.** Run and message ids, workflow names and published keys go into store keys: they match `[a-z0-9._-]{1,100}`, `.` and `..` excepted, and names starting with `substantial.` are reserved. Step and message names match `[A-Za-z0-9._-]{1,128}`. Anything else raises `InvalidArgument`, whose message states the rule.
-- `start` without `id` gets a ULID from the host, in lowercase. The host's ULIDs are monotonic in the process: one made in the same millisecond as the last, or earlier after the clock went back, is the last plus one, so a client's messages to a run are consumed in the order sent, except across a continue-as-new (I-9). With an `id` already started for the same workflow, version and input, it returns that run, and completes a start that stopped halfway; with other ones, it raises `RunExists`.
-- `status` is `pending` before any replay committed, `running` while a worker holds a live claim, `suspended` while the run waits on time or messages, then the run's end. Between two commits of a running replay it may read `suspended` for a moment. A run that continues as new reads as its own state, `running` or `suspended`, until its result exists, then the chain reads as its next run.
+- **Names.** Run and message ids, workflow names and published keys go into store keys: they match `[a-z0-9._-]{1,100}`, `.` and `..` excepted, and names starting with `substantial.` are reserved. Step and message names match `[A-Za-z0-9._-]{1,128}`. Anything else raises `InvalidArgument`, whose message states the rule. Many external ids are case-sensitive, and lowercasing `evt_1AbC` would merge it with `evt_1abc`: hash an external id into a run or message id, as `f"evt-{hashlib.sha256(event_id.encode()).hexdigest()[:32]}"`.
+- `start` without `id` gets a ULID from the host, in lowercase. The host's ULIDs are monotonic in the process: one made in the same millisecond as the last, or earlier after the clock went back, is the last plus one. Each `send` and `cancel` draws one too, so a client's messages to a run are consumed in the order sent, ids given or not, except across a continue-as-new (I-9). With an `id` already started for the same workflow, version and input, it returns that run while that run is kept, and completes a start that stopped halfway; with other ones, it raises `RunExists`. From the run's collection and for 7 days after, `start(id)` raises `RunExists` whatever the input, saying the run was collected and until when the id is taken. After that, the id starts a new run. Every host encodes an input as canonical JSON (RFC 8785): keys sorted, numbers written as the doubles they are, so keys in another order, `1.0` for `1`, or the same input from another host is the same input, and a Python worker reads `1.0` back as `1`. An input JSON cannot hold exactly raises `InvalidArgument`: a NaN or an infinity in every host, an integer past 2^53 - 1 in Python and Rust (a TypeScript number is already a double, and a `bigint` is refused), and in TypeScript a string with a lone surrogate. Children's inputs and `continue_as_new`'s are encoded the same way. Start with the fields a redelivery keeps: a delivery counter or a timestamp in the input raises `RunExists` at the first redelivery.
+- `status` is `pending` while no worker has taken the run: no replay committed and no claim held. `running` while a worker holds a live claim, `suspended` while the run waits on time or messages, then the run's end. A run whose first replay only waits, for a first message and no timer, commits an empty segment, so an idle actor a worker took reads `suspended`, and one that stays `pending` is not served (I-18). Between two commits of a running replay it may read `suspended` for a moment. A run that continues as new reads as its own state, `running` or `suspended`, until its result exists, then the chain reads as its next run.
 - A chain is followed from its first run's `result`: a chain that never continued is read without a listing.
-- `result` reads the chain's end, then polls the `result` key of the last run it found, one key per poll, until it exists or the timeout passes, the interval doubling from 10 ms up to 30 s; when that run continued, the next poll follows the chain from it. On a store whose listings wait it holds a waiting listing of that `result` key instead of polling.
+- `result` reads the chain's end, then polls the `result` key of the last run it found, one key per poll, until it exists or the timeout passes, the interval doubling from 10 ms up to 30 s; when that run continued, the next poll follows the chain from it. On a store whose listings wait it holds a waiting listing of that `result` key instead of polling. Every 30 minutes it follows the chain again from its first run, so a wait on a chain that gets collected raises `RunNotFound`.
 - A handle is typed by its workflow's result: `run.result()` gives the value the workflow returns, as a `Run<O>` in Rust and TypeScript and an `s.Run[R]` to a Python type checker, which also types a child's `result()` (`s.Child[R]`).
 - A handle names a chain, `run.chain` (Rust `run.chain()`): `send`, `result`, `status`, `read` and `cancel` act on the last run, and `result` waits through continuations.
 - `send` to a run that ended raises `RunEnded`, to a chain that does not exist `RunNotFound`, from a client as from a workflow (I-9). `send` without `id` gets a ULID.
+- A collected chain raises `RunNotFound` from `status`, `result`, `send` and `cancel`, saying it was collected, for 7 days; `read` returns `None`. An ended run never reads as running.
 - `result` needs no worker in the process. A worker of this `Substantial` that dies fails the `result` waits in progress with its error (I-18); later waits go on, for a worker elsewhere.
-- **A failed run is final.** Starting the same `id` with the same input returns the failed run. To run it again after fixing the code or the outage, start it under a new id (`order-42-r1`): its steps run again, with new `s.step_key()`s, so a step whose effect must happen once takes its idempotency key from the business id in its input (the order id), not from `step_key()`. For failures the code can wait out, see the catch-and-resume pattern of I-6.
+- **A failed run is final until it is collected.** Starting the same `id` with the same input returns the failed run. To run it again after fixing the code or the outage, start it under a new id (`order-42-r1`): its steps run again, with new `s.step_key()`s, so a step whose effect must happen once takes its idempotency key from the business id in its input (the order id), not from `step_key()`. For failures the code can wait out, see the catch-and-resume pattern of I-6.
 - Nothing lists runs: keep the ids you start, and read each with `status()` or `result()`.
 
 ## I-18 Workers
@@ -759,13 +795,14 @@ async with sub.worker([example], preset="script"):                             #
 await sub.worker([backup, verify], preset="service", concurrency=32).serve()   # a long-lived process
 ```
 
-A worker runs the workflows it is given, on every partition. A preset is a named set of every setting, the only defaults there are; one of the six public settings given next to it overrides it, and any other name is refused with `ConfigError: unknown settings [...]`.
+A worker runs the workflows it is given, on every partition. A preset is a named set of every setting, the only defaults there are; one of the seven public settings given next to it overrides it, and any other name is refused with `ConfigError: unknown settings [...]`.
 
 - **A run whose workflow no worker serves waits silently**, a child (I-11) as a run started by a client: it stays `pending`, with no error and no log. Give a worker every workflow a run may start.
 - **A run started or messaged from another process waits up to `max_idle`** on a store whose listings do not wait (`file:`, `s3://`): 30 s in the `service` preset, 1 s in `script`. A start or send in the worker's own process wakes it at once, and on `h3://` the worker's waiting listing returns as soon as the start or message lands, even behind runs the worker skips (another version, another worker's claim). Lower `max_idle` for a lower latency, at the cost of more listings.
 - **Every step attempt has a timeout.** A worker renews its claim while it lives, not while the step makes progress, so a hung step would keep the run on that worker. Its attempt fails with `StepTimeout` after the step's own `timeout`, else its workflow's `step_timeout`, else the worker's, 5 minutes in both presets: give longer steps a `timeout` of their own. A thread cannot be stopped: a Python synchronous step or a Rust `step_blocking` past its timeout may still finish, its result discarded.
 - **The runs of a worker that crashed are taken over** within `claim_ttl` plus `claim_skew` of its last claim or renewal, 35 s in both presets, by the workers serving them.
 - **A worker that dies is loud.** When its loop dies, from a bug or a trapped core, it logs the error at once, and the `result` waits in progress through the same `Substantial` fail with it. Later waits are not failed: `result` needs no worker in the process.
+- **Health.** `worker.alive` is whether its loop runs, started and neither left nor dead, and `worker.error` the error that killed it, else `None`: what a readiness probe reads. TypeScript has `worker.alive` and `worker.error`, Rust `worker.is_alive()` and `worker.error()`.
 
 | Setting | `script` | `service` | Meaning |
 |---|---|---|---|
@@ -775,6 +812,9 @@ A worker runs the workflows it is given, on every partition. A preset is a named
 | `claim_ttl` | 30 s | 30 s | a claim not renewed for this long may be taken over |
 | `continue_as_new_after` | 1,000 segments or 8 MiB | 1,000 segments or 8 MiB | compression threshold, whichever the history passes first |
 | `step_timeout` | 5 min | 5 min | the timeout of every step attempt and undo whose step and workflow set none (I-6) |
+| `retention` | 30 days | 30 days | how long ended runs are kept after their chain ends, at least 1 hour and at most 100 years (36,500 days), or `s.FOREVER`, for the workflows that set none (I-5, I-16) |
+
+`retention` is bounded at 100 years so that a collection's time stays a 4-digit year in its due key and within every host's clock; a longer duration raises `ConfigError`, and `s.FOREVER` keeps runs for good.
 
 `continue_as_new_after` takes a `s.ContinueAsNewAfter(segments, bytes)`, or `0` to compress at every boundary. In TypeScript it is a plain object `{ segments, bytes }`, and the settings are `camelCase` beside the preset: `sub.worker([backup, verify], { preset: "service", concurrency: 32 })`.
 
@@ -788,34 +828,21 @@ The presets fix every other value, the same in both, and no worker can change th
 | `due_page` | 100 | due entries listed per partition and page |
 | `due_pages` | 10 | pages per listing round, when the first pages hold only entries the worker skips (another version, another worker's claim) |
 | `snapshot_every` | 64 segments | a snapshot of the history every this many segments |
-| `dedup_window` | 7 days | how long a consumed message id is kept, from its consume time and across continuations; a resend with the same id after it is delivered again |
+| `dedup_window` | 7 days | how long a consumed message id is kept at least, from its consume time and across continuations: a resend with the same id within it is delivered once. A run's history keeps every id the run consumed, so a resend after it is delivered again only once the run has continued as new since (I-19), the next run carrying only the ids within the window |
+| `tombstone` | 7 days | how long the id of a collected chain stays taken (I-17) |
+| `retention_min` | 1 hour | the shortest `retention` |
+| `recheck` | 1 day | when a collection whose checks failed tries again (I-16) |
 | store retries | 5 attempts, 100 ms to 5 s | an adapter's retries of a transient failure (I-26) |
 
-Leaving `async with` (TypeScript `await using`), `worker.shutdown()`, or a SIGTERM or Ctrl-C (SIGINT) to `serve()` starts no new replay and lets the steps in flight end within `shutdown_grace`, in every host; Rust on Windows listens to Ctrl-C only. A run the worker reaches meanwhile is left with its claims deleted and its wakeup kept, for another worker. Outside `serve()` no host handles signals: Ctrl-C ends a Rust or TypeScript script at once, without the grace, while Python's `asyncio.run` cancels the script, which leaves `async with` and shuts the worker down.
+Leaving `async with` (TypeScript `await using`), `worker.shutdown()`, or a SIGTERM or Ctrl-C (SIGINT) to `serve()` starts no new replay and lets the steps in flight end within `shutdown_grace`, in every host, then interrupts those still running (I-6); Rust on Windows listens to Ctrl-C only. A run the worker reaches meanwhile is left with its claims deleted and its wakeup kept, for another worker. Outside `serve()` no host handles signals: Ctrl-C ends a Rust or TypeScript script at once, without the grace, while Python's `asyncio.run` cancels the script, which leaves `async with` and shuts the worker down.
 
-In Rust, `sub.worker((backup, verify)).preset(s::Preset::Service).set("concurrency", 32)` overrides a public setting by name, its value written with a unit (`"100ms"`, `"30s"`, `"5min"`), and `continue_as_new_after` as `"1000,8MiB"` or `"0"`; `start()` or `serve()` refuses a worker without a preset, an unknown setting or a value that does not parse.
+In Rust, `sub.worker((backup, verify)).preset(s::Preset::Service).set("concurrency", 32)` overrides a public setting by name, its value written with a unit (`"100ms"`, `"30s"`, `"5min"`), `continue_as_new_after` as `"1000,8MiB"` or `"0"`, and `retention` as `"30d"` or `"forever"` (`s::FOREVER`); `start()` or `serve()` refuses a worker without a preset, an unknown setting or a value that does not parse.
 
 ## I-19 Testing
 
-Tests run on the real clock: a sleep or a timeout lasts as long as written. Take the durations and deadlines a test must shorten from the input, and pass 0 in the test:
+`s.testing.Env` is a `Substantial` on a namespace in memory and a virtual clock, whose workers run in the test's process and move only when the test says so: a month of timers in a fraction of a second, a crash, a paused pod, a store outage or Chaos in one call. See [Testing workflows](testing.md).
 
-```python
-@s.workflow
-async def remind(c: s.Context, user: str, delay_s: int) -> None:
-    await c.sleep(s.seconds(delay_s))               # s.days(30) in production, through the input
-    await notify(user)
-
-
-async def test_remind() -> None:
-    sub = await s.Substantial.create("memory://test-remind", partitions=1)
-    async with sub.worker([remind], preset="script", continue_as_new_after=0):
-        run = await sub.start(remind, {"user": "ada", "delay_s": 0})
-        await run.result(timeout=s.seconds(10))
-    await sub.close()
-```
-
-- `memory://<ns>` holds a namespace in the process, shared by name: give each test its own.
-- The same goes for `sleep_until` (a deadline in the input) and `wait_until(timeout=)`.
+- Outside it, a test runs on the real clock: `memory://<ns>` holds a namespace in the process, shared by name, so give each test its own.
 - `continue_as_new_after=0` compresses at every `iterate` boundary, so a loop that is not compressible fails in the test.
 
 ## I-20 Errors
@@ -828,19 +855,19 @@ The same kinds in every host: Python and TypeScript classes, variants of `substa
 | `Cancelled` | calls blocked when the run is cancelled | control flow |
 | `RolledBack` | `rollback` | the undos ran; the run ends failed with this reason; control flow |
 | `UndoFailed` | `rollback`, `saga` | an undo had no attempt left |
-| `RunFailed` | `run.result()`, a child's `result()` | the run ended failed or cancelled; holds `run`, `status` and `error`, a `Failure` |
+| `RunFailed` | `run.result()`, a child's `result()` | the run ended failed or cancelled; holds `run`, `status`, `error`, a `Failure`, and `cause`. For a run a step failed, `error` is the step's `StepFailed` and `cause` its `StepFailed.cause`, the last attempt's `Failure`, so a client or a parent matches `cause.type` (Rust `cause.kind`) without reading messages; for any other end `cause` is `None` (TypeScript `undefined`). In Rust `cause` is an `Option<Box<Failure>>` |
 | `NonDeterminism` | a replay | the code made a call the history does not answer; the run fails, and its `RunFailed` adds that an incompatible change needs a new version (`version=`) |
 | `NotCompressible` | `iterate` | the loop's state does not serialize to JSON at a compression; the run fails |
 | `ValueTooLarge` | `start`, `send`, a workflow's calls that take a value | a value whose JSON encoding passes 64 MiB (I-15); its message, and in Rust its fields `size` and `limit`, give both; a step's value over it fails the step with `StepFailed`, its `cause` `ValueTooLarge` |
 | `NotInWorkflow` | a declared step | called outside a workflow |
-| `RunExists` | `start` | the id is taken by another workflow or input; for a child, the error of its end (I-11) |
+| `RunExists` | `start` | the id is taken by another workflow or input, or by a run collected less than 7 days ago: then `collected` is true and `until` says when the id is free (Rust `RunExists { id, collected, until }`); for a child, the error of its end (I-11) |
 | `InvalidArgument` | `start`, `send`, `cancel`, `status`, `result`, `read`, `worker`, a workflow's calls, declarations (`s.Retry`, `@s.workflow`, `@s.step`), durations | a name or id outside the naming rules (I-17), a reserved name, an input or a loop state that is not an object, a step of a saga that ended, an option or duration of the wrong type or range; raised in a workflow, it fails the run |
 | `RunEnded` | `send`, a workflow's `send` | the chain's last run ended, its message naming how (`completed`, `failed`, `cancelled`), Rust `RunEnded { run, status }`; a workflow's send records it, so every replay raises it again |
-| `RunNotFound` | `send`, a workflow's `send`, `cancel`, `status`, `result` | no chain has this id |
+| `RunNotFound` | `send`, a workflow's `send`, `cancel`, `status`, `result` | no chain has this id; a chain collected less than 7 days ago has `collected` true and `until`, as `RunExists` (Rust `RunNotFound { chain, collected, until }`) |
 | `WaitTimeout` | `run.result(timeout=)` | the client's timeout passed first |
 | `StoreError` | adapters | the store failed after the adapter's retries; in a worker, the wakeup stays and the run is tried again |
 | `LayoutError` | `create`, `open` | no namespace, other partitions, an unknown layout, a store that failed the probe |
-| `ConfigError` | `create`, `open`, `worker`, `Credentials`, `ContinueAsNewAfter`, a credentials provider's result | a missing, unknown or invalid setting: no `partitions` or preset, an unknown URL scheme, missing credentials or credentials given to a store that takes none, a setting that is not one of the six public ones, a value of the wrong type |
+| `ConfigError` | `create`, `open`, `worker`, `Credentials`, `ContinueAsNewAfter`, a credentials provider's result | a missing, unknown or invalid setting: no `partitions` or preset, an unknown URL scheme, missing credentials or credentials given to a store that takes none, a setting that is not one of the seven public ones, a value of the wrong type, a `retention` under 1 hour, versions of a workflow giving different retentions |
 
 In Rust a failure's type is the field `kind` of `Failure`, `type` being a keyword. A workflow fails with its own error by returning `Err(s::Error::failed("Refused", "not today"))`, or through `?` on an `anyhow::Error`: its message and causes become the failure's, with the type `Error`, and an `anyhow::Error` that holds a `substantial::Error` gives it back, control flow included. `substantial::Error` also has variants for the host's own failures:
 
@@ -856,7 +883,7 @@ In Rust a failure's type is the field `kind` of `Failure`, `type` being a keywor
 
 A worker leaves a run of a version it does not serve, or without a version when it serves only versions of its name, to other workers.
 
-A suspension is not an error, and only Python's code sees it. When a replay ends, Python cancels the code's task: `asyncio.CancelledError`, a `BaseException`, is raised at the `await` the code is blocked on, so `finally` blocks and `async with` exits run at every suspension. Code that catches it and goes on gets a `ProtocolError` at its next call: let it through, and never catch `BaseException` in a workflow. TypeScript leaves the code's promises pending, and Rust drops its future: nothing reaches the code.
+A suspension is not an error, and only Python's code sees it. When a replay ends, Python cancels the code's task: `asyncio.CancelledError`, a `BaseException`, is raised at the `await` the code is blocked on, so `finally` blocks and `async with` exits run at every suspension. Code that catches it and goes on gets a `ProtocolError` at its next call: let it through, and never catch `BaseException` in a workflow. `asyncio.gather(..., return_exceptions=True)` lets it through: the host cancels every task of the code, the gather's included, and a gather that is cancelled raises it rather than returning it. TypeScript leaves the code's promises pending, and Rust drops its future: nothing reaches the code.
 
 ## I-21 Actions in each host
 
@@ -868,6 +895,7 @@ A suspension is not an error, and only Python's code sees it. When a replay ends
 | parallel | `await asyncio.gather(a(), b())` | `await Promise.all([a(), b()])` | `tokio::try_join!(a(), b())?` |
 | permanent error | `raise s.Permanent(...)` | `throw new s.Permanent(...)` | `Err(s::Permanent::new(e).into())` |
 | step key | `s.step_key()` | `s.stepKey()` | `s::step_key()` |
+| abandoned attempt | `asyncio.CancelledError` at its `await` | `s.stepSignal()` aborted | the step's future dropped at its `.await` |
 | now, random, uuid | `await c.now()`, `await c.random()`, `await c.uuid()` | `await c.now()`, `await c.random()`, `await c.uuid()` | `c.now().await?`, `c.random().await?`, `c.uuid().await?` (a `String`) |
 | send | `await c.send(chain, "note", value, id=)` | `await c.send(chain, "note", value, { id })` | `c.send(chain, "note", value).id(..).await?` |
 | sleep | `await c.sleep(s.hours(1))`, `await c.sleep_until(t)` | `await c.sleep(s.hours(1))`, `await c.sleepUntil(t)` | `c.sleep(s::hours(1)).await?`, `c.sleep_until(t).await?` |
@@ -930,9 +958,11 @@ The agent machine answers `next` with an `AgentCommand`:
 
 Every `called` and `next` says with `live` whether the replay has walked the whole recorded history; before the first, the code is live exactly when the history is empty. The host writes the code's logs only while it is live. A step call's `called` holds its occurrence, which the host puts in the step key. After `deliver` and `child_ended` alike, the host evaluates the `wait_until` predicates before the next `next`.
 
-A workflow's send records its outcome in its `Sent` event of the history (`proto/substantial/layout/v1`): `to`, a `Delivery` naming the run the message goes to and its workflow, which names the message's due entry; or `refused`, the `Failure` the send raised, `RunNotFound` (details `{"run"}`) or `RunEnded` (details `{"run", "last", "status"}`), nothing sent. The failures the core makes hold the one they wrap in their details: `StepFailed` `{"step", "attempts", "error"}`, the last attempt's failure as `{"type", "message", "retryable", "details"}`; a child's `RunFailed` `{"run", "status", "error", "reason"}`.
+A workflow's send records its outcome in its `Sent` event of the history (`proto/substantial/layout/v1`): `to`, a `Delivery` naming the run the message goes to and its workflow, which names the message's due entry; or `refused`, the `Failure` the send raised, `RunNotFound` (details `{"run"}`, and `"collected": true` and `"until"` for a chain collected) or `RunEnded` (details `{"run", "last", "status"}`), nothing sent. The failures the core makes hold the one they wrap in their details: `StepFailed` `{"step", "attempts", "error"}`, the last attempt's failure as `{"type", "message", "retryable", "details"}`; a child's `RunFailed` `{"run", "status", "error", "reason"}`.
 
-The agent serves each workflow of `AgentConfig.workflows` for its versions, and for its runs without a version when `unversioned`, which is required.
+The agent serves each workflow of `AgentConfig.workflows` for its versions, and for its runs without a version when `unversioned`, which is required. `Served.retention` is the workflow's `retention`, absent for the worker's; `RunSettings.retention` is required, a duration or `forever`, and the end segment records it. `AgentConfig.tombstone_ms`, `retention_min_ms` and `recheck_ms` carry the preset's values.
+
+A client's `send` and `cancel` plans take `ord`, a ULID the host draws from its monotonic generator per call, which orders the message's inbox key `runs/<run>/inbox/<ord>-<id>`; a send without `id` uses it as its id. A plan's `no_chain` and `run_exists` outcomes hold `collected_until` when the chain was collected.
 
 A replay dropped, after `committed` with `won` false or `stop_replay`, is reported with `replay_ended` (`dropped`), as one that ended is (`idle`). `step_ended` and `satisfied` for a call that is not a step or a wait answer `INVALID`; for one already resolved, they are ignored. A child result for a run that is not a child, a saga end for a saga not open, a step of a saga not open, and an `iterate` or a continuation whose state is not an object answer `INVALID` too.
 
@@ -1009,6 +1039,7 @@ pub trait Store: Send + Sync { // boxed futures, so a worker holds an `Arc<dyn S
 ```python
 class Store(Protocol):
     capabilities: Capabilities  # wait: bool
+    async def open(self) -> None: ...   # connects, ConfigError on a store it cannot use
     async def create(self, key: str, data: bytes) -> Literal["created", "exists"]: ...
     async def get(self, key: str) -> bytes | None: ...
     async def list(self, prefix: str, *, start_after: str | None, max_keys: int, wait: ListWait | None) -> Listing: ...
@@ -1031,7 +1062,7 @@ The operations each verb performs on the store, their round trips and what they 
 
 An adapter is scoped to its namespace: keys are relative to it, so the same keys work under a bucket, a prefix or a directory. An adapter retries a transient failure itself, 5 attempts in all with a backoff doubling from 100 ms to 5 s, the same in every host. An operation that still fails after them raises `StoreFailure`; `close` (Python and TypeScript) releases the adapter's connections.
 
-Each URL scheme opens its adapter (`MemoryStore`, `FsStore`, `S3Store`, and `S3Store` with `wait = true` for `h3://`), its query parameters as fields. Adapters resolve ambiguous creates with a `get`, as the store contract requires.
+Each URL scheme opens its adapter (`MemoryStore`, `FsStore`, `S3Store`, `S3Store` with `wait = true` for `h3://`, and `RedisStore` for every Redis scheme), its query parameters as fields. `Substantial.create` and `open` call the adapter's `open` first, in every host, so a store that fails the checks of its adapter raises `ConfigError`. Adapters resolve ambiguous creates with a `get`, as the store contract requires.
 
 #### The store contract
 
@@ -1046,18 +1077,18 @@ Four operations, the only ones any part of Substantial performs on a store:
 
 How each store implements them:
 
-| | File system | S3 | Waiting S3 (`h3://`) |
-|---|---|---|---|
-| `create` | temporary file in `<root>/.tmp/`, fsync, `link()` to the key (fails if it exists), fsync the directory | `PutObject`, `If-None-Match: *`; 412 is `exists`, 409 is retried | as S3 |
-| `get` | read | `GetObject` | as S3 |
-| `list` | walk the deepest directory holding the prefix, keep the keys in range, sort by full key | `ListObjectsV2`, `prefix`, `start-after`, `max-keys` up to 1,000 | as S3; a waiting one is one request of at most 1,000 keys with the wait headers |
-| `delete` | unlink | `DeleteObject` | as S3 |
-| `wait` | no | no | yes |
+| | File system | S3 | Waiting S3 (`h3://`) | Redis |
+|---|---|---|---|---|
+| `create` | temporary file in `<root>/.tmp/`, fsync, `link()` to the key (fails if it exists), fsync the directory | `PutObject`, `If-None-Match: *`; 412 is `exists`, 409 is retried | as S3 | the script `create.lua`: `SET {ns}:o:<key> NX`, then `ZADD {ns}:i 0 <key>` and a publish of the key on `{ns}:c`, or `INCR {ns}:f` when the key exists; then `WAITAOF 1 <replicas> 5000` on the same connection |
+| `get` | read | `GetObject` | as S3 | `GET {ns}:o:<key>` and `INCR {ns}:f`, then `WAITAOF` |
+| `list` | walk the deepest directory holding the prefix, keep the keys in range, sort by full key | `ListObjectsV2`, `prefix`, `start-after`, `max-keys` up to 1,000 | as S3; a waiting one is one request of at most 1,000 keys with the wait headers | `ZRANGE {ns}:i [<prefix> (<prefix>\xff BYLEX LIMIT 0 <max_keys>`, the lower bound `(<start_after>` when it follows the prefix, and `INCR {ns}:f`, then `WAITAOF` |
+| `delete` | unlink | `DeleteObject` | as S3 | the script `delete.lua`: `DEL`, `ZREM` and a publish of the key when it existed, `INCR {ns}:f` when it was missing; then `WAITAOF` |
+| `wait` | no | no | yes | yes |
 
 Rules for every store:
 
 - **No overwrite.** Substantial never writes an existing key. An adapter that cannot refuse a second create of a key is not a store.
-- **Hints may come back.** Due entries and claims are hints: one may be created again after it was deleted. So may two history keys: a consumed `inbox` key, created again by an ambiguous send's retry or by a sender's redone effects, which the run consumes without delivery (I-9), and an `index` entry, created again empty. The others (`start`, `log`, `snap`, `effects`, `pub`, `result`) never come back. A consumed `inbox` key a crashed worker left is deleted by the run's next replay, or by a run that continued when it forwards its inbox.
+- **Hints may come back.** Due entries and claims are hints: one may be created again after it was deleted, the claim of a paused worker even after its run was collected. So may three history keys: a consumed `inbox` key, created again by an ambiguous send's retry or by a sender's redone effects, which the run consumes without delivery (I-9); an `index` entry, created again empty; and the `start` of a creator that met a collected id and withdraws it, left inert, completed by a later `start` with the same input. The others (`log`, `snap`, `effects`, `pub`, `result`, `gone`) never come back, except under an id started again after its tombstone. A consumed `inbox` key a crashed worker left is deleted by the run's next replay, by a run that continued when it forwards its inbox, or by the run's collection.
 - **A short page ends a listing.** A `list` answers `max_keys` keys whenever at least that many follow `start_after`: a store that answers fewer before the end hides keys.
 - **A create lands in time, or never.** A create, its retries included, is applied within a bounded time of being sent or not at all. S3 does not promise it, since a request the adapter gave up on may still be applied; the bound is the operator's, at least the adapter's 5 attempts of 60 s each plus their backoff.
 - **Ambiguous outcomes.** A create that fails without an answer (a timeout, a 5xx, a lost connection) is followed by a `get`: the same bytes mean `created`, other bytes `exists`, `missing` means create again. An `exists` after an ambiguous attempt of the same create is checked the same way, since that attempt may have landed late. A worker never assumes it won or lost.
@@ -1070,6 +1101,15 @@ Per store:
 
 - **File system.** `O_EXCL` is not reliable on NFS; the adapter uses `link()`. Keys are lowercase, so a file system that folds case (macOS by default) holds them as they are, and no component passes 255 bytes. A key is never the directory of another, so the layout never needs both `a` and `a/b`. Parent directories are created and fsynced before the link, and never removed, so no `rmdir` races a `link`. Key components are checked: no `.` or `..`, at most 255 bytes. For development and CI, and for one machine.
 - **S3.** Conditional writes are required: AWS, MinIO, Ceph RGW from 8.1 (9.0 for versioned buckets), R2. AWS answers 409 `ConditionalRequestConflict` to concurrent conditional writes of one key: the adapter retries, it is not `exists`; 429 is retried too, and 408 is ambiguous like a 5xx. A missing key is `NoSuchKey` only: a missing bucket is a store failure. Requests time out after 5 s to connect and 60 s per attempt, so a hung request is an ambiguous outcome. On a versioned bucket a deleted hint is a delete marker, and creating it again succeeds. The probe checks each namespace.
+- **Redis.** Redis or Valkey 7.2 or later, for `WAITAOF`. `{ns}` is the hash tag of every key, so a namespace lives on one slot, one shard of a cluster: spread load over namespaces. The scripts are the files of `redis/` at the repository root, shipped in each package, loaded with `SCRIPT LOAD` by every connection pool to a primary and run with `EVALSHA`. The adapters use redis-py, `@redis/client` and the `redis` crate, each operation on a connection of its own, as `WAITAOF` blocks the connection it is sent on. Requests time out after 5 s to connect and 60 s per attempt, finding the primary included, and the client's own retries are off. Everything is in memory, about 2 to 3 KiB per run of three steps and a sleep, kept until its collection (I-16): size the servers for it.
+  - **Checked at open.** AOF off (`appendonly no`), a `maxmemory-policy` other than `noeviction`, a server without `WAITAOF`, a cluster node named by a URL that is not `redis+cluster://` or the reverse, and a replica named by `redis://` raise `ConfigError`. Set `appendfsync always` on every server: with `everysec`, `WAITAOF` makes a primary fsync at once, but a replica fsyncs and acknowledges once a second, so a create on Sentinel or Cluster waits up to 1 s ([measured](redis.md)).
+  - **Durability.** A create is acknowledged once `WAITAOF` reports the primary and `replicas` replicas fsynced. `all` is the number of replicas online on the primary, counted at each connection to it, every 10 s, and after each `WAITAOF` short of it. `WAITAOF` is a round trip of its own: sent in one pipeline with the write, replicas acknowledge their fsync at their next second, measured on Valkey 8.1 and 9.1 and Redis 7.4.
+  - **Ambiguous outcomes.** A `WAITAOF` short of the count, a timeout or a lost connection is an ambiguous create. The `get` that resolves it sends `GET` and `INCR {ns}:f` together, then `WAITAOF` on the same connection: the AOF and the replication stream are one ordered log, so a fence fsynced everywhere means the bytes the `GET` found are too, and `created` is answered only then. The script fences an `exists` the same way, so no answer rests on a create a failover may still lose.
+  - **Reads and deletes.** What a client saw never changes in a failover: the store contract has a create land in time or never, and a client returning a `result` a failover then loses would see the run end again, maybe otherwise; a collection deletes history keys, which must not come back once seen missing. So every `get`, `list`, waiting ones included, and `delete` sends `INCR {ns}:f` with its command, `delete.lua` when the key is missing, then `WAITAOF` on the same connection, and answers once the fence is fsynced on the primary and the replicas; one short of them is a transient failure. On one server with `appendfsync always`, Valkey 8.1 writes and fsyncs the AOF before it sends any reply of the same event loop (`beforeSleep` in `server.c`, `flushAppendOnlyFile` in `aof.c`), so a read there cannot see a write a crash then loses; it can with `everysec`, with `no-appendfsync-on-rewrite yes` during a rewrite, and through any failover. The fence covers every case, at a round trip and an fsync per operation ([measured](redis.md)).
+  - **Failover.** Sentinel and Redis Cluster promote the replica with the most data; with `replicas=all` it holds every acknowledged create. On Sentinel and Cluster, a primary with no replica online acknowledges no create, its creates failing as transient: a primary just promoted, its replicas still syncing, may itself be replaced by one of them, which would lack what it acknowledged alone. Reads and deletes fail the same way. So a shard with one replica takes no create after its failover until a replica joins the promoted one: give Sentinel and Cluster at least 2 replicas per primary.
+  - **Residual risk.** A replica offline when a create was acknowledged was not waited for. A double failure loses that create: the replica offline, then the primary lost while every replica holding the create is unavailable, and that replica promoted. Keep a replica disconnected for long from being promoted. Sentinel has no setting of its own for it: it skips a replica whose link to the primary has been down longer than 10 times `down-after-milliseconds` plus the time the primary has been down (`sentinelSelectReplica` in `sentinel.c`), so `down-after-milliseconds` bounds that window; 5000 ms, a 50 s window, is a fair trade against failovers started by a slow primary. Set `replica-priority 0` on a replica known to be behind, as one back from maintenance, until it has synced. On Cluster, keep `cluster-replica-validity-factor` above 0, which would let a replica of any age be promoted; 1 makes a replica whose data is older than `cluster-node-timeout` plus `repl-ping-replica-period` ineligible. After a failover, the adapter asks the sentinels or the cluster nodes for the new primary at its next attempt.
+  - **Waiting listings.** Each adapter holds one subscription to `{ns}:c` (`SSUBSCRIBE` on Cluster), demultiplexed by prefix. A waiting listing registers before it lists, answers at once when the page's etag, a hash of its keys and of whether more follow, differs from the one given, and otherwise waits for a key under its prefix or the end of its wait, then lists again. A lost subscription wakes every waiting listing, which lists again once subscribed anew; one silent for 10 s gets a `PING`, and is lost after 20 s.
+  - **Permissions.** A user restricted by ACL needs, on the keys `{ns}:*` and the channel `{ns}:c`: `EVALSHA`, `SCRIPT LOAD`, `GET`, `INCR`, `ZRANGE`, `WAITAOF`, `INFO`, `PING`, `SUBSCRIBE` or `SSUBSCRIBE`, and the scripts' `SET`, `ZADD`, `DEL`, `ZREM`, `PUBLISH` or `SPUBLISH`; on a cluster, `CLUSTER SLOTS`.
 - **Waiting S3.** An S3-compatible store whose listings can wait, with every rule of S3 above. A waiting listing sends `x-substantial-wait-seconds` (0 to 20) and the previous `x-substantial-wait-etag`, both signed, and takes its etag from `x-substantial-listing-etag`; an answer without it is a store failure, the URL naming a server whose listings cannot wait. A wait fits the 60 s of an attempt.
 
 ## Later
@@ -1078,9 +1118,8 @@ Not in any host:
 
 - `run.retry`, a failed run again with its recorded steps kept; until then, I-6 and I-17;
 - `sub.runs`, the runs of a workflow by version and status, or a monitoring tool for stuck, failed and unserved runs; until then, keep the ids you start;
-- collecting ended runs and covered history segments; until then, nothing is deleted (I-16);
-- a test clock for `memory://`; until then, durations from the input (I-19);
+- collecting the covered history segments of a live run; until then, they stay until the run is collected (I-16);
 - `run.history`, the events of a run, for inspection;
 - `sub.repair`, rebuilding the hints of a namespace;
 - values stored beside the history;
-- Redis, Valkey and SQL stores.
+- SQL stores.

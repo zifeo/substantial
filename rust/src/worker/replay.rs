@@ -1,22 +1,25 @@
 //! One replay: a run machine driven by the workflow's code (I-23, I-24).
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
+use futures::FutureExt;
 use futures::future::BoxFuture;
-use tokio::sync::mpsc;
-use tokio::task::JoinSet;
 
+use super::Event;
+use super::agent::panicked;
+use crate::clock::{Clock, Inbox, Ready, Tasks};
 use crate::core::{Core, RunMachine};
-use crate::error::{Continuation, Error, Failure, Result};
+use crate::error::{Continuation, Error, Failure, Result, step_failed_end};
 use crate::proto::boundary::v1::{
     self as b, end, next::Next, op_result, outcome::Outcome, replay_end,
 };
 use crate::proto::layout::v1::{self as layout, event, value};
 use crate::store::{self, Store};
 use crate::workflow::executor::Executor;
-use crate::workflow::scheduler::{Clock, Shared};
+use crate::workflow::scheduler::Shared;
 use crate::workflow::{Context, Untyped, failure_of, json, with_step_key};
 
 /// What the agent loop tells a replay.
@@ -28,13 +31,6 @@ pub(crate) enum ToReplay {
         inbox: Vec<b::InboxMessage>,
     },
     Stop,
-}
-
-/// What a replay tells the agent loop.
-#[derive(Debug)]
-pub(crate) enum ReplayEvent {
-    Commit(String, b::Commit),
-    Ended(String, replay_end::End),
 }
 
 /// What every replay of a worker shares.
@@ -53,21 +49,22 @@ pub(crate) async fn replay(
     workflow: Untyped,
     step_timeout: Duration,
     input: b::RunInput,
-    events: mpsc::UnboundedSender<ReplayEvent>,
-    mut inbox: mpsc::UnboundedReceiver<ToReplay>,
+    events: Arc<Inbox<Event>>,
+    inbox: Arc<Inbox<ToReplay>>,
 ) {
     let run = input.run.clone();
-    let end = match drive(&host, &workflow, step_timeout, input, &events, &mut inbox).await {
+    let end = match drive(&host, &workflow, step_timeout, input, &events, &inbox).await {
         Ok(end) => end,
         Err(e) => {
             tracing::error!(run, error = %e, "replay dropped");
             replay_end::End::Dropped(b::Empty {})
         }
     };
-    let _ = events.send(ReplayEvent::Ended(run, end));
+    events.push(Event::Ended(run, end));
 }
 
-type Attempt = (u64, u32, Outcome);
+/// An attempt's call, attempt and outcome, or the panic of its step.
+type Attempt = std::result::Result<(u64, u32, Outcome), String>;
 type WorkflowFuture = BoxFuture<'static, Result<Vec<u8>>>;
 
 async fn drive(
@@ -75,8 +72,8 @@ async fn drive(
     workflow: &Untyped,
     step_timeout: Duration,
     input: b::RunInput,
-    events: &mpsc::UnboundedSender<ReplayEvent>,
-    inbox: &mut mpsc::UnboundedReceiver<ToReplay>,
+    events: &Inbox<Event>,
+    inbox: &Arc<Inbox<ToReplay>>,
 ) -> Result<replay_end::End> {
     let dropped = Ok(replay_end::End::Dropped(b::Empty {}));
     let run = input.run.clone();
@@ -98,7 +95,10 @@ async fn drive(
     let mut code: Option<WorkflowFuture> =
         Some(workflow.start(Context::new(shared.clone()), input_json));
     let executor = Executor::new();
-    let mut attempts: JoinSet<Attempt> = JoinSet::new();
+    // Aborted when dropped, which drops the outcomes of the attempts in flight.
+    let mut attempts = Tasks::default();
+    let attempted: Arc<Inbox<Attempt>> = Arc::default();
+    let told: Arc<dyn Ready> = inbox.clone();
     loop {
         fail_code(&shared, &mut code)?;
         if let Some(future) = code.as_mut()
@@ -113,19 +113,20 @@ async fn drive(
             // The core recorded the failure, which `next` commits. Dropping the future and the
             // attempts in flight stops the code where it is.
             code = None;
-            attempts = JoinSet::new();
+            attempts = Tasks::default();
+            while attempted.pop().is_some() {}
         }
         fail_code(&shared, &mut code)?;
         if let Some(e) = shared.fatal() {
             return Err(Error::Protocol(format!("a call of the code failed: {e}")));
         }
-        match inbox.try_recv() {
-            Err(mpsc::error::TryRecvError::Empty) => {}
-            Ok(ToReplay::Stop) | Err(mpsc::error::TryRecvError::Disconnected) => return dropped,
-            Ok(other) => return Err(Error::Protocol(format!("{other:?} without a commit"))),
+        match inbox.pop() {
+            None => {}
+            Some(ToReplay::Stop) => return dropped,
+            Some(other) => return Err(Error::Protocol(format!("{other:?} without a commit"))),
         }
         shared.evaluate_waits()?;
-        while let Some(done) = attempts.try_join_next() {
+        while let Some(done) = attempted.pop() {
             let (call, attempt, outcome) =
                 done.map_err(|e| Error::Protocol(format!("step task: {e}")))?;
             shared.step_ended(call, attempt, outcome)?;
@@ -135,39 +136,31 @@ async fn drive(
             Next::Deliver(m) => shared.deliver(&m),
             Next::ChildEnded(child) => shared.child_ended(child),
             Next::Execute(e) => {
-                let (body, key) = shared.step_body(e.call).ok_or_else(|| {
+                let (body, name, key) = shared.step_body(e.call).ok_or_else(|| {
                     Error::Protocol(format!("execute of call {} without a step", e.call))
                 })?;
                 let timeout = e.timeout_ms.map(Duration::from_millis);
-                attempts.spawn(async move {
-                    let attempt = with_step_key(key, body());
-                    let result = match timeout {
-                        Some(t) => tokio::time::timeout(t, attempt).await.unwrap_or_else(|_| {
-                            Err(Failure {
-                                kind: "StepTimeout".into(),
-                                message: format!("attempt past {t:?}"),
-                                retryable: true,
-                            })
-                        }),
-                        None => attempt.await,
-                    };
-                    let outcome = match result.and_then(|bytes| json(bytes).map_err(too_large)) {
-                        Ok(value) => Outcome::Value(value),
-                        Err(f) => Outcome::Error(f.into()),
-                    };
-                    (e.call, e.attempt, outcome)
-                });
+                let (clock, done, label) = (host.clock.clone(), attempted.clone(), key.clone());
+                let task = host
+                    .clock
+                    .spawn(format_args!("attempt of {label}"), async move {
+                        let attempt = with_step_key(key.clone(), body()).map(outcome);
+                        let attempt = clock.attempt(&name, &key, Box::pin(attempt), timeout);
+                        let ended = match AssertUnwindSafe(attempt).catch_unwind().await {
+                            Ok(Some(outcome)) => Ok((e.call, e.attempt, outcome)),
+                            Ok(None) => Ok((e.call, e.attempt, timed_out(timeout))),
+                            Err(panic) => Err(panicked(&*panic)),
+                        };
+                        done.push(ended);
+                    });
+                attempts.push(task);
             }
             Next::Commit(commit) => {
                 let n = commit.segment.as_ref().map(|s| s.n);
                 let ended = commit.segment.as_ref().and_then(failed_end);
-                if events
-                    .send(ReplayEvent::Commit(run.clone(), commit))
-                    .is_err()
-                {
-                    return dropped;
-                }
-                match inbox.recv().await {
+                events.push(Event::Commit(run.clone(), commit));
+                host.clock.wait(std::slice::from_ref(&told), None).await;
+                match inbox.pop() {
                     Some(ToReplay::Committed {
                         n: acked,
                         won: true,
@@ -191,29 +184,34 @@ async fn drive(
                 }
             }
             Next::WaitSteps(wait) => {
-                let timer = wait.until.map(|at| crate::time::until(&at, &shared.now()));
-                tokio::select! {
-                    _ = tokio::time::sleep(timer.unwrap_or_default()), if timer.is_some() => {}
-                    done = attempts.join_next() => {
-                        let done = done.ok_or_else(|| Error::Protocol("wait_steps with no step in flight".into()))?;
-                        let (call, attempt, outcome) = done.map_err(|e| Error::Protocol(format!("step task: {e}")))?;
-                        shared.step_ended(call, attempt, outcome)?;
-                    }
-                    message = inbox.recv() => match message {
-                        Some(ToReplay::Stop) | None => return dropped,
-                        Some(other) => return Err(Error::Protocol(format!("{other:?} while waiting for steps"))),
-                    },
+                if attempts.is_empty() && attempted.is_empty() {
+                    return Err(Error::Protocol("wait_steps with no step in flight".into()));
                 }
+                let signals = [attempted.clone() as Arc<dyn Ready>, told.clone()];
+                host.clock.wait(&signals, wait.until).await;
             }
             Next::Idle(idle) => return Ok(replay_end::End::Idle(idle)),
             Next::Store(op) => {
-                let result = tokio::select! {
-                    result = store::perform(&*host.store, op) => result,
-                    message = inbox.recv() => match message {
-                        Some(ToReplay::Stop) | None => return dropped,
-                        Some(other) => return Err(Error::Protocol(format!("{other:?} while reading for a send"))),
-                    },
-                };
+                let store = host.store.clone();
+                let read = host.clock.spawn(format_args!("read of {run}"), async move {
+                    store::perform(&*store, op).await
+                });
+                host.clock.wait(&[read.done(), told.clone()], None).await;
+                match inbox.pop() {
+                    None => {}
+                    Some(ToReplay::Stop) => {
+                        read.abort();
+                        return dropped;
+                    }
+                    Some(other) => {
+                        return Err(Error::Protocol(format!(
+                            "{other:?} while reading for a send"
+                        )));
+                    }
+                }
+                let result = read
+                    .take()
+                    .ok_or_else(|| Error::Protocol("a read without its result".into()))?;
                 if let op_result::Result::Failed(f) = result {
                     return Err(Error::StoreError(f.message));
                 }
@@ -221,6 +219,22 @@ async fn drive(
             }
         }
     }
+}
+
+/// The outcome of an attempt as the run machine takes it; a value over the limit fails it.
+fn outcome(result: Result<Vec<u8>, Failure>) -> Outcome {
+    match result.and_then(|bytes| json(bytes).map_err(too_large)) {
+        Ok(value) => Outcome::Value(value),
+        Err(f) => Outcome::Error(f.into()),
+    }
+}
+
+fn timed_out(timeout: Option<Duration>) -> Outcome {
+    outcome(Err(Failure {
+        kind: "StepTimeout".into(),
+        message: format!("attempt past {:?}", timeout.unwrap_or_default()),
+        retryable: true,
+    }))
 }
 
 /// Ends the run with a failure the code could not see, a handler's, dropping the code.
@@ -294,7 +308,9 @@ fn continued(c: Continuation) -> Result<end::End> {
 }
 
 fn failed(e: &Error) -> end::End {
-    end::End::Failed(layout::Failed {
-        error: Some(failure_of(e).into()),
-    })
+    let error = match e {
+        Error::StepFailed { error, cause } => step_failed_end(error, cause),
+        other => failure_of(other).into(),
+    };
+    end::End::Failed(layout::Failed { error: Some(error) })
 }

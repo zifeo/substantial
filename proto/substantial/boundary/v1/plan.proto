@@ -26,10 +26,13 @@ message SendPlan {
   string chain = 3;
   string name = 4;
   layout.v1.Value value = 5;
-  // The caller's id, or a ULID from the host. Generated ULIDs are monotonic: one made in the same
-  // millisecond as the last, or earlier, is greater, so a client's messages are consumed in the order sent.
+  // The caller's id, or ord when the caller gave none.
   string id = 6;
   layout.v1.Time now = 7;
+  // A ULID from the host, one per send, monotonic: one made in the same millisecond as the last, or
+  // earlier, is greater. A run consumes its messages in the order of their ord, so a client's in the
+  // order it sent them, ids given or not.
+  string ord = 8;
 }
 
 // The probe, then creates the namespace, or opens it if its marker holds the same partitions.
@@ -81,9 +84,10 @@ message CancelPlan {
   uint32 partitions = 2;
   string chain = 3;
   string reason = 4;
-  // As SendPlan.id.
+  // As SendPlan.id and SendPlan.ord.
   string id = 5;
   layout.v1.Time now = 6;
+  string ord = 7;
 }
 
 // The last value published under key by any run of the chain.
@@ -101,6 +105,19 @@ message PlanRequest {
   }
 }
 
+// No run of the chain. During the tombstone the host raises RunNotFound saying the run was collected.
+message NoChain {
+  // The chain's first run was collected and its id stays taken until then; absent when it never
+  // existed or its tombstone passed.
+  layout.v1.Time collected_until = 1;
+}
+
+// The id is taken.
+message RunExists {
+  // By a run collected, whose id is free again after then; absent when taken by a run kept.
+  layout.v1.Time collected_until = 1;
+}
+
 message Sent {
   message Refused {
     string run = 1;
@@ -111,7 +128,7 @@ message Sent {
     string accepted = 1;
     // The chain's last run ended other than by continuing.
     Refused refused = 2;
-    Empty no_chain = 3;
+    NoChain no_chain = 3;
     // Sending again with the same id delivers once.
     StoreFailure failed = 4;
   }
@@ -134,8 +151,9 @@ message Started {
     // The id was started with the same workflow, version and input: that run, whose indexes and
     // due entry are created again in case its first start stopped before them.
     Empty existing = 2;
-    // The id is taken by another workflow, version or input, or by a run the core created.
-    Empty run_exists = 3;
+    // The id is taken by another workflow, version or input, or by a run the core created; or by a
+    // run collected, until its collected_until.
+    RunExists run_exists = 3;
     // Starting again with the same id creates the run once.
     StoreFailure failed = 4;
   }
@@ -157,7 +175,7 @@ message RunResult {
   oneof result {
     // The chain's last run ended other than by continuing.
     Ended ended = 1;
-    Empty no_chain = 3;
+    NoChain no_chain = 3;
     StoreFailure failed = 4;
     NotEnded not_ended = 5;
   }
@@ -187,7 +205,7 @@ message RunState {
   oneof state {
     // The status of the chain's last run.
     Of status = 1;
-    Empty no_chain = 2;
+    NoChain no_chain = 2;
     StoreFailure failed = 3;
   }
 }

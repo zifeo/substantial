@@ -1,12 +1,14 @@
 // Opening the adapter a URL names (I-16), and performing the core's store operations.
 import { create } from "@bufbuild/protobuf";
-import { ConfigError } from "../errors.ts";
+import { ConfigError, messageOf } from "../errors.ts";
 import { boundary } from "../proto.ts";
 import { STORE_RETRY } from "../settings.ts";
 import { type CredentialsArg, refuse } from "./credentials.ts";
 import { FsStore } from "./fs.ts";
 import { MemoryStore } from "./memory.ts";
-import { parseS3Url, S3Store } from "./s3.ts";
+import { parseRedisUrl, SCHEMES as REDIS_SCHEMES, WAITAOF_MS } from "./redis.ts";
+import { type RedisModule, RedisStore } from "./redis_store.ts";
+import { parseS3Url, S3Store, type Sdk } from "./s3.ts";
 import { type ListOptions, type Store, StoreFailure } from "./store.ts";
 
 function namespace(url: string, rest: string): string {
@@ -15,8 +17,30 @@ function namespace(url: string, rest: string): string {
   return rest;
 }
 
+/** `@aws-sdk/client-s3`, an optional peer dependency: only S3 stores need it. */
+async function loadSdk(url: string): Promise<Sdk> {
+  try {
+    return await import("@aws-sdk/client-s3");
+  } catch (e) {
+    throw new ConfigError(
+      `${url} needs @aws-sdk/client-s3, which \`npm install @aws-sdk/client-s3\` installs: ${messageOf(e)}`,
+    );
+  }
+}
+
+/** `@redis/client`, an optional peer dependency: only Redis stores need it. */
+async function loadRedis(url: string): Promise<RedisModule> {
+  try {
+    return await import("@redis/client");
+  } catch (e) {
+    throw new ConfigError(
+      `${url} needs @redis/client, which \`npm install @redis/client\` installs: ${messageOf(e)}`,
+    );
+  }
+}
+
 /** The adapter a URL names; the scheme alone picks it, nothing is detected. */
-export function openStore(url: string, credentials: CredentialsArg): Store {
+export async function openStore(url: string, credentials: CredentialsArg): Promise<Store> {
   if (typeof url !== "string") throw new ConfigError(`a store URL is a string, not ${url}`);
   if (url.startsWith("memory://")) {
     const ns = namespace(url, url.slice("memory://".length));
@@ -33,9 +57,14 @@ export function openStore(url: string, credentials: CredentialsArg): Store {
     return new FsStore(path, STORE_RETRY);
   }
   if (/^(s3|h3)(\+http)?:\/\//.test(url)) {
-    return new S3Store(parseS3Url(url), credentials, STORE_RETRY, globalThis.fetch);
+    const location = parseS3Url(url);
+    return new S3Store(location, credentials, STORE_RETRY, await loadSdk(url));
   }
-  const planned = ["redis://", "sqlite:", "postgres://", "mysql://"].find((s) => url.startsWith(s));
+  if (Object.keys(REDIS_SCHEMES).some((scheme) => url.startsWith(`${scheme}://`))) {
+    const location = parseRedisUrl(url);
+    return new RedisStore(location, credentials, STORE_RETRY, await loadRedis(url), WAITAOF_MS);
+  }
+  const planned = ["sqlite:", "postgres://", "mysql://"].find((s) => url.startsWith(s));
   if (planned !== undefined) {
     throw new ConfigError(`${planned} stores are not available in this host yet; ${SUPPORTED}`);
   }
@@ -43,7 +72,9 @@ export function openStore(url: string, credentials: CredentialsArg): Store {
 }
 
 const SUPPORTED =
-  "the supported schemes are memory://, file:, s3://, s3+http://, h3:// and h3+http://";
+  "the supported schemes are memory://, file:, s3://, s3+http://, h3://, h3+http://, " +
+  "redis://, rediss://, redis+sentinel://, rediss+sentinel://, redis+cluster:// and " +
+  "rediss+cluster://";
 
 async function performOp(store: Store, op: boundary.StoreOp): Promise<boundary.OpResult> {
   const o = op.op;

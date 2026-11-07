@@ -6,6 +6,27 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// The hint a divergence from the history carries; the core records the failure without it.
 pub(crate) const NEW_VERSION: &str = "an incompatible change needs a new version (version=)";
 
+fn rfc3339(t: &chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn not_found_until(until: &Option<chrono::DateTime<chrono::Utc>>) -> String {
+    match until {
+        Some(until) => format!(
+            ": it was collected, and its id is taken until {}",
+            rfc3339(until)
+        ),
+        None => String::new(),
+    }
+}
+
+fn taken_by(until: &Option<chrono::DateTime<chrono::Utc>>) -> String {
+    match until {
+        Some(until) => format!("a run collected, until {}", rfc3339(until)),
+        None => "another workflow, version or input".into(),
+    }
+}
+
 fn version_hint(error: &Failure) -> String {
     if error.kind == "NonDeterminism" {
         format!("; {NEW_VERSION}")
@@ -81,19 +102,38 @@ pub enum Error {
     /// A name or id outside the naming rules (I-17), or an input that is not an object.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
-    #[error("no chain {chain}")]
-    RunNotFound { chain: String },
-    #[error("id {id} is taken by another workflow, version or input")]
-    RunExists { id: String },
-    /// The run ended failed or cancelled.
+    /// `collected` when the chain's first run was collected, its id taken `until` then.
+    #[error("no chain {chain}{}", not_found_until(.until))]
+    RunNotFound {
+        chain: String,
+        collected: bool,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    /// `collected` when the id is taken by a run collected, `until` then.
+    #[error("id {id} is taken by {}", taken_by(.until))]
+    RunExists {
+        id: String,
+        collected: bool,
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    /// The run ended failed or cancelled. `cause` is the `StepFailed` cause of the step that
+    /// failed it, else `None`; boxed, so that every `Result` stays small.
     #[error("run {run} {status:?}: {error}{}", version_hint(.error))]
     RunFailed {
         run: String,
         status: crate::client::RunStatus,
         error: Failure,
+        cause: Option<Box<Failure>>,
     },
     #[error("the run did not end within the timeout")]
     WaitTimeout,
+    /// In a test environment: a run waits on something the environment cannot bring, or a
+    /// settle cannot end.
+    #[error("{0}")]
+    Stuck(String),
+    /// In a test environment: runs ended failed without the test reading their failure.
+    #[error("{0}")]
+    Unchecked(String),
     /// A value whose JSON encoding is over the limit of 64 MiB: a step result, an input or a
     /// result, a message, a published value, a loop state.
     #[error("a value of {size} bytes is over the limit of {limit} bytes")]
@@ -153,16 +193,38 @@ impl Error {
                 status: *status,
             },
             Error::InvalidArgument(m) => Error::InvalidArgument(m.clone()),
-            Error::RunNotFound { chain } => Error::RunNotFound {
+            Error::RunNotFound {
+                chain,
+                collected,
+                until,
+            } => Error::RunNotFound {
                 chain: chain.clone(),
+                collected: *collected,
+                until: *until,
             },
-            Error::RunExists { id } => Error::RunExists { id: id.clone() },
-            Error::RunFailed { run, status, error } => Error::RunFailed {
+            Error::RunExists {
+                id,
+                collected,
+                until,
+            } => Error::RunExists {
+                id: id.clone(),
+                collected: *collected,
+                until: *until,
+            },
+            Error::RunFailed {
+                run,
+                status,
+                error,
+                cause,
+            } => Error::RunFailed {
                 run: run.clone(),
                 status: *status,
                 error: error.clone(),
+                cause: cause.clone(),
             },
             Error::WaitTimeout => Error::WaitTimeout,
+            Error::Stuck(m) => Error::Stuck(m.clone()),
+            Error::Unchecked(m) => Error::Unchecked(m.clone()),
             Error::ValueTooLarge { size, limit } => Error::ValueTooLarge {
                 size: *size,
                 limit: *limit,
@@ -247,7 +309,19 @@ impl From<layout::Failure> for Error {
             "RunFailed" => run_failed(f),
             "StepFailed" => step_failed(f),
             "RunNotFound" => match details::<RunDetails>(&f) {
-                Ok(d) => Error::RunNotFound { chain: d.run },
+                Ok(d) => match d.until.as_deref().map(chrono::DateTime::parse_from_rfc3339) {
+                    None => Error::RunNotFound {
+                        chain: d.run,
+                        collected: false,
+                        until: None,
+                    },
+                    Some(Ok(until)) => Error::RunNotFound {
+                        chain: d.run,
+                        collected: true,
+                        until: Some(until.to_utc()),
+                    },
+                    Some(Err(e)) => Error::Protocol(format!("RunNotFound details: {e}")),
+                },
                 Err(e) => e,
             },
             "RunEnded" => match details::<EndedDetails>(&f) {
@@ -273,10 +347,12 @@ fn details<T: serde::de::DeserializeOwned>(f: &layout::Failure) -> Result<T> {
     }
 }
 
-/// The details of a workflow's send refused: the chain it sent to.
+/// The details of a workflow's send refused: the chain it sent to, and until when its id is taken
+/// when it was collected.
 #[derive(serde::Deserialize)]
 struct RunDetails {
     run: String,
+    until: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -315,6 +391,7 @@ struct FailureDetails {
     r#type: String,
     message: String,
     retryable: bool,
+    details: Option<serde_json::Value>,
 }
 
 impl From<FailureDetails> for Failure {
@@ -332,8 +409,11 @@ fn run_failed(f: layout::Failure) -> Error {
         Ok(d) => d,
         Err(e) => return e,
     };
-    let (status, error) = match (d.status.as_str(), d.error, d.reason) {
-        ("failed", Some(e), _) => (crate::client::RunStatus::Failed, e.into()),
+    let (status, error, cause) = match (d.status.as_str(), d.error, d.reason) {
+        ("failed", Some(mut e), _) => match run_failed_cause(&e.r#type, e.details.take()) {
+            Ok(cause) => (crate::client::RunStatus::Failed, e.into(), cause),
+            Err(e) => return e,
+        },
         ("cancelled", _, Some(reason)) => (
             crate::client::RunStatus::Cancelled,
             Failure {
@@ -341,6 +421,7 @@ fn run_failed(f: layout::Failure) -> Error {
                 message: reason,
                 retryable: false,
             },
+            None,
         ),
         (status, ..) => return Error::Protocol(format!("RunFailed of {} as {status}", d.run)),
     };
@@ -348,5 +429,38 @@ fn run_failed(f: layout::Failure) -> Error {
         run: d.run,
         status,
         error,
+        cause,
+    }
+}
+
+/// The cause of a run failed with `kind`: a `StepFailed`'s wraps it in its details.
+pub(crate) fn run_failed_cause(
+    kind: &str,
+    details: Option<serde_json::Value>,
+) -> Result<Option<Box<Failure>>> {
+    if kind != "StepFailed" {
+        return Ok(None);
+    }
+    let shown = format!("{details:?}");
+    let parsed = details.map(serde_json::from_value::<StepFailedDetails>);
+    match parsed {
+        Some(Ok(d)) => Ok(Some(Box::new(d.error.into()))),
+        _ => Err(Error::Protocol(format!(
+            "a run failed with StepFailed with details {shown}"
+        ))),
+    }
+}
+
+/// A `StepFailed`'s failure as a run ends with it, its cause in its details as the core writes
+/// them, for a client's `RunFailed` to read.
+pub(crate) fn step_failed_end(error: &Failure, cause: &Failure) -> layout::Failure {
+    let details = serde_json::json!({
+        "error": { "type": cause.kind, "message": cause.message, "retryable": cause.retryable }
+    });
+    layout::Failure {
+        details: Some(layout::Value {
+            kind: Some(layout::value::Kind::Json(details.to_string().into_bytes())),
+        }),
+        ..error.clone().into()
     }
 }

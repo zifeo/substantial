@@ -110,6 +110,29 @@ async def test_a_workflow_send_raises_and_every_replay_gives_the_same_outcome(
         assert await run.result(timeout=LONG) == [expected, expected]
 
 
+async def test_a_gather_returning_exceptions_lets_a_suspension_through(store: Store) -> None:
+    gathered: list[list[object]] = []
+
+    @workflow
+    async def both(c: Context) -> list[object]:
+        got = await asyncio.gather(c.receive("a"), c.receive("b"), return_exceptions=True)
+        gathered.append(got)
+        return got
+
+    sub = await Substantial._create(store, partitions=1)
+    async with script(sub, [both]):
+        run = await sub.start(both)
+        await run.send("a", 1)
+
+        async def suspended() -> bool:
+            return await run.status() == RunStatus.SUSPENDED
+
+        await eventually("a suspension with one message", suspended)
+        await run.send("b", 2)
+        assert await run.result(timeout=LONG) == [1, 2]
+    assert gathered == [[1, 2]]
+
+
 async def test_handlers_see_every_message_and_receive_takes_the_next(store: Store) -> None:
     @workflow
     async def notes(c: Context) -> dict[str, object]:

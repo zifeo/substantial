@@ -57,7 +57,13 @@ def config() -> agent.AgentConfig:
         op_retries=5,
         wait_seconds=20,
         seed=bytes(32),
-        settings=run.RunSettings(continue_as_new_after_segments=1000),
+        tombstone_ms=7 * 86_400_000,
+        retention_min_ms=3_600_000,
+        recheck_ms=86_400_000,
+        settings=run.RunSettings(
+            continue_as_new_after_segments=1000,
+            retention=run.Retention(forever=boundary.Empty()),
+        ),
     )
 
 

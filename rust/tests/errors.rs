@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use common::{Counting, LONG, script};
+use common::{Counting, Interrupted, LONG, script};
 use substantial::__internal::{self as internal, MemoryStore};
-use substantial::{Context, Error, Permanent, Preset, Retry, Substantial, Workflow};
+use substantial::{Context, Error, Failure, Permanent, Preset, Retry, Substantial, Workflow};
 
 fn config_error(r: Result<Substantial, Error>) -> String {
     match r {
@@ -27,7 +27,7 @@ async fn create_states_what_is_missing_or_unknown() {
         assert!(m.starts_with("unknown scheme"), "{m}");
         assert!(m.contains("memory://, file:, s3://"), "{m}");
     }
-    for url in ["redis://localhost:6379/0?namespace=x", "sqlite:x.db"] {
+    for url in ["sqlite:x.db", "postgres://u@h/db"] {
         let m = config_error(Substantial::create(url).partitions(1).await);
         assert!(m.contains("not available in this host yet"), "{m}");
     }
@@ -310,5 +310,162 @@ async fn a_permanent_error_is_the_cause_of_its_step_failure() {
     let run = sub.start(&w, ()).await.unwrap();
     let cause = run.result().timeout(LONG).await.unwrap();
     assert_eq!(cause, ("Error".into(), "card declined".into(), false));
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_run_holds_the_cause_of_the_step_that_failed_it() {
+    let sub = Substantial::create("memory://errors-causes")
+        .partitions(1)
+        .await
+        .unwrap();
+    let paying = Workflow::without_input("paying", |c| async move {
+        c.step("charge", || async {
+            Err::<(), _>(Permanent::new(std::io::Error::other("card declined")))
+        })
+        .await
+    });
+    let refusing = Workflow::without_input("refusing", |_c| async move {
+        Err::<(), _>(Error::failed("Declined", "not today"))
+    });
+    let child = paying.clone();
+    let ordering = Workflow::without_input("ordering", move |c| {
+        let child = child.clone();
+        async move {
+            let started = c.start(&child, ()).await?;
+            match started.result().await {
+                Err(Error::RunFailed {
+                    error,
+                    cause: Some(cause),
+                    ..
+                }) => Ok((error.kind, cause.kind, cause.message, cause.retryable)),
+                other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+            }
+        }
+    });
+    let worker = script(&sub, (&paying, &refusing, &ordering))
+        .start()
+        .unwrap();
+    let paid = sub
+        .start(&paying, ())
+        .await
+        .unwrap()
+        .result()
+        .timeout(LONG)
+        .await;
+    let Err(Error::RunFailed { error, cause, .. }) = paid else {
+        panic!("{paid:?}")
+    };
+    assert_eq!(error.kind, "StepFailed");
+    let declined = Failure {
+        kind: "Error".into(),
+        message: "card declined".into(),
+        retryable: false,
+    };
+    assert_eq!(cause, Some(Box::new(declined)));
+    let refused = sub
+        .start(&refusing, ())
+        .await
+        .unwrap()
+        .result()
+        .timeout(LONG)
+        .await;
+    let Err(Error::RunFailed { error, cause, .. }) = refused else {
+        panic!("{refused:?}")
+    };
+    assert_eq!(error.kind, "Declined");
+    assert_eq!(cause, None);
+    let ordered = sub
+        .start(&ordering, ())
+        .await
+        .unwrap()
+        .result()
+        .timeout(LONG)
+        .await;
+    let expected = (
+        "StepFailed".into(),
+        "Error".into(),
+        "card declined".into(),
+        false,
+    );
+    assert_eq!(ordered.unwrap(), expected);
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timed_out_async_step_is_interrupted() {
+    let sub = Substantial::create("memory://errors-hang")
+        .partitions(1)
+        .await
+        .unwrap();
+    let reached: Arc<std::sync::Mutex<Vec<&str>>> = Arc::default();
+    let r = reached.clone();
+    let hanging = Workflow::without_input("hanging", move |c| {
+        let r = r.clone();
+        async move {
+            let hang = c.step("hang", move || {
+                let r = r.clone();
+                async move {
+                    let interrupted = Interrupted(r.clone());
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    std::mem::forget(interrupted);
+                    r.lock().unwrap().push("after the await");
+                    Ok::<_, Error>(())
+                }
+            });
+            match hang.timeout(Duration::from_millis(200)).await {
+                Err(Error::StepFailed { cause, .. }) => Ok(cause.kind),
+                other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+            }
+        }
+    });
+    let worker = script(&sub, &hanging).start().unwrap();
+    let ended = sub
+        .start(&hanging, ())
+        .await
+        .unwrap()
+        .result()
+        .timeout(LONG)
+        .await;
+    assert_eq!(ended.unwrap(), "StepTimeout");
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(*reached.lock().unwrap(), ["interrupted"]);
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_uninterruptible_step_runs_to_its_end_with_its_outcome_dropped() {
+    let sub = Substantial::create("memory://errors-block")
+        .partitions(1)
+        .await
+        .unwrap();
+    let finished = Arc::new(AtomicU32::new(0));
+    let f = finished.clone();
+    let blocking = Workflow::without_input("blocking", move |c| {
+        let f = f.clone();
+        async move {
+            c.step_blocking("block", move || {
+                std::thread::sleep(Duration::from_millis(400));
+                f.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, Error>("late".to_owned())
+            })
+            .timeout(Duration::from_millis(200))
+            .await
+        }
+    });
+    let worker = script(&sub, &blocking).start().unwrap();
+    let ended = sub
+        .start(&blocking, ())
+        .await
+        .unwrap()
+        .result()
+        .timeout(LONG)
+        .await;
+    let Err(Error::RunFailed { cause, .. }) = ended else {
+        panic!("{ended:?}")
+    };
+    assert_eq!(cause.map(|c| c.kind).as_deref(), Some("StepTimeout"));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
     worker.shutdown().await.unwrap();
 }

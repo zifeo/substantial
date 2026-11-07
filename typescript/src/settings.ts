@@ -1,5 +1,5 @@
 // Worker settings (I-18): a preset names every setting, the only defaults there are.
-import { Duration, days, milliseconds, minutes, seconds } from "./durations.ts";
+import { Duration, days, hours, milliseconds, minutes, seconds } from "./durations.ts";
 import { ConfigError } from "./errors.ts";
 
 const KIB = 1024;
@@ -7,6 +7,39 @@ const MIB = 1024 * KIB;
 const U32 = 0xffff_ffff;
 export const PRESETS = ["script", "service"] as const;
 export type Preset = (typeof PRESETS)[number];
+
+/** A run kept until its namespace is deleted; registered with `Symbol.for`, so that two loaded
+ * copies of the package agree on it. */
+export const FOREVER: unique symbol = Symbol.for("substantial.forever");
+
+/** How long a run is kept after its chain's last run ends, then collected (I-16). */
+export type Retention = Duration | typeof FOREVER;
+
+/** The least retention of the presets; a `result` wait follows its chain again within half of
+ * it. */
+export const RETENTION_MIN = hours(1);
+
+/** The longest retention, 100 years; longer is `FOREVER`. A collection's due key names its year
+ * in 4 digits, which far longer retentions would pass. */
+export const RETENTION_MAX = days(36_500);
+
+/** Refuses a retention that is neither a Duration from `minimum` to `RETENTION_MAX` nor `FOREVER`. */
+export function checkRetention(retention: unknown, minimum: Duration, what: string): void {
+  if (retention === FOREVER) return;
+  if (!(retention instanceof Duration)) {
+    throw new ConfigError(`${what} must be a Duration or s.FOREVER, not ${String(retention)}`);
+  }
+  if (retention.ms < minimum.ms) {
+    throw new ConfigError(
+      `${what} must be at least ${minimum.ms} ms or forever, not ${retention.ms} ms`,
+    );
+  }
+  if (retention.ms > RETENTION_MAX.ms) {
+    throw new ConfigError(
+      `${what} must be at most ${RETENTION_MAX.ms} ms or forever, not ${retention.ms} ms`,
+    );
+  }
+}
 
 /** Adapter retries of transient failures: `attempts` in all, backoff doubling from `initial`
  * to `max`. */
@@ -37,6 +70,10 @@ export interface Settings {
   readonly continueAsNewAfter: ContinueAsNewAfter;
   readonly dedupWindow: Duration;
   readonly stepTimeout: Duration;
+  readonly retention: Retention;
+  readonly tombstone: Duration;
+  readonly retentionMin: Duration;
+  readonly recheck: Duration;
 }
 
 /** A preset and the settings it overrides; `continueAsNewAfter: 0` compresses at every
@@ -51,6 +88,9 @@ export interface WorkerOptions {
   readonly stepTimeout?: Duration;
   /** Whichever of the two the history passes first. */
   readonly continueAsNewAfter?: { readonly segments: number; readonly bytes: number } | 0;
+  /** How long a run is kept after its chain ends, unless its workflow gives one: at least an
+   * hour and at most 100 years, or `FOREVER`. */
+  readonly retention?: Retention;
 }
 
 const PUBLIC = [
@@ -60,6 +100,7 @@ const PUBLIC = [
   "claimTtl",
   "continueAsNewAfter",
   "stepTimeout",
+  "retention",
 ];
 
 /** Every setting, overrides of the hidden ones included: for tests only. */
@@ -96,6 +137,10 @@ export function presetSettings(preset: Preset, waitingStore: boolean): Settings 
     continueAsNewAfter: { segments: 1000, bytes: 8 * MIB },
     dedupWindow: days(7),
     stepTimeout: minutes(5),
+    retention: days(30),
+    tombstone: days(7),
+    retentionMin: RETENTION_MIN,
+    recheck: days(1),
   };
 }
 
@@ -108,6 +153,9 @@ const POSITIVE = [
   "claimTtl",
   "maxIdle",
   "stepTimeout",
+  "tombstone",
+  "retentionMin",
+  "recheck",
 ];
 const DURATIONS = [
   "commitEvery",
@@ -118,6 +166,9 @@ const DURATIONS = [
   "wait",
   "dedupWindow",
   "stepTimeout",
+  "tombstone",
+  "retentionMin",
+  "recheck",
 ];
 
 function isCount(value: unknown): value is number {
@@ -166,6 +217,7 @@ function validate(s: Record<string, unknown>): Settings {
   if (!isCount(c.segments) || !isCount(c.bytes)) {
     throw new ConfigError("continueAsNewAfter segments and bytes must be non-negative integers");
   }
+  checkRetention(s.retention, s.retentionMin as Duration, "retention");
   return s as unknown as Settings;
 }
 
