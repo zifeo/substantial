@@ -28,6 +28,12 @@ services:
   bucket:
     image: rustfs/rustfs:1.0.1
     container_name: substantial-rustfs-bucket
+    # It stays up, healthy once the bucket exists: some Compose versions count a one-shot container exit, even 0, as a failure of up --wait.
+    init: true
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/bucket"]
+      interval: 1s
+      retries: 60
     depends_on:
       rustfs:
         condition: service_healthy
@@ -39,7 +45,7 @@ services:
         for i in $$(seq 30); do
           code=$$(curl -s -o /dev/null -w '%{http_code}' --aws-sigv4 aws:amz:us-east-1:s3 \
             --user substantial:substantial-secret -X PUT http://rustfs:9000/substantial)
-          case $$code in 200|409) exit 0;; esac
+          case $$code in 200|409) touch /tmp/bucket; exec sleep infinity;; esac
           sleep 1
         done
         echo "cannot create the bucket: HTTP $$code" >&2

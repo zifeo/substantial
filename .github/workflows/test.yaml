@@ -40,7 +40,7 @@ jobs:
       SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
       - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
@@ -70,7 +70,7 @@ jobs:
       SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
       - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
