@@ -409,7 +409,8 @@ pub async fn eventually(what: &str, mut check: impl AsyncFnMut() -> bool) {
     }
 }
 
-pub const LONG: Duration = Duration::from_secs(10);
+// A guard against hangs, not a bound: the coverage build on a two-core runner takes some S3 tests past 10 s.
+pub const LONG: Duration = Duration::from_secs(30);
 
 /// Pushes `interrupted` when dropped: held across an `.await`, it tells a future dropped there;
 /// forgotten once the code after it ran.
