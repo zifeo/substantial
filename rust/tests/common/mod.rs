@@ -13,6 +13,7 @@ use substantial::__internal::{
     StoreFailure, StoreFuture,
 };
 use substantial::{Credentials, IntoWorkflows, Preset, Substantial, WorkerBuilder};
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 /// A store around another that records what it is asked, and can fail or freeze on demand.
@@ -21,9 +22,13 @@ pub struct Recording {
     pub listed: Mutex<Vec<String>>,
     pub created: Mutex<Vec<(String, Create)>>,
     pub failing: AtomicBool,
-    /// When set, the first create of a segment freezes every operation for this long.
-    pub freeze_on_segment: Mutex<Option<Duration>>,
-    frozen_until: Mutex<Option<Instant>>,
+    /// When set, the first create of a segment freezes every operation until this sees `true`
+    /// or its sender is dropped.
+    pub freeze_on_segment: Mutex<Option<watch::Receiver<bool>>>,
+    frozen: Mutex<Option<watch::Receiver<bool>>>,
+    /// When set, a delete of this key waits until its receiver sees `true` or its sender is
+    /// dropped.
+    pub hold_delete: Mutex<Option<(String, watch::Receiver<bool>)>>,
 }
 
 impl Recording {
@@ -34,7 +39,8 @@ impl Recording {
             created: Mutex::default(),
             failing: AtomicBool::new(false),
             freeze_on_segment: Mutex::default(),
-            frozen_until: Mutex::default(),
+            frozen: Mutex::default(),
+            hold_delete: Mutex::default(),
         })
     }
 
@@ -47,9 +53,9 @@ impl Recording {
     }
 
     async fn gate(&self) -> Result<(), StoreFailure> {
-        let until = *self.frozen_until.lock().unwrap();
-        if let Some(until) = until {
-            tokio::time::sleep_until(until).await;
+        let frozen = self.frozen.lock().unwrap().clone();
+        if let Some(mut frozen) = frozen {
+            let _ = frozen.wait_for(|thawed| *thawed).await;
         }
         if self.failing.load(Ordering::SeqCst) {
             return Err(StoreFailure::new("injected"));
@@ -72,7 +78,7 @@ impl Store for Recording {
             if key.contains("/log/")
                 && let Some(freeze) = self.freeze_on_segment.lock().unwrap().take()
             {
-                *self.frozen_until.lock().unwrap() = Some(Instant::now() + freeze);
+                *self.frozen.lock().unwrap() = Some(freeze);
             }
             self.gate().await?;
             let outcome = self.inner.create(key, bytes).await?;
@@ -104,6 +110,12 @@ impl Store for Recording {
 
     fn delete<'a>(&'a self, key: &'a str) -> StoreFuture<'a, ()> {
         Box::pin(async move {
+            let held = self.hold_delete.lock().unwrap().clone();
+            if let Some((held, mut released)) = held
+                && held == key
+            {
+                let _ = released.wait_for(|released| *released).await;
+            }
             self.gate().await?;
             self.inner.delete(key).await
         })

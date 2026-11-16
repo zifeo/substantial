@@ -137,6 +137,7 @@ class FaultStore:
         return await with_retry(STORE_RETRY, lambda: self._try(kind, key, apply), self._sleep)
 
     async def open(self) -> None:
+        self._world.check_loop()
         await self._memory.open()
 
     async def close(self) -> None:

@@ -143,9 +143,11 @@ export class Recording implements Store {
   readonly listed: string[] = [];
   readonly created: [string, string][] = [];
   failing = false;
-  /** When set, the first create of a segment freezes every operation for this many ms. */
-  freezeOnSegment: number | undefined;
-  #frozenUntil: number | undefined;
+  /** When set, the first create of a segment freezes every operation until this settles. */
+  freezeOnSegment: Promise<void> | undefined;
+  #frozen: Promise<void> | undefined;
+  /** When set, a delete of this key waits until its promise settles. */
+  holdDelete: [string, Promise<void>] | undefined;
 
   constructor(inner: Store) {
     this.inner = inner;
@@ -156,16 +158,13 @@ export class Recording implements Store {
   }
 
   async #gate(): Promise<void> {
-    if (this.#frozenUntil !== undefined) {
-      const left = this.#frozenUntil - performance.now();
-      if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
-    }
+    await this.#frozen;
     if (this.failing) throw new StoreFailure("injected");
   }
 
   async create(key: string, data: Uint8Array): Promise<"created" | "exists"> {
     if (key.includes("/log/") && this.freezeOnSegment !== undefined) {
-      this.#frozenUntil = performance.now() + this.freezeOnSegment;
+      this.#frozen = this.freezeOnSegment;
       this.freezeOnSegment = undefined;
     }
     await this.#gate();
@@ -186,6 +185,7 @@ export class Recording implements Store {
   }
 
   async delete(key: string): Promise<void> {
+    if (this.holdDelete !== undefined && this.holdDelete[0] === key) await this.holdDelete[1];
     await this.#gate();
     await this.inner.delete(key);
   }

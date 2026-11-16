@@ -1,6 +1,6 @@
 {
   "name": "substantial",
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0",
   "description": "Brokerless durable execution: the TypeScript host of the Substantial core",
   "license": "MPL-2.0",
   "repository": {
@@ -34,12 +34,12 @@
     "test": "node --test --test-concurrency=4 --test-timeout=120000 \"typescript/test/*.test.ts\" && node --test --test-concurrency=1 --test-timeout=300000 \"typescript/test/serial/*.test.ts\""
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.16.0",
-    "canonicalize": "^5.1.0"
+    "@bufbuild/protobuf": "^2.13.0",
+    "canonicalize": "^5.0.0"
   },
   "peerDependencies": {
-    "@aws-sdk/client-s3": "^3.1164.0",
-    "@redis/client": "^6.3.1"
+    "@aws-sdk/client-s3": ">=3.916.0",
+    "@redis/client": ">=6.3.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-s3": {

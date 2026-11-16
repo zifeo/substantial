@@ -15,6 +15,7 @@ use super::time::{State, Time};
 use super::workers::{EnvWorker, Incarnation};
 use super::{derive, unit};
 use crate::error::{Error, Result};
+use crate::observe::Metering;
 use crate::plan::Ulids;
 use crate::proto::layout::v1::{self as layout, Status};
 use crate::store::MemoryStore;
@@ -22,6 +23,24 @@ use crate::time::millis;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().expect("never panics while locked")
+}
+
+/// The earliest due entries of a workflow: of any kind, and of those that wake a run, a timer or
+/// a message; a collection entry sets no worker's timer, the next scan serves it.
+#[derive(Clone, Copy)]
+pub(super) struct Due {
+    any: i64,
+    wake: Option<i64>,
+}
+
+/// The phase the core draws from its seed, a worker's first idle wait, `max_idle` the others:
+/// SplitMix64 of the seed's first 8 bytes, big-endian, modulo `max`.
+pub(super) fn idle_phase(seed: &[u8; 32], max: i64) -> i64 {
+    let first = u64::from_be_bytes(seed[..8].try_into().expect("8 bytes"));
+    let mut z = first.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    ((z ^ (z >> 31)) % max as u64) as i64
 }
 
 /// The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<run>~<tag>`.
@@ -41,9 +60,13 @@ pub(super) fn due_ms(entry: &str) -> i64 {
 
 pub(crate) struct World {
     pub(super) ns: String,
+    /// The tokio runtime the environment opened on, which runs every task of its workers.
+    runtime: tokio::runtime::Id,
     pub(super) memory: MemoryStore,
     pub(super) time: Arc<Time>,
     chaos: Option<Chaos>,
+    /// The prices and the observer of the environment and its clients, which its workers take.
+    pub(super) metering: Metering,
     pub(super) seed: u64,
     /// One core seed for every worker: a run's random then depends on the run alone.
     pub(super) core_seed: [u8; 32],
@@ -51,25 +74,37 @@ pub(crate) struct World {
     faults: Mutex<Faults>,
     pub(super) writes: AtomicU64,
     pub(super) outage_until: AtomicI64,
-    pub(super) partitions: u32,
     pub(super) workers: Mutex<Vec<Arc<EnvWorker>>>,
     pub(super) holds: Mutex<Vec<Arc<HoldState>>>,
-    errors: Mutex<Vec<Error>>,
+    /// The errors workers died of, each with the id of the worker.
+    errors: Mutex<Vec<(String, Error)>>,
     /// The chains whose failure the test read through the environment.
     pub(super) checked: Mutex<HashSet<String>>,
     /// Each run that ended failed, its chain and its failure, from the write of its result.
     pub(super) failed: Mutex<BTreeMap<String, (String, String)>>,
-    /// The earliest due entry of each workflow, as of a count of writes.
-    due: Mutex<Option<(u64, HashMap<String, i64>)>>,
+    /// The earliest due entries of each workflow, as of a count of writes.
+    due: Mutex<Option<(u64, HashMap<String, Due>)>>,
     /// Off only in the test that compares a scenario with and without skipping.
     pub(super) skipping: AtomicBool,
     pub(super) skipped: AtomicU64,
 }
 
 impl World {
-    pub(super) fn new(ns: String, ms: i64, chaos: Option<Chaos>) -> Result<Self> {
+    pub(super) fn new(
+        ns: String,
+        ms: i64,
+        chaos: Option<Chaos>,
+        metering: Metering,
+    ) -> Result<Self> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| {
+                Error::InvalidArgument("a test environment opens on a tokio runtime".into())
+            })?
+            .id();
         let seed = chaos.map_or(0, |c| c.seed);
         Ok(Self {
+            runtime,
+            metering,
             memory: MemoryStore::open(&ns)?,
             ns,
             time: Arc::new(Time::new(ms)),
@@ -80,7 +115,6 @@ impl World {
             faults: Mutex::default(),
             writes: AtomicU64::new(0),
             outage_until: AtomicI64::new(ms),
-            partitions: 1,
             workers: Mutex::default(),
             holds: Mutex::default(),
             errors: Mutex::default(),
@@ -161,28 +195,68 @@ impl World {
         Some(hold.clone())
     }
 
-    pub(super) fn died(&self, error: &Error) {
-        lock(&self.errors).push(error.again());
+    pub(super) fn died(&self, worker: &str, error: &Error) {
+        lock(&self.errors).push((worker.to_owned(), error.again()));
+    }
+
+    /// Forgets the error `worker` died of, which its drain returned.
+    pub(super) fn forget_died(&self, worker: &str) {
+        lock(&self.errors).retain(|(w, _)| w != worker);
     }
 
     fn raise_died(&self) -> Result<()> {
         let mut errors = lock(&self.errors);
         match errors.is_empty() {
             true => Ok(()),
-            false => Err(errors.remove(0)),
+            false => Err(errors.remove(0).1),
         }
     }
 
+    /// Refuses a call from another runtime than the environment's, whose workers' tasks would
+    /// hang once their runtime ends or blocks, as an app served from a thread with a runtime of
+    /// its own does.
+    pub(crate) fn check_runtime(&self) -> Result<()> {
+        let current = tokio::runtime::Handle::try_current().map(|h| h.id());
+        if current.as_ref().is_ok_and(|id| *id == self.runtime) {
+            return Ok(());
+        }
+        let called = match current {
+            Ok(id) => format!("the tokio runtime {id}"),
+            Err(_) => "outside any tokio runtime".into(),
+        };
+        Err(Error::InvalidArgument(format!(
+            "the test environment was opened on the tokio runtime {} and is called from \
+             {called}: run the code under test on the test's own runtime (for an HTTP app, serve \
+             it from a task the test spawns, not from a thread with a runtime of its own)",
+            self.runtime
+        )))
+    }
+
     pub(super) async fn settle(&self) -> Result<()> {
+        self.check_runtime()?;
         self.time.settle().await?;
         self.raise_died()
     }
 
     pub(super) async fn advance(&self, ms: i64) -> Result<()> {
+        self.check_runtime()?;
         self.time
             .advance(ms, |st, target| self.skip_scans(st, target))
             .await?;
         self.raise_died()
+    }
+
+    /// Moves the clock from deadline to deadline until `done()`, as `advance` does; the errors
+    /// workers died of are left to the caller.
+    pub(super) async fn until_done(
+        &self,
+        paused: impl Fn() -> bool,
+        done: impl Fn() -> bool,
+        what: &str,
+    ) -> Result<()> {
+        self.check_runtime()?;
+        let skip = |st: &mut State, target| self.skip_scans(st, target);
+        self.time.until_done(paused, done, what, skip).await
     }
 
     pub(super) fn keys(&self, prefix: &str) -> Vec<String> {
@@ -209,8 +283,8 @@ impl World {
         MemoryStore::forget(&self.ns);
     }
 
-    /// The earliest due entry of each workflow, as of the last write.
-    fn earliest_due(&self) -> HashMap<String, i64> {
+    /// The earliest due entries of each workflow, as of the last write.
+    fn earliest_due(&self) -> HashMap<String, Due> {
         let writes = self.writes.load(Ordering::SeqCst);
         let mut cached = lock(&self.due);
         if let Some((seen, due)) = &*cached
@@ -218,12 +292,25 @@ impl World {
         {
             return due.clone();
         }
-        let mut due: HashMap<String, i64> = HashMap::new();
+        let mut due: HashMap<String, Due> = HashMap::new();
         for key in self.keys("queues/") {
-            let workflow = key.split('/').nth(1).unwrap_or_default();
-            let at = due_ms(key.rsplit('/').next().unwrap_or_default());
-            let earliest = due.entry(workflow.to_owned()).or_insert(at);
-            *earliest = (*earliest).min(at);
+            let mut parts = key.split('/').skip(1);
+            let (workflow, kind) = (parts.next().unwrap_or_default(), parts.next());
+            // A rest marker is no due entry: no scan lists it.
+            if kind != Some("due") {
+                continue;
+            }
+            let entry = key.rsplit('/').next().unwrap_or_default();
+            let at = due_ms(entry);
+            let wakes = !(entry.ends_with("~c") || entry.ends_with("~g"));
+            let earliest = due.entry(workflow.to_owned()).or_insert(Due {
+                any: at,
+                wake: None,
+            });
+            earliest.any = earliest.any.min(at);
+            if wakes {
+                earliest.wake = Some(earliest.wake.map_or(at, |w| w.min(at)));
+            }
         }
         *cached = Some((writes, due.clone()));
         due
@@ -233,9 +320,9 @@ impl World {
     /// anything else, keeping the instants of the scans left.
     ///
     /// A worker's scan is skipped when the worker is idle, its deadline is the one its last scan
-    /// set (`max_idle` after it), nothing was written since that scan, and no due entry it lists
-    /// is due by then: the listing would return the keys it returned, none of them due, and set
-    /// the deadline that skipping sets.
+    /// set (`max_idle` after it, or the worker's phase after its first), nothing was written since
+    /// that scan, and no due entry it lists is due by then: the listing would return the keys it
+    /// returned, none of them due, and set the deadline that skipping sets.
     ///
     /// Under Chaos, a scan is skipped only when the draw of each of its listings succeeds, and the
     /// skip counts their tries as the scan would: a scan whose draw fails runs, and may back off,
@@ -247,7 +334,7 @@ impl World {
         }
         let due = self.earliest_due();
         let writes = self.writes.load(Ordering::SeqCst);
-        let mut idle: Vec<(u64, i64, Option<i64>)> = Vec::new();
+        let mut idle: Vec<(u64, i64, Option<Due>)> = Vec::new();
         let mut bound = target;
         for (id, t) in &st.tasks {
             let Some(at) = t.waiter.as_ref().and_then(|w| w.at) else {
@@ -257,8 +344,8 @@ impl World {
                 continue;
             }
             if let Some(found) = self.idle_scan(st, *id, at, &due, writes) {
-                if let Some(first) = found.1 {
-                    bound = bound.min(first);
+                if let Some(wake) = found.1.and_then(|f| f.wake) {
+                    bound = bound.min(wake);
                 }
                 idle.push((*id, found.0, found.1));
                 continue;
@@ -269,7 +356,7 @@ impl World {
             let t = st.tasks.get_mut(&id).expect("an idle task is tracked");
             let w = t.waiter.as_mut().expect("an idle task is parked");
             let at = w.at.expect("an idle task has a deadline");
-            let limit = first.map_or(bound, |f| bound.min(f - 1));
+            let limit = first.map_or(bound, |f| bound.min(f.any - 1));
             if limit < at {
                 continue;
             }
@@ -285,20 +372,21 @@ impl World {
                 .fetch_add(scans.unsigned_abs(), Ordering::SeqCst);
             let last = at + (scans - 1) * mi;
             lock(&t.owner.scan).at = Some(last);
-            w.at = Some(first.map_or(last + mi, |f| (last + mi).min(f)));
+            let next = last + mi;
+            w.at = Some(first.and_then(|f| f.wake).map_or(next, |f| next.min(f)));
         }
     }
 
-    /// For the agent task `id` of an idle worker parked until `at` on the deadline its last scan
-    /// set, its `max_idle` and the earliest due entry of the workflows it serves.
+    /// For the agent task `id` of an idle worker parked until `at` on the idle wait its last scan
+    /// set, its `max_idle` and the earliest due entries of the workflows it serves.
     fn idle_scan(
         &self,
         st: &State,
         id: u64,
         at: i64,
-        due: &HashMap<String, i64>,
+        due: &HashMap<String, Due>,
         writes: u64,
-    ) -> Option<(i64, Option<i64>)> {
+    ) -> Option<(i64, Option<Due>)> {
         let inc = &st.tasks[&id].owner;
         let (agent, events) = inc.agent.get()?;
         let worker = inc.worker()?;
@@ -308,18 +396,33 @@ impl World {
         let mi = i64::try_from(millis(worker.settings.max_idle)).ok()?;
         let first = worker
             .served()
-            .filter_map(|name| due.get(name))
-            .min()
-            .copied();
+            .filter_map(|name| due.get(name).copied())
+            .reduce(|a, b| Due {
+                any: a.any.min(b.any),
+                wake: [a.wake, b.wake].into_iter().flatten().min(),
+            });
         let (scanned_at, seen) = {
             let scan = lock(&inc.scan);
             (scan.at, scan.seen)
         };
         let alone = (st.tasks.iter()).all(|(other, t)| *other == id || !Arc::ptr_eq(&t.owner, inc));
-        let idle = scanned_at.is_some_and(|s| at == s + mi)
+        let phase = idle_phase(&self.core_seed, mi);
+        let idle = scanned_at.is_some_and(|s| at == s + mi || at == s + phase)
             && seen == writes
             && alone
-            && first.is_none_or(|f| f > at);
+            && first.is_none_or(|f| f.any > at);
         idle.then_some((mi, first))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The core's own vectors: skipping computes the phase the core draws.
+    #[test]
+    fn the_idle_phase_is_the_cores() {
+        let seq: [u8; 32] = std::array::from_fn(|i| i as u8);
+        assert_eq!(super::idle_phase(&[7; 32], 30_000), 23_034);
+        assert_eq!(super::idle_phase(&[0; 32], 1_000), 535);
+        assert_eq!(super::idle_phase(&seq, 300_000), 14_550);
     }
 }

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
+use super::attempts::sent;
 use super::{Create, StoreFailure};
 use crate::settings::StoreRetry;
 
@@ -77,6 +78,7 @@ where
 {
     let mut backoff = Backoff::new(policy, sleep);
     loop {
+        sent();
         match op().await {
             Ok(value) => return Ok(value),
             Err(Fault::Permanent(e)) => return Err(StoreFailure::new(e)),
@@ -109,6 +111,7 @@ where
     let mut was_ambiguous = false;
     loop {
         if ambiguous {
+            sent();
             match get().await {
                 Ok(Some(stored)) if stored == *bytes => return Ok(Create::Created),
                 Ok(Some(_)) => return Ok(Create::Exists),
@@ -120,6 +123,7 @@ where
                 }
             }
         }
+        sent();
         match create().await {
             Ok(Create::Exists) if was_ambiguous => {
                 ambiguous = true;
@@ -214,6 +218,21 @@ mod tests {
             tokio::time::sleep,
         )
         .await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn every_request_is_counted_the_read_back_too() {
+        use crate::store::attempts::measured;
+        let steps = script(vec![Err(Fault::Transient("a".into())), Ok(7)]);
+        let op = || async { steps.lock().unwrap().pop_front().unwrap() };
+        let (out, sent) = measured(with_retry(POLICY, op, tokio::time::sleep)).await;
+        assert_eq!((out, sent), (Ok(7), 2));
+        let lost = vec![Err(Fault::Ambiguous("timeout".into()))];
+        let same = vec![Ok(Some(Bytes::from_static(b"mine")))];
+        let (out, sent) = measured(resolve(lost, same)).await;
+        assert_eq!((out, sent), (Ok(Create::Created), 2));
+        let (_, sent) = measured(async {}).await;
+        assert_eq!(sent, 1, "an adapter without retries sends one request");
     }
 
     #[tokio::test(start_paused = true)]

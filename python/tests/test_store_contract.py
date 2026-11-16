@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from conftest import PLAIN_LISTINGS
 
 from substantial import ConfigError, Credentials
 from substantial.stores import ListWait, Store, StoreFailure, open_store
@@ -59,9 +60,9 @@ async def test_list_in_byte_order(store: Store) -> None:
     assert await ls("", None, 1) == ["p/a"]
 
 
+@pytest.mark.parametrize("adapter", PLAIN_LISTINGS)
 async def test_list_refuses_wait(store: Store) -> None:
-    if store.capabilities.wait:
-        pytest.skip("this store's listings wait")
+    assert not store.capabilities.wait
     with pytest.raises(StoreFailure):
         await store.list("q/", start_after=None, max_keys=10, wait=ListWait(seconds=1))
 

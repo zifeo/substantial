@@ -13,11 +13,13 @@ from typing import Any
 from substantial._proto import agent, boundary, layout, run
 from substantial.clock import REAL, Clock, Inbox
 from substantial.core import Core
+from substantial.cost import Prices
 from substantial.durations import millis
-from substantial.errors import ProtocolError
+from substantial.errors import ConfigError, CoreError, InvalidArgument, ProtocolError
 from substantial.machines import AgentMachine
+from substantial.observe import Metering, ObserverRaised, Scan
 from substantial.replay import Channel, Replay, dropped, replay
-from substantial.settings import FOREVER, Retention, Settings
+from substantial.settings import Settings
 from substantial.stores import Store, perform
 from substantial.workflow import Workflows
 
@@ -30,18 +32,16 @@ REPLAY = "replay of "
 OP_RETRIES = 5
 
 
-def retention(r: Retention) -> run.Retention:
-    if r is FOREVER:
-        return run.Retention(forever=boundary.Empty())
+def retention(r: timedelta) -> run.Retention:
     return run.Retention(ms=millis(r))
 
 
 def agent_config(
     worker: str,
     workflows: Workflows,
-    partitions: int,
     s: Settings,
     store_waits: bool,
+    prices: Prices | None,
     seed: bytes | None = None,
 ) -> agent.AgentConfig:
     served = [
@@ -52,7 +52,6 @@ def agent_config(
     ]
     return agent.AgentConfig(
         prefix="",
-        partitions=partitions,
         worker=worker,
         workflows=served,
         concurrency=s.concurrency,
@@ -70,6 +69,7 @@ def agent_config(
             continue_as_new_after_bytes=s.continue_as_new_after.bytes,
             dedup_window_ms=millis(s.dedup_window),
             retention=retention(s.retention),
+            prices=None if prices is None else prices.proto(),
         ),
         store_waits=store_waits,
         wait_seconds=s.wait // timedelta(seconds=1),
@@ -90,13 +90,14 @@ class _Replays:
         clock: Clock,
         events: Inbox[tuple[Any, ...]],
         step_timeout: timedelta,
+        metering: Metering,
     ):
-        self.replay = Replay(core, store, clock, events.put_nowait, step_timeout)
+        self.replay = Replay(core, store, clock, events.put_nowait, step_timeout, metering)
         self.workflows = workflows
         self.events = events
         self.running: dict[str, tuple[Channel, asyncio.Task]] = {}
 
-    def spawn(self, run_id: str, data: run.RunInput) -> None:
+    def spawn(self, run_id: str, data: run.RunInput, due_at: layout.Time | None) -> None:
         start = data.start
         version = start.version if start.HasField("version") else None
         workflow = self.workflows.get(start.workflow, version)
@@ -113,7 +114,7 @@ class _Replays:
             log.error("a second replay of %s, in replay", run_id)
         channel = Channel()
         task = self.replay.clock.spawn(
-            replay(self.replay, workflow, data, channel), f"{REPLAY}{run_id}"
+            replay(self.replay, workflow, data, due_at, channel), f"{REPLAY}{run_id}"
         )
         self.running[run_id] = (channel, task)
 
@@ -140,15 +141,15 @@ class _Replays:
 
 
 class Worker:
-    """Runs the workflows it is given, on every partition: `async with` it, or `serve()` it."""
+    """Runs the workflows it is given: `async with` it, or `serve()` it."""
 
     def __init__(
         self,
         store: Store,
         workflows: Workflows,
-        partitions: int,
         settings: Settings,
         died: Callable[[BaseException], None],
+        metering: Metering,
         clock: Clock = REAL,
         id: str | None = None,
         seed: bytes | None = None,
@@ -159,9 +160,10 @@ class Worker:
         self._seed = seed
         self._clock = clock
         self._died = died
+        # The prices and observer of its `Substantial`, whose store is observed already.
+        self._metering = metering
         self._store = store
         self._workflows = workflows
-        self._partitions = partitions
         self._settings = settings
         self._events: Inbox[tuple[Any, ...]] = Inbox()
         self._task: asyncio.Task | None = None
@@ -192,10 +194,16 @@ class Worker:
             raise RuntimeError(f"worker {self._id} was started already")
         core = Core.new()
         waits = self._store.capabilities.wait
-        config = agent_config(
-            self._id, self._workflows, self._partitions, self._settings, waits, self._seed
-        )
-        machine = AgentMachine(core, config)
+        prices = self._metering.prices
+        config = agent_config(self._id, self._workflows, self._settings, waits, prices, self._seed)
+        try:
+            machine = AgentMachine(core, config)
+        except CoreError as e:
+            # The config is the worker's: one the core refuses, such as prices in a currency
+            # outside ISO 4217, is a ConfigError where the worker starts.
+            if e.kind == "INVALID":
+                raise ConfigError(e.message) from None
+            raise
         self._task = self._clock.spawn(self._run(core, machine), f"worker {self._id}")
         self._task.add_done_callback(self._stopped)
         return self._task
@@ -209,10 +217,15 @@ class Worker:
         self._died(error)
 
     def _wake(self) -> None:
-        """Wakes the agent at once, as after a message sent from this process."""
+        """Wakes the agent at once for a full scan."""
         if not self._wake_pending:
             self._wake_pending = True
             self._events.put_nowait(("wake",))
+
+    def _wake_workflow(self, workflow: str) -> None:
+        """Wakes the agent at once on `workflow`, as after a start or a send from this
+        process: it lists that workflow's due entries alone."""
+        self._events.put_nowait(("wake_workflow", workflow))
 
     async def shutdown(self) -> None:
         """Starts no new replay and lets the steps in flight end within `shutdown_grace`."""
@@ -220,6 +233,21 @@ class Worker:
             raise RuntimeError(f"worker {self._id} was never started")
         self._events.put_nowait(("shutdown",))
         await self._task
+
+    async def drain(self, *, within: timedelta) -> None:
+        """Serves every run due now or within `within`, those its own work makes due, and those
+        of a crashed worker whose claim expires by then, then stops as `shutdown` does once
+        nothing is due by then and nothing is in flight; raises the worker's error if it died.
+        Starts the worker if it was not."""
+        if not isinstance(within, timedelta) or within < timedelta(0):
+            raise InvalidArgument(f"within is a timedelta, not negative, not {within!r}")
+        task = self._task if self._task is not None else self._start()
+        self._events.put_nowait(("drain", self._clock.now().ms + millis(within)))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await self.shutdown()
+            raise
 
     async def serve(self) -> None:
         """Runs until a SIGTERM or a Ctrl-C (SIGINT), or until cancelled, then shuts down."""
@@ -239,14 +267,23 @@ class Worker:
     async def _run(self, core: Core, machine: AgentMachine) -> None:
         clock, events = self._clock, self._events
         replays = _Replays(
-            core, self._store, self._workflows, clock, events, self._settings.step_timeout
+            core,
+            self._store,
+            self._workflows,
+            clock,
+            events,
+            self._settings.step_timeout,
+            self._metering,
         )
         ops: set[asyncio.Task] = set()
         grace = 0
         grace_ends: int | None = None
 
         async def store_op(op_id: int, op: boundary.StoreOp) -> None:
-            events.put_nowait(("feed", op_id, await perform(self._store, op)))
+            try:
+                events.put_nowait(("feed", op_id, await perform(self._store, op)))
+            except ObserverRaised as e:
+                events.put_nowait(("died", e.error))
 
         try:
             while True:
@@ -257,9 +294,13 @@ class Worker:
                     ops.add(task)
                     task.add_done_callback(ops.discard)
                 elif which == "replay":
-                    replays.spawn(command.replay.run, command.replay.input)
+                    r = command.replay
+                    replays.spawn(r.run, r.input, r.due_at if r.HasField("due_at") else None)
                 elif which == "committed":
                     replays.committed(command.committed)
+                elif which == "scanned":
+                    scanned = command.scanned
+                    self._metering.tell(Scan(workflow=scanned.workflow, due=scanned.due))
                 elif which == "stop_replay":
                     replays.stop(command.stop_replay)
                 elif which == "wait_until":
@@ -287,6 +328,12 @@ class Worker:
                     elif kind == "wake":
                         self._wake_pending = False
                         machine.wake()
+                    elif kind == "wake_workflow":
+                        machine.wake_workflow(event[1])
+                    elif kind == "died":
+                        raise event[1]
+                    elif kind == "drain":
+                        machine.drain(layout.Time(ms=event[1]))
                     elif kind == "shutdown" and grace_ends is None:
                         grace = millis(self._settings.shutdown_grace)
                         grace_ends = clock.elapsed() + grace

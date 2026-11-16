@@ -4,10 +4,9 @@ use std::time::Duration;
 
 use super::Event;
 use super::replay::{Host, ToReplay, replay};
-use crate::clock::{Clock, Inbox, Task};
-use crate::core::Core;
+use crate::clock::{Inbox, Task};
 use crate::proto::boundary::v1::{self as b, replay_end};
-use crate::store::Store;
+use crate::proto::layout::v1::Time;
 use crate::workflow::Workflows;
 
 /// The replays of a worker, each a task of its own talking to the agent loop through inboxes;
@@ -23,15 +22,13 @@ pub(crate) struct Replays {
 
 impl Replays {
     pub(crate) fn new(
-        core: Core,
-        store: Arc<dyn Store>,
+        host: Host,
         workflows: Workflows,
         step_timeout: Duration,
-        clock: Clock,
         events: Arc<Inbox<Event>>,
     ) -> Self {
         Self {
-            host: Host { core, store, clock },
+            host,
             workflows,
             step_timeout,
             running: HashMap::new(),
@@ -39,7 +36,7 @@ impl Replays {
         }
     }
 
-    pub(crate) fn spawn(&mut self, run: String, input: b::RunInput) {
+    pub(crate) fn spawn(&mut self, run: String, input: b::RunInput, due_at: Option<Time>) {
         let (name, version) = input
             .start
             .as_ref()
@@ -67,6 +64,7 @@ impl Replays {
                 workflow,
                 step_timeout,
                 input,
+                due_at,
                 self.events.clone(),
                 inbox.clone(),
             ),

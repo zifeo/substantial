@@ -21,25 +21,37 @@ impl Context {
         F: FnMut(Context, S) -> Fut,
         Fut: Future<Output = Result<ControlFlow<S, S>>>,
     {
-        let initial = json(serde_json::to_vec(&init)?)?;
-        let mut state: S = match self.shared.call(Call::Iterate(initial))? {
-            Called::Value(v) => decode(Some(v))?,
-            other => return Err(Error::Protocol(format!("iterate answered {other:?}"))),
-        };
+        let mut state = self.iteration(init)?;
         loop {
             state = match body(self.clone(), state).await? {
                 ControlFlow::Break(last) => return Ok(last),
                 ControlFlow::Continue(next) => next,
             };
-            if self.past_threshold()? {
-                return Err(Error::ContinuedAsNew(Continuation {
-                    workflow: None,
-                    version: None,
-                    input: self.shared.input(),
-                    state: Some(serde_json::to_vec(&state)?),
-                }));
-            }
+            self.boundary(&state)?;
         }
+    }
+
+    /// The state a loop starts from: `init`, or the one a previous run of the chain carried.
+    pub(super) fn iteration<S: Serialize + DeserializeOwned>(&self, init: S) -> Result<S> {
+        let initial = json(serde_json::to_vec(&init)?)?;
+        match self.shared.call(Call::Iterate(initial))? {
+            Called::Value(v) => decode(Some(v)),
+            other => Err(Error::Protocol(format!("iterate answered {other:?}"))),
+        }
+    }
+
+    /// A loop's boundary: past the threshold, the error that continues the run as new with the
+    /// chain's input and `state`.
+    pub(super) fn boundary<S: Serialize>(&self, state: &S) -> Result<()> {
+        if self.past_threshold()? {
+            return Err(Error::ContinuedAsNew(Continuation {
+                workflow: None,
+                version: None,
+                input: self.shared.input(),
+                state: Some(serde_json::to_vec(state)?),
+            }));
+        }
+        Ok(())
     }
 
     /// Whether the history passed the worker's `continue_as_new_after`.

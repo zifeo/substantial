@@ -28,7 +28,6 @@ import {
 /** `@redis/client`, loaded when a Redis store is opened. */
 export type RedisModule = typeof import("@redis/client");
 type Client = ReturnType<RedisModule["createClient"]>;
-type Pool = ReturnType<RedisModule["createClientPool"]>;
 type Arg = string | Buffer;
 /** A connection of a pool, held for the commands that must share it. */
 interface Connection {
@@ -141,6 +140,63 @@ function hostPort(where: string): [string, number] {
   return [where.slice(0, colon).replace(/^\[(.*)\]$/, "$1"), Number(where.slice(colon + 1))];
 }
 
+/** The connections to a primary: an idle one serves an operation, else a new one opens, with no
+ * cap as in every host, since a create holds its connection for its `WAITAOF`.
+ *
+ * Not the client's own pool: destroyed while it opens a connection, that pool leaves it open. */
+class Pool {
+  readonly #open: () => Client;
+  readonly #idle: Client[] = [];
+  readonly #all = new Set<Client>();
+  #destroyed = false;
+
+  constructor(open: () => Client) {
+    this.#open = open;
+  }
+
+  /** Opens a first connection, kept idle. */
+  async connect(): Promise<void> {
+    await this.execute(async () => {});
+  }
+
+  async execute<T>(fn: (conn: Connection) => Promise<T>): Promise<T> {
+    if (this.#destroyed) throw new Transient("the connections to the primary were closed");
+    let client = this.#idle.pop();
+    if (client === undefined) {
+      client = this.#open();
+      this.#all.add(client);
+      try {
+        await client.connect();
+      } catch (e) {
+        this.#drop(client);
+        throw e;
+      }
+    }
+    try {
+      return await fn(client);
+    } finally {
+      if (this.#destroyed || !client.isReady) this.#drop(client);
+      else this.#idle.push(client);
+    }
+  }
+
+  sendCommand(args: Arg[]): Promise<unknown> {
+    return this.execute((conn) => conn.sendCommand(args));
+  }
+
+  #drop(client: Client): void {
+    this.#all.delete(client);
+    client.destroy();
+  }
+
+  destroy(): void {
+    this.#destroyed = true;
+    this.#idle.length = 0;
+    for (const client of this.#all) client.destroy();
+    this.#all.clear();
+  }
+}
+
 /** A connection pool to the primary holding the namespace, and the replicas a create waits for
  * there. */
 export interface Primary {
@@ -201,10 +257,15 @@ class Connector {
 
   /** A client to `where`, connected by its caller and never reconnecting. */
   client(where: string, db: number, auth: boolean): Client {
-    const client = this.#redis.createClient(this.#options(where, db, auth));
+    const client = this.#redis.createClient(this.#options(where, db, auth)) as Client;
     // Failures reach the commands; an `error` event without a listener would end the process.
     client.on("error", () => {});
-    return client as Client;
+    // A client destroyed while its TCP connect is pending still completes it, then keeps the
+    // socket open and the process alive.
+    client.on("connect", () => {
+      if (!client.isOpen) client.destroy();
+    });
+    return client;
   }
 
   async #address(): Promise<string> {
@@ -253,13 +314,7 @@ class Connector {
 
   async connect(scripts: Scripts): Promise<Primary> {
     const where = await this.#address();
-    const pool = this.#redis.createClientPool(this.#options(where, this.#location.db, true), {
-      minimum: 1,
-      // No cap, as in every host: a create holds its connection for its WAITAOF.
-      maximum: Number.POSITIVE_INFINITY,
-      acquireTimeout: 0,
-    }) as Pool;
-    pool.on("error", () => {});
+    const pool = new Pool(() => this.client(where, this.#location.db, true));
     let info: Map<string, string | Map<string, string>>;
     try {
       await within(ATTEMPT_MS, `connect ${where}`, () => pool.connect());
@@ -408,6 +463,7 @@ class Notifications {
         const ready = await Promise.race([
           this.#ready.wait().then(() => true),
           late.promise.then(() => false),
+          this.#stopped.promise,
         ]);
         if (!ready) throw new Transient(`no subscription to ${this.#channel}: ${this.#error}`);
       } finally {

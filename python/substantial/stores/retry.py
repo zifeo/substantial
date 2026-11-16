@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
+from substantial.stores.attempts import sent
 from substantial.stores.base import Create, StoreFailure
 
 
@@ -67,6 +68,7 @@ async def with_retry[T](
 ) -> T:
     backoff = _Backoff(policy, sleep)
     while True:
+        sent()
         try:
             return await op()
         except Permanent as e:
@@ -91,6 +93,7 @@ async def create(
     was_ambiguous = False
     while True:
         if ambiguous:
+            sent()
             try:
                 stored = await get()
             except Permanent as e:
@@ -101,6 +104,7 @@ async def create(
             if stored is not None:
                 return "created" if stored == data else "exists"
             ambiguous = False
+        sent()
         try:
             outcome = await attempt()
         except Permanent as e:

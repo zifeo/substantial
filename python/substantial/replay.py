@@ -7,9 +7,11 @@ import contextvars
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from substantial import observe
 from substantial._proto import agent, boundary, json_value, layout, run
 from substantial.clock import Clock, Inbox
 from substantial.context import Context
@@ -25,6 +27,7 @@ from substantial.errors import (
 )
 from substantial.executor import Executor
 from substantial.machines import RunMachine
+from substantial.observe import Metering, ObserverRaised
 from substantial.scheduler import Shared
 from substantial.step import CURRENT, attempt
 from substantial.stores import Store, perform
@@ -52,26 +55,68 @@ class Channel:
 
 
 class Replay:
-    """What every replay of a worker shares: its core, store, clock, events and step timeout."""
+    """What every replay of a worker shares: its core, store, clock, events, step timeout, and
+    the prices and observer of its `Substantial`."""
 
     def __init__(
-        self, core: Core, store: Store, clock: Clock, emit: Emit, step_timeout: timedelta
+        self,
+        core: Core,
+        store: Store,
+        clock: Clock,
+        emit: Emit,
+        step_timeout: timedelta,
+        metering: Metering,
     ) -> None:
         self.core = core
         self.store = store
         self.clock = clock
         self.emit = emit
         self.step_timeout = step_timeout
+        self.metering = metering
+
+    def tell(self, event: observe.Observed) -> None:
+        """Tells the observer; one that raises stops the worker with its error."""
+        try:
+            self.metering.tell(event)
+        except Exception as e:
+            self.emit(("died", e))
 
 
-async def replay(r: Replay, workflow: Workflow, data: run.RunInput, channel: Channel) -> None:
-    """Runs one replay to its end, which it always reports, dropped when it could not go on."""
+@dataclass
+class _Committed:
+    """The kind of the last commit of the replay that won."""
+
+    kind: int | None = None
+
+
+async def replay(
+    r: Replay,
+    workflow: Workflow,
+    data: run.RunInput,
+    due_at: layout.Time | None,
+    channel: Channel,
+) -> None:
+    """Runs one replay to its end, which it always reports, dropped when it could not go on;
+    `due_at` is the earliest due entry it serves."""
     emit = r.emit
+    started, now = r.clock.seconds(), r.clock.now()
+    committed = _Committed()
     try:
-        end = await _drive(r, workflow, data, channel)
+        end = await _drive(r, workflow, data, channel, committed)
     except Exception as e:
         log.error("replay of %s dropped: %s", data.run, e)
         end = dropped()
+    if end.HasField("dropped"):
+        ended = "dropped"
+    elif committed.kind == run.COMMIT_KIND_SUSPEND:
+        ended = "suspended"
+    elif committed.kind == run.COMMIT_KIND_END:
+        ended = "ended"
+    else:
+        ended = "idle"
+    delay = None if due_at is None else (now.ms - due_at.ms) / 1000
+    seconds = r.clock.seconds() - started
+    r.tell(observe.Replay(workflow=workflow.name, delay=delay, seconds=seconds, end=ended))
     emit(("ended", data.run, end))
 
 
@@ -85,7 +130,7 @@ def _input_bytes(start: layout.Start) -> bytes:
 
 
 async def _drive(
-    r: Replay, workflow: Workflow, data: run.RunInput, channel: Channel
+    r: Replay, workflow: Workflow, data: run.RunInput, channel: Channel, committed: _Committed
 ) -> agent.ReplayEnd:
     if not data.HasField("start"):
         raise ProtocolError(f"replay of {data.run} without start")
@@ -140,22 +185,25 @@ async def _drive(
             elif which == "child_ended":
                 shared.ended.add(nxt.child_ended)
             elif which == "execute":
-                attempts.add(_spawn_attempt(shared, nxt.execute))
+                attempts.add(_spawn_attempt(r, workflow, shared, nxt.execute))
             elif which == "commit":
                 if not await _commit(shared, data.run, nxt.commit, emit, channel):
                     return dropped()
+                committed.kind = nxt.commit.kind
             elif which == "wait_steps":
                 if not attempts:
                     raise ProtocolError("wait_steps with no step in flight")
                 timer = nxt.wait_steps.until if nxt.wait_steps.HasField("until") else None
                 await clock.wait({*attempts, channel.stop}, timer)
             elif which == "store":
-                read = clock.spawn(perform(r.store, nxt.store), f"read of {data.run}")
+                read = clock.spawn(_read(r, nxt.store), f"read of {data.run}")
                 await clock.wait({read, channel.stop}, None)
                 if channel.stop.done():
                     read.cancel()
                     return dropped()
                 result = read.result()
+                if result is None:
+                    return dropped()
                 if result.HasField("failed"):
                     raise StoreError(result.failed.message)
                 machine.stored(result)
@@ -171,6 +219,16 @@ async def _drive(
             await executor.close()
         finally:
             machine.close()
+
+
+async def _read(r: Replay, op: boundary.StoreOp) -> boundary.OpResult | None:
+    """An operation of a workflow's send or `c.result`; `None` when the observer raised, which
+    stops the worker."""
+    try:
+        return await perform(r.store, op)
+    except ObserverRaised as e:
+        r.emit(("died", e.error))
+        return None
 
 
 def _fail_code(shared: Shared, code: asyncio.Task | None) -> asyncio.Task | None:
@@ -199,8 +257,10 @@ async def _commit(
     if n is not None and n != acked.n:
         raise ProtocolError(f"commit of segment {n} acknowledged as {acked.n}")
     _log_end(shared.start.chain, commit)
-    if acked.inbox:
-        shared.arrived(acked.inbox)
+    if acked.HasField("cost"):
+        shared.arrived(acked.inbox, acked.cost)
+    elif acked.inbox:
+        raise ProtocolError("messages arrived without the chain's cost")
     return True
 
 
@@ -213,17 +273,41 @@ def _log_end(chain: str, commit: run.Commit) -> None:
             log.warning("run %s cancelled: %s", chain, e.cancelled.reason)
 
 
-def _spawn_attempt(shared: Shared, e: run.Next.Execute) -> asyncio.Task:
-    found = shared.step_body(e.call)
-    if found is None:
+def _attempt_outcome(outcome: run.Outcome, attempt: int, max_attempts: int) -> str:
+    """How an attempt ended, as its observer is told."""
+    if outcome.HasField("value"):
+        return "ok"
+    if outcome.error.type == "StepTimeout":
+        return "timeout"
+    if outcome.error.retryable and attempt < max_attempts:
+        return "retry"
+    return "failed"
+
+
+def _spawn_attempt(
+    r: Replay, workflow: Workflow, shared: Shared, e: run.Next.Execute
+) -> asyncio.Task:
+    step = shared.step_body(e.call)
+    if step is None:
         raise ProtocolError(f"execute of call {e.call} without a step")
-    body, name, key = found
     timeout_ms = e.timeout_ms if e.HasField("timeout_ms") else None
 
-    async def run_attempt() -> tuple[int, int, run.Outcome]:
-        return e.call, e.attempt, await attempt(shared.clock, name, body, key, timeout_ms)
+    async def run_attempt() -> tuple[int, int, run.Outcome, list[layout.Amount]]:
+        started = shared.clock.seconds()
+        # Unless it reaches its outcome: cancelled by a shutdown, a lost claim or a crash.
+        ended = "abandoned"
+        try:
+            outcome, charges = await attempt(
+                shared.clock, step.name, step.body, step.key, timeout_ms
+            )
+            ended = _attempt_outcome(outcome, e.attempt, step.max_attempts)
+            return e.call, e.attempt, outcome, charges
+        finally:
+            seconds = shared.clock.seconds() - started
+            told = observe.Attempt(workflow.name, step.name, e.attempt, seconds, ended)
+            r.tell(told)
 
-    return shared.clock.spawn(run_attempt(), f"attempt of {key}")
+    return shared.clock.spawn(run_attempt(), f"attempt of {step.key}")
 
 
 def _end_run(shared: Shared, code: asyncio.Task) -> None:
@@ -247,7 +331,9 @@ def _end_run(shared: Shared, code: asyncio.Task) -> None:
     else:
         f = failure_of(e)
         failure = layout.Failure(type=f.type, message=f.message, retryable=f.retryable)
-        if isinstance(e, StepFailed):
+        if isinstance(e, StepFailed) and e._details is not None:
+            failure.details.CopyFrom(e._details)
+        elif isinstance(e, StepFailed):
             # A client's RunFailed reads the step's cause from it, as a StepFailed's from the core.
             cause = {
                 "type": e.cause.type,

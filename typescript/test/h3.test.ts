@@ -99,7 +99,7 @@ test("a start from another client comes through the wait", async () => {
   const h3 = await FakeH3.start();
   const url = h3.url("e2e");
   const answer = workflow("answer", async () => 42);
-  const sub = await Substantial.create(url, { partitions: 1, credentials });
+  const sub = await Substantial.create(url, { credentials });
   const other = await Substantial.open(url, { credentials });
   try {
     await using _ = script(sub, [answer], { maxIdle: minutes(5), wait: seconds(3) });
@@ -230,7 +230,6 @@ test("a provider's keys are checked", async () => {
     assert.equal(h3.requests.length, 0);
     await assert.rejects(
       Substantial.create("memory://provider", {
-        partitions: 1,
         credentials: () => bad[0]?.() as never,
       }),
       /takes no credentials/,
@@ -248,7 +247,7 @@ const countdown = workflow("countdown", async (c: Context, input: { n: number })
 
 test("a result is waited on its key through a continuation", async () => {
   const h3 = await FakeH3.start();
-  const sub = await Substantial.create(h3.url("results"), { partitions: 1, credentials });
+  const sub = await Substantial.create(h3.url("results"), { credentials });
   try {
     await using _ = script(sub, [countdown]);
     const run = await sub.start(countdown, { n: 1 });
@@ -268,7 +267,7 @@ test("a result is waited on its key through a continuation", async () => {
 test("a get is not queued behind waiting listings", () =>
   withH3(async (h3, store) => {
     const first = await store.list("p0/", { maxKeys: 1, wait: { seconds: 0 } });
-    // As a worker serving 4 workflows on 16 partitions holds 64.
+    // As 16 workers serving 4 workflows each hold 64.
     const wait = { seconds: 2, etag: first.etag as string };
     const held = Array.from({ length: 64 }, (_, i) => store.list(`p${i}/`, { maxKeys: 1, wait }));
     await eventually("64 held listings", () => h3.holds >= 64, 1000);
@@ -279,14 +278,14 @@ test("a get is not queued behind waiting listings", () =>
     assert.ok(took < 500, `a get took ${Math.round(took)} ms behind 64 held listings`);
   }));
 
-test("a run ends promptly with 4 workflows on 16 partitions", async () => {
+test("a run ends promptly with 4 workflows waiting", async () => {
   const h3 = await FakeH3.start();
   const first = workflow("pool-a", async () => 1);
   const flows = [first, ...["b", "c", "d"].map((n) => workflow(`pool-${n}`, async () => 1))];
-  const sub = await Substantial.create(h3.url("pool"), { partitions: 16, credentials });
+  const sub = await Substantial.create(h3.url("pool"), { credentials });
   try {
     await using _ = sub.worker(flows, { preset: "script" });
-    await eventually("a held listing per workflow and partition", () => h3.holds >= 64);
+    await eventually("a held listing per workflow", () => h3.holds >= 4);
     const began = performance.now();
     const run = await sub.start(first, {});
     assert.equal(await run.result({ timeout: seconds(10) }), 1);

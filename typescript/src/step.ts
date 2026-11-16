@@ -2,15 +2,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { create } from "@bufbuild/protobuf";
 import type { Clock } from "./clock.ts";
+import { MAX } from "./cost.ts";
 import { Duration } from "./durations.ts";
 import { InvalidArgument, messageOf, NotInWorkflow, typeName } from "./errors.ts";
-import { checkName } from "./names.ts";
-import { capped, decodeValue, jsonText, jsonValue, run } from "./proto.ts";
+import { checkStepName } from "./names.ts";
+import { capped, decodeValue, jsonText, jsonValue, layout, run } from "./proto.ts";
 import { current, makeCall, type Shared, type StepBody } from "./scheduler.ts";
 import { Permanent, type Retry, retryPolicy } from "./workflow.ts";
 
-/** The key and the signal of the attempt running. */
-const attempts = new AsyncLocalStorage<{ key: string; signal: AbortSignal }>();
+/** The attempt running: its key, its signal, and what it charged so far, in call order. */
+const attempts = new AsyncLocalStorage<{
+  key: string;
+  signal: AbortSignal;
+  charges: layout.Amount[];
+}>();
 /** The saga the steps called here belong to, set by `c.saga`. */
 export const sagaScope: AsyncLocalStorage<bigint> = new AsyncLocalStorage<bigint>();
 
@@ -28,6 +33,22 @@ export function stepSignal(): AbortSignal {
   const running = attempts.getStore();
   if (running === undefined) throw new NotInWorkflow("stepSignal is called inside a step");
   return running.signal;
+}
+
+/** Adds `nano` nano-units of `currency` to the charges of the step attempt running, recorded with
+ * its outcome and counted in the run's cost; a currency outside ISO 4217 fails the step at once
+ * with `InvalidArgument`, once the attempt ended. `nano` is a bigint from 0n to 2n ** 63n - 1n. */
+export function charge(currency: string, nano: bigint): void {
+  const running = attempts.getStore();
+  if (running === undefined) throw new NotInWorkflow("charge is called inside a step");
+  if (typeof currency !== "string") {
+    throw new InvalidArgument(`a currency is a string, not ${String(currency)}`);
+  }
+  if (typeof nano !== "bigint" || nano < 0n || nano > MAX) {
+    const shown = typeof nano === "bigint" ? `${nano}n` : String(nano);
+    throw new InvalidArgument(`a charge is a bigint from 0n to ${MAX}n, not ${shown}`);
+  }
+  running.charges.push(create(layout.AmountSchema, { currency, nano }));
 }
 
 interface CommonOptions<T> {
@@ -114,7 +135,7 @@ export function step<A extends unknown[], R, T = Awaited<R>>(
   fn: (...args: A) => R,
   options: DeclaredStepOptions<A, T> = {},
 ): (...args: A) => Promise<T> {
-  checkName("step name", name);
+  checkStepName(name);
   if (typeof fn !== "function") throw new InvalidArgument(`a step runs a function, not ${fn}`);
   checkOptions(options as DeclaredStepOptions<unknown[], unknown>);
   const opts = options as DeclaredStepOptions<unknown[], unknown>;
@@ -133,7 +154,16 @@ function failure(type: string, message: string, retryable: boolean): run.Outcome
   });
 }
 
-/** Runs one attempt of a step with its step key; a `Permanent` error is not retryable. */
+/** How an attempt ended: its outcome, what it charged, and whether it was abandoned as its
+ * replay ended, its outcome then never recorded. */
+export interface Attempted {
+  readonly outcome: run.Outcome;
+  readonly charges: layout.Amount[];
+  readonly abandoned: boolean;
+}
+
+/** Runs one attempt of a step with its step key, to its outcome and its charges; a `Permanent`
+ * error is not retryable. */
 export async function attempt(
   clock: Clock,
   name: string,
@@ -141,21 +171,29 @@ export async function attempt(
   key: string,
   timeoutMs: number | undefined,
   abandoned: AbortSignal,
-): Promise<run.Outcome> {
+): Promise<Attempted> {
+  const charges: layout.Amount[] = [];
   const outcome = await clock.attempt(
     name,
     key,
-    (signal) => outcomeOf(body, key, signal),
+    (signal) => outcomeOf(body, { key, signal, charges }),
     timeoutMs,
     abandoned,
   );
-  return outcome ?? failure("StepTimeout", `attempt past ${timeoutMs} ms`, true);
+  // A copy: an attempt left running charges on, past its end.
+  const charged = [...charges];
+  if (outcome !== undefined) return { outcome, charges: charged, abandoned: false };
+  const timedOut = failure("StepTimeout", `attempt past ${timeoutMs} ms`, true);
+  return { outcome: timedOut, charges: charged, abandoned: abandoned.aborted };
 }
 
-async function outcomeOf(body: StepBody, key: string, signal: AbortSignal): Promise<run.Outcome> {
+async function outcomeOf(
+  body: StepBody,
+  running: { key: string; signal: AbortSignal; charges: layout.Amount[] },
+): Promise<run.Outcome> {
   let value: unknown;
   try {
-    value = await current.exit(() => attempts.run({ key, signal }, async () => await body()));
+    value = await current.exit(() => attempts.run(running, async () => await body()));
   } catch (e) {
     return failure(typeName(e), messageOf(e), !(e instanceof Permanent));
   }

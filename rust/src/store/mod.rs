@@ -1,5 +1,6 @@
 //! Store adapters and the store contract (I-26).
 
+pub(crate) mod attempts;
 mod credentials;
 mod fs;
 pub(crate) mod h3;
@@ -150,7 +151,15 @@ fn refuse_query(url: &str, rest: &str) -> Result<()> {
 }
 
 /// Performs one `StoreOp` of the core and answers with its `OpResult`.
-pub(crate) async fn perform(store: &dyn Store, op: b::StoreOp) -> op_result::Result {
+pub(crate) async fn perform(store: &dyn Store, op: b::StoreOp) -> b::OpResult {
+    let (result, attempts) = attempts::measured(perform_once(store, op)).await;
+    b::OpResult {
+        result: Some(result),
+        attempts,
+    }
+}
+
+async fn perform_once(store: &dyn Store, op: b::StoreOp) -> op_result::Result {
     let failed =
         |e: StoreFailure| op_result::Result::Failed(b::StoreFailure { message: e.message });
     let empty = b::Empty {};

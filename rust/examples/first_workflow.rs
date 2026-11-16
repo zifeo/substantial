@@ -45,9 +45,7 @@ async fn main() -> anyhow::Result<()> {
     let dir = std::env::args()
         .nth(1)
         .expect("usage: first_workflow <directory>");
-    let sub = s::Substantial::create(format!("file:{dir}"))
-        .partitions(1)
-        .await?;
+    let sub = s::Substantial::create(format!("file:{dir}")).await?;
     let worker = sub.worker(example).preset(s::Preset::Script).start()?;
     // The id makes the start idempotent: running the example again finds the same run. A send to
     // a run that ended raises `RunEnded`, so the messages go only to a run still going.

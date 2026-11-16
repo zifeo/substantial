@@ -8,6 +8,7 @@ import type { Duration } from "./durations.ts";
 import {
   Cancelled,
   ContinuedAsNew,
+  type Failure,
   failureOf,
   InvalidArgument,
   messageOf,
@@ -16,6 +17,7 @@ import {
   StoreError,
 } from "./errors.ts";
 import { RunMachine } from "./machines.ts";
+import { Attempt, type Metering, type Observed, ObserverRaised, Replay } from "./observe.ts";
 import {
   agent,
   type boundary,
@@ -26,7 +28,7 @@ import {
   type layout,
   run,
 } from "./proto.ts";
-import { current, makeCall, Shared } from "./scheduler.ts";
+import { current, makeCall, type PendingStep, Shared, stepFailures } from "./scheduler.ts";
 import { attempt } from "./step.ts";
 import { perform } from "./stores/open.ts";
 import type { Store } from "./stores/store.ts";
@@ -34,15 +36,28 @@ import type { AnyWorkflow } from "./workflow.ts";
 
 export type ReplayEvent =
   | { readonly kind: "commit"; readonly run: string; readonly commit: run.Commit }
-  | { readonly kind: "ended"; readonly run: string; readonly end: agent.ReplayEnd };
+  | { readonly kind: "ended"; readonly run: string; readonly end: agent.ReplayEnd }
+  /** The observer raised: the worker stops with its error. */
+  | { readonly kind: "died"; readonly error: unknown };
 
 export type Emit = (event: ReplayEvent) => void;
 
-/** What a replay takes of its worker: the store a workflow's send reads its chain on, and the
- * timeout of a step that neither it nor its workflow gives. */
+/** What a replay takes of its worker: the store a workflow's send and result read a chain on, the
+ * timeout of a step that neither it nor its workflow gives, and the prices and observer of its
+ * `Substantial`. */
 export interface ReplayHost {
   readonly store: Store;
   readonly stepTimeout: Duration;
+  readonly metering: Metering;
+}
+
+/** Tells the observer; one that raises stops the worker with its error. */
+function tell(host: ReplayHost, emit: Emit, event: Observed): void {
+  try {
+    host.metering.tell(event);
+  } catch (error) {
+    emit({ kind: "died", error });
+  }
 }
 
 /** What the agent loop tells a replay: the answer to its commit, or to stop. */
@@ -80,23 +95,36 @@ export function dropped(): agent.ReplayEnd {
   return create(agent.ReplayEndSchema, { end: { case: "dropped", value: {} } });
 }
 
-/** Runs one replay to its end, which it always reports, dropped when it could not go on. */
+/** The kind of the last commit of a replay that won. */
+type Committed = { kind?: run.CommitKind };
+
+/** Runs one replay to its end, which it always reports, dropped when it could not go on;
+ * `dueAt` is the earliest due entry it serves. */
 export async function replay(
   core: Core,
   workflow: AnyWorkflow,
   data: run.RunInput,
+  dueAt: layout.Time | undefined,
   clock: Clock,
   emit: Emit,
   channel: Channel,
   host: ReplayHost,
 ): Promise<void> {
+  const [started, now] = [clock.elapsed(), clock.now()];
+  const committed: Committed = {};
   let end: agent.ReplayEnd;
   try {
-    end = await drive(core, workflow, data, clock, emit, channel, host);
+    end = await drive(core, workflow, data, clock, emit, channel, host, committed);
   } catch (e) {
     console.error(`substantial: replay of ${data.run} dropped:`, e);
     end = dropped();
   }
+  let ended: Replay["end"] = "idle";
+  if (end.end.case === "dropped") ended = "dropped";
+  else if (committed.kind === run.CommitKind.SUSPEND) ended = "suspended";
+  else if (committed.kind === run.CommitKind.END) ended = "ended";
+  const delay = dueAt === undefined ? undefined : (now - Number(dueAt.ms)) / 1000;
+  tell(host, emit, new Replay(workflow.name, delay, (clock.elapsed() - started) / 1000, ended));
   emit({ kind: "ended", run: data.run, end });
 }
 
@@ -168,12 +196,20 @@ function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
 
 /** The failure an error of the code ends its run with. */
 function endFailure(e: unknown) {
-  const failure = failureOf(e);
+  const failure = endedWith(failureOf(e));
   if (!(e instanceof StepFailed)) return failure;
+  const core = stepFailures.get(e);
+  if (core !== undefined) return { ...failure, details: core };
   // A client's RunFailed reads the step's cause from it, as a StepFailed's from the core.
   const { type, message, retryable } = e.cause;
   const details = JSON.stringify({ error: { type, message, retryable } });
   return { ...failure, details: jsonValue(new TextEncoder().encode(details)) };
+}
+
+/** A failure the code ends its run with, as the core takes it: a run ends without the details of
+ * the failure it rethrows, but a StepFailed's. */
+function endedWith({ type, message, retryable }: Failure) {
+  return { type, message, retryable };
 }
 
 /** Records the end of the code: its value, its failure, its cancellation or its
@@ -191,7 +227,7 @@ function failCode(shared: Shared, code: Code): Code {
   shared.codeFailure = undefined;
   if (f === undefined || code === undefined) return code;
   if (shared.fatal === undefined && shared.diverged === undefined) {
-    const end = create(run.EndSchema, { end: { case: "failed", value: { error: f } } });
+    const end = create(run.EndSchema, { end: { case: "failed", value: { error: endedWith(f) } } });
     shared.call(makeCall({ case: "end", value: end }));
   }
   shared.abandoned = true;
@@ -231,24 +267,74 @@ async function commit(
         throw new ProtocolError(`commit of segment ${n} acknowledged as ${answer.n}`);
       }
       warnEnd(shared.start.chain, c);
-      if (answer.inbox.length > 0) shared.arrived(answer.inbox);
+      if (answer.cost !== undefined) shared.arrived(answer.inbox, answer.cost);
+      else if (answer.inbox.length > 0) {
+        throw new ProtocolError("messages arrived without the chain's cost");
+      }
       return true;
     }
     await clock.wait([channel.arrival(), channel.stopping], undefined);
   }
 }
 
-/** Performs the read `Next.store` asks for; `undefined` when the replay is stopped meanwhile. */
+/** Performs the operation `Next.store` asks for, a read or a create; `undefined` when the replay is stopped meanwhile, or
+ * when the observer raised, which stops the worker. */
 async function read(
   clock: Clock,
   store: Store,
   op: boundary.StoreOp,
   channel: Channel,
   runId: string,
+  emit: Emit,
 ): Promise<boundary.OpResult | undefined> {
-  const reading = clock.spawn(() => perform(store, op), `read of ${runId}`);
+  const reading = clock.spawn(async () => {
+    try {
+      return await perform(store, op);
+    } catch (e) {
+      if (!(e instanceof ObserverRaised)) throw e;
+      emit({ kind: "died", error: e.error });
+      return undefined;
+    }
+  }, `read of ${runId}`);
   await clock.wait([reading, channel.stopping], undefined);
   return channel.stopped ? undefined : reading.result();
+}
+
+type Ended = [bigint, number, run.Outcome, layout.Amount[]];
+
+/** How an attempt ended, as its observer is told. */
+function attemptOutcome(outcome: run.Outcome, attempt: number, max: number): Attempt["outcome"] {
+  const o = outcome.outcome;
+  if (o.case === "value") return "ok";
+  if (o.value?.type === "StepTimeout") return "timeout";
+  if (o.value?.retryable && attempt < max) return "retry";
+  return "failed";
+}
+
+/** Runs an attempt of `step` as a task of the replay, its observer told once it ended. */
+function spawnAttempt(
+  clock: Clock,
+  host: ReplayHost,
+  emit: Emit,
+  workflow: AnyWorkflow,
+  step: PendingStep,
+  e: run.Next_Execute,
+  abandoned: AbortSignal,
+): Future<Ended> {
+  const timeout = e.timeoutMs === undefined ? undefined : Number(e.timeoutMs);
+  return clock.spawn(async (): Promise<Ended> => {
+    const started = clock.elapsed();
+    // Unless it reaches its outcome: abandoned by a shutdown, a lost claim or a stop.
+    let ended: Attempt["outcome"] = "abandoned";
+    try {
+      const done = await attempt(clock, step.name, step.body, step.key, timeout, abandoned);
+      if (!done.abandoned) ended = attemptOutcome(done.outcome, e.attempt, step.maxAttempts);
+      return [e.call, e.attempt, done.outcome, done.charges];
+    } finally {
+      const seconds = (clock.elapsed() - started) / 1000;
+      tell(host, emit, new Attempt(workflow.name, step.name, e.attempt, seconds, ended));
+    }
+  }, `attempt of ${step.key}`);
 }
 
 async function drive(
@@ -259,12 +345,13 @@ async function drive(
   emit: Emit,
   channel: Channel,
   host: ReplayHost,
+  committed: Committed,
 ): Promise<agent.ReplayEnd> {
   if (data.start === undefined) throw new ProtocolError(`replay of ${data.run} without start`);
   const machine = new RunMachine(core, data);
   const stepTimeout = workflow.stepTimeout ?? host.stepTimeout;
   const shared = new Shared(machine, clock, data, data.start, stepTimeout);
-  const attempts = new Set<Future<[bigint, number, run.Outcome]>>();
+  const attempts = new Set<Future<Ended>>();
   // Aborted as the replay ends: an attempt still in flight is abandoned.
   const abandoned = new AbortController();
   try {
@@ -315,19 +402,12 @@ async function drive(
           const step = shared.steps.get(e.call);
           if (step === undefined)
             throw new ProtocolError(`execute of call ${e.call} without a step`);
-          const timeout = e.timeoutMs === undefined ? undefined : Number(e.timeoutMs);
-          const running = clock.spawn(async (): Promise<[bigint, number, run.Outcome]> => {
-            return [
-              e.call,
-              e.attempt,
-              await attempt(clock, step.name, step.body, step.key, timeout, abandoned.signal),
-            ];
-          }, `attempt of ${step.key}`);
-          attempts.add(running);
+          attempts.add(spawnAttempt(clock, host, emit, workflow, step, e, abandoned.signal));
           break;
         }
         case "commit":
           if (!(await commit(shared, data.run, next.value, emit, channel))) return dropped();
+          committed.kind = next.value.kind;
           break;
         case "waitSteps": {
           if (attempts.size === 0) throw new ProtocolError("wait_steps with no step in flight");
@@ -336,11 +416,11 @@ async function drive(
           break;
         }
         case "store": {
-          const result = await read(clock, host.store, next.value, channel, data.run);
+          const result = await read(clock, host.store, next.value, channel, data.run, emit);
           if (result === undefined) return dropped();
           if (result.result.case === "failed") {
             throw new StoreError(
-              `a workflow's send reading its chain: ${result.result.value.message}`,
+              `a store operation of a workflow's send or result: ${result.result.value.message}`,
             );
           }
           machine.stored(result);

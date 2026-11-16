@@ -6,14 +6,25 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from substantial._proto import layout
-from substantial.client import Opening, Run, RunStatus, Substantial
+from substantial._proto import layout, plan
+from substantial.client import (
+    Opening,
+    Run,
+    RunInfo,
+    RunStatus,
+    Substantial,
+    _check_timeout,
+    _max_interval,
+)
+from substantial.cost import Prices
 from substantial.durations import millis
 from substantial.errors import InvalidArgument, RunFailed, SubstantialError, WaitTimeout
+from substantial.observe import Metering, Observe
 from substantial.settings import Settings
 from substantial.testing import _time
 from substantial.testing._store import Chaos, Faults
@@ -47,16 +58,28 @@ class _Client(Substantial):
     def _handle[R](self, workflow: Workflow[..., R], chain: str) -> Run[R]:
         return _Run(self, workflow, chain)
 
+    async def _plan(self, data: plan.PlanInput) -> tuple[str, object]:
+        self._world.check_loop()
+        return await super()._plan(data)
+
+    async def runs(self, workflow: Workflow[..., Any]) -> AsyncIterator[RunInfo]:
+        self._world.check_loop()
+        async with aclosing(super().runs(workflow)) as infos:
+            async for info in infos:
+                yield info
+
 
 class _Run[R](Run[R]):
     _sub: _Client
 
-    async def result(self, *, timeout: timedelta | None = None) -> R:
+    async def result(
+        self, *, timeout: timedelta | None = None, max_interval: timedelta | None = None
+    ) -> R:
         """Settles, then the value the chain ended with; `Stuck` naming what it waits on if it
         has not ended, `WaitTimeout` instead when a `timeout` is given. The clock does not
-        move."""
-        if timeout is not None and not isinstance(timeout, timedelta):
-            raise InvalidArgument(f"timeout is a timedelta, not {timeout!r}")
+        move, and nothing polls: `max_interval` is only checked."""
+        _check_timeout(timeout)
+        _max_interval(max_interval)
         world = self._sub._world
         await world.env.settle()
         try:
@@ -102,7 +125,7 @@ def _waits_on(world: World, run: str) -> str:
         what.append(f"workflow {_named(start)}, which no worker serves")
     for hold in world.holds:
         what += [f"step {hold._step}, held" for h in hold._held if h.run == run]
-    for key in world.keys(f"queues/{start.workflow}/"):
+    for key in world.keys(f"queues/{start.workflow}/due/"):
         entry = key.rpartition("/")[2]
         if entry.split("~")[1] == run:
             at = _EPOCH + timedelta(milliseconds=due_ms(entry))
@@ -129,8 +152,17 @@ class Env(_Client):
     the test's process and move only in `settle` and `advance`."""
 
     @classmethod
-    def open(cls, *, now: datetime, chaos: Chaos | None = None) -> Opening:  # type: ignore[override]
-        """A fresh namespace in memory whose clock starts at `now`; `async with` it."""
+    def open(  # type: ignore[override]
+        cls,
+        *,
+        now: datetime,
+        chaos: Chaos | None = None,
+        prices: Prices | None = None,
+        observe: Observe | None = None,
+    ) -> Opening:
+        """A fresh namespace in memory whose clock starts at `now`; `async with` it. `prices` and
+        `observe` as for `Substantial.create`, for the environment, its clients and its
+        workers."""
         if not isinstance(now, datetime) or now.utcoffset() is None:
             raise InvalidArgument(f"an environment starts at an aware datetime, not {now!r}")
         if now.microsecond % 1000:
@@ -139,12 +171,14 @@ class Env(_Client):
             )
         if chaos is not None and not isinstance(chaos, Chaos):
             raise InvalidArgument(f"chaos is a Chaos, not {chaos!r}")
-        return Opening(cls._opened_env(millis(now - _EPOCH), chaos))
+        metering = Metering(prices, observe)
+        return Opening(cls._opened_env(millis(now - _EPOCH), chaos, metering))
 
     @classmethod
-    async def _opened_env(cls, ms: int, chaos: Chaos | None) -> Env:
-        world = World(f"testing-{secrets.token_hex(8)}", ms, chaos)
-        env = await cls._create(world.store(None), partitions=world.partitions)
+    async def _opened_env(cls, ms: int, chaos: Chaos | None, metering: Metering) -> Env:
+        world = World(f"testing-{secrets.token_hex(8)}", ms, chaos, metering)
+        store = world.store(None)
+        env = await cls._create(store, prices=metering.prices, observe=metering.observe)
         assert isinstance(env, Env)
         env._attach(world)
         world.env = env
@@ -156,7 +190,8 @@ class Env(_Client):
         return Opening(self._client())
 
     async def _client(self) -> _Client:
-        client = await _Client._open(self._world.store(None))
+        m = self._world.metering
+        client = await _Client._open(self._world.store(None), prices=m.prices, observe=m.observe)
         assert isinstance(client, _Client)
         client._attach(self._world)
         return client
@@ -175,12 +210,14 @@ class Env(_Client):
     async def settle(self) -> None:
         """Lets every worker do all it can at the current time, until nothing can happen without
         the clock moving."""
+        self._world.check_loop()
         await self._world.time.settle()
         self._raise_died()
 
     async def advance(self, d: timedelta) -> None:
         """Settles, then moves the clock forward by `d`, settling at each moment a worker has
         something due."""
+        self._world.check_loop()
         await self._world.time.advance(millis(d))
         self._raise_died()
 

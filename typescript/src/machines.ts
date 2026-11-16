@@ -58,6 +58,19 @@ class Machine<Req extends Message, Res extends Response> {
     this.#request = request;
     this.#response = response;
     this.#id = core.newMachine(kind, input);
+    // An input the core refuses fails here, not at the first call.
+    const refused = core.refused(this.#id);
+    if (refused === undefined) return;
+    this.close();
+    let answer: agent.AgentResponse;
+    try {
+      // Every response has its CoreError as field 1: any of them decodes it.
+      answer = fromBinary(agent.AgentResponseSchema, refused);
+    } catch (e) {
+      throw new ProtocolError(`undecodable refusal: ${e instanceof Error ? e.message : e}`);
+    }
+    if (answer.response.case !== "error") throw new ProtocolError("a refusal without its error");
+    throw coreError(answer.response.value);
   }
 
   close(): void {
@@ -108,8 +121,14 @@ export class RunMachine extends Machine<run.RunRequest, run.RunResponse> {
     );
   }
 
-  stepEnded(call: bigint, attempt: number, outcome: run.Outcome, now: layout.Time): void {
-    const value = create(run.RunRequest_StepEndedSchema, { call, attempt, outcome, now });
+  stepEnded(
+    call: bigint,
+    attempt: number,
+    outcome: run.Outcome,
+    charges: layout.Amount[],
+    now: layout.Time,
+  ): void {
+    const value = create(run.RunRequest_StepEndedSchema, { call, attempt, outcome, charges, now });
     this.expect(create(run.RunRequestSchema, { request: { case: "stepEnded", value } }), "done");
   }
 
@@ -120,8 +139,8 @@ export class RunMachine extends Machine<run.RunRequest, run.RunResponse> {
     );
   }
 
-  arrived(messages: run.InboxMessage[]): void {
-    const value = create(run.RunRequest_ArrivedSchema, { messages });
+  arrived(messages: run.InboxMessage[], cost: layout.Cost): void {
+    const value = create(run.RunRequest_ArrivedSchema, { messages, cost });
     this.expect(create(run.RunRequestSchema, { request: { case: "arrived", value } }), "done");
   }
 
@@ -176,8 +195,16 @@ export class AgentMachine extends Machine<agent.AgentRequest, agent.AgentRespons
     this.#done({ case: "wake", value: {} });
   }
 
+  wakeWorkflow(workflow: string): void {
+    this.#done({ case: "wakeWorkflow", value: workflow });
+  }
+
   shutdown(): void {
     this.#done({ case: "shutdown", value: {} });
+  }
+
+  drain(until: layout.Time): void {
+    this.#done({ case: "drain", value: until });
   }
 }
 

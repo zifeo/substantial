@@ -2,7 +2,7 @@
 
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -10,14 +10,37 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::context::{Context, value};
+use super::schedule::RESERVED_STEP;
 use super::scheduler::{CallFuture, StepBody, StepSpec, Undo};
 use super::{Permanent, Retry, decode};
-use crate::error::{Failure, Result};
+use crate::error::{Error, Failure, Result};
 use crate::proto::boundary::v1::{self as b, call::Call};
+use crate::proto::layout::v1::Amount;
 use crate::time::millis;
 
+/// The step attempt running: its step key, and what it charged so far.
+#[derive(Clone)]
+pub(crate) struct LiveAttempt {
+    key: String,
+    charges: Arc<Mutex<Vec<Amount>>>,
+}
+
+impl LiveAttempt {
+    pub(crate) fn new(key: String) -> Self {
+        Self {
+            key,
+            charges: Arc::default(),
+        }
+    }
+
+    /// What the attempt charged, in call order.
+    pub(crate) fn charges(&self) -> Vec<Amount> {
+        self.charges.lock().expect("never poisoned").clone()
+    }
+}
+
 tokio::task_local! {
-    static STEP_KEY: String;
+    static ATTEMPT: LiveAttempt;
 }
 
 /// `<run>/<step>/<occurrence>`, the same for every attempt and replay of the step running.
@@ -26,14 +49,41 @@ tokio::task_local! {
 ///
 /// Outside a step attempt, a bug of the calling code.
 pub fn step_key() -> String {
-    STEP_KEY
-        .try_with(String::clone)
+    ATTEMPT
+        .try_with(|a| a.key.clone())
         .expect("step_key is called inside a step")
 }
 
-/// Runs an attempt with its step key.
-pub(crate) fn with_step_key<F: Future>(key: String, attempt: F) -> impl Future<Output = F::Output> {
-    STEP_KEY.scope(key, attempt)
+/// Adds `nano` nano-units of `currency` to the charges of the step attempt running, recorded with
+/// its outcome and counted in the run's cost; an unknown currency fails the step at once with
+/// `InvalidArgument`, once the attempt ended. `InvalidArgument` for `nano` over `i64::MAX`.
+///
+/// # Panics
+///
+/// Outside a step attempt, as `step_key`.
+pub fn charge(currency: &str, nano: u64) -> Result<()> {
+    let charges = ATTEMPT
+        .try_with(|a| a.charges.clone())
+        .expect("charge is called inside a step");
+    if nano > i64::MAX as u64 {
+        return Err(Error::InvalidArgument(format!(
+            "a charge of {nano} is over the limit of {}",
+            i64::MAX
+        )));
+    }
+    charges.lock().expect("never poisoned").push(Amount {
+        currency: currency.to_owned(),
+        nano,
+    });
+    Ok(())
+}
+
+/// Runs an attempt with its step key and its charges.
+pub(crate) fn with_attempt<F: Future>(
+    running: LiveAttempt,
+    attempt: F,
+) -> impl Future<Output = F::Output> {
+    ATTEMPT.scope(running, attempt)
 }
 
 pub(super) fn failure(kind: &str, message: String, retryable: bool) -> Failure {
@@ -41,6 +91,7 @@ pub(super) fn failure(kind: &str, message: String, retryable: bool) -> Failure {
         kind: kind.into(),
         message,
         retryable,
+        details: None,
     }
 }
 
@@ -87,6 +138,7 @@ impl Context {
             timeout: None,
             body,
             undo: None,
+            reserved: false,
             value: PhantomData,
         }
     }
@@ -106,7 +158,14 @@ impl Context {
             async move {
                 #[cfg(feature = "testing")]
                 crate::testing::threaded();
-                match tokio::task::spawn_blocking(move || f()).await {
+                // The thread runs outside the attempt's task: it takes the attempt along, for
+                // `step_key` and `charge`.
+                let running = ATTEMPT.try_with(LiveAttempt::clone).ok();
+                let blocking = move || match running {
+                    Some(running) => ATTEMPT.sync_scope(running, || f()),
+                    None => f(),
+                };
+                match tokio::task::spawn_blocking(blocking).await {
                     Ok(result) => result,
                     // A panic goes on in the attempt's task, as it would from an async step.
                     Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
@@ -126,6 +185,8 @@ pub struct Step<T> {
     timeout: Option<Duration>,
     body: StepBody,
     undo: Option<Undo>,
+    /// Whether it may take the name `Context::schedule` records its fires under.
+    reserved: bool,
     value: PhantomData<fn() -> T>,
 }
 
@@ -139,6 +200,11 @@ impl<T> Step<T> {
     /// a late attempt counts as failed, a retryable `StepTimeout`, and its result is discarded.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    pub(super) fn reserved(mut self) -> Self {
+        self.reserved = true;
         self
     }
 }
@@ -172,6 +238,18 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
     type IntoFuture = BoxFuture<'static, Result<T>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        if self.name == RESERVED_STEP && !self.reserved {
+            return Box::pin(async {
+                Err(Error::InvalidArgument(format!(
+                    "the step name {RESERVED_STEP:?} is reserved for c.schedule()"
+                )))
+            });
+        }
+        if let Some(r) = &self.retry
+            && let Err(e) = r.check()
+        {
+            return Box::pin(async { Err(e) });
+        }
         let retry = self.retry.map(|r| b::RetryPolicy {
             max_attempts: r.max_attempts,
             initial_ms: millis(r.initial),

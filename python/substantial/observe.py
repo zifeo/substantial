@@ -1,0 +1,162 @@
+"""What a `Substantial` tells its observer (I-29): store operations, step attempts, replays and
+scans."""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+
+from substantial.cost import Amount, Prices
+from substantial.errors import ConfigError
+from substantial.stores.attempts import measured
+from substantial.stores.base import Capabilities, Create, Listing, ListWait, Store
+
+
+@dataclass(frozen=True)
+class StoreOp:
+    """A store operation of a client or a worker, once it answered: `op` is `create`, `get`,
+    `list` or `delete`; `attempts` the requests the adapter sent, its retries included; `outcome`
+    `created`, `exists`, `found`, `missing`, `listed`, `deleted` or `failed`; `cost` `attempts`
+    requests at the price of the operation's kind, `None` without prices."""
+
+    op: str
+    seconds: float
+    attempts: int
+    outcome: str
+    cost: Amount | None
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """A step attempt a worker ran, once it ended: `outcome` is `ok`, `retry` (a retryable error
+    with attempts left), `failed` (no attempt left, or a permanent error), `timeout` or
+    `abandoned` (interrupted, its outcome not recorded)."""
+
+    workflow: str
+    step: str
+    attempt: int
+    seconds: float
+    outcome: str
+
+
+@dataclass(frozen=True)
+class Replay:
+    """A replay a worker ran, once it ended: `delay` is how late it started after the earliest due
+    entry it serves, `None` when it serves none; `end` is `suspended`, `ended`, `idle` (nothing
+    new) or `dropped` (a lost race, a stop, a shutdown)."""
+
+    workflow: str
+    delay: float | None
+    seconds: float
+    end: str
+
+
+@dataclass(frozen=True)
+class Scan:
+    """A scan listed the due entries of a workflow, `due` of them due."""
+
+    workflow: str
+    due: int
+
+
+type Observed = StoreOp | Attempt | Replay | Scan
+type Observe = Callable[[Observed], object]
+
+
+class ObserverRaised(BaseException):
+    """The error of an observer, carried past the catch-alls of the store's path to where it stops
+    the worker or fails the client call."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
+@dataclass(frozen=True)
+class Metering:
+    """The prices and the observer of a `Substantial`, which its workers take."""
+
+    prices: Prices | None
+    observe: Observe | None
+
+    def __post_init__(self) -> None:
+        if self.prices is not None and not isinstance(self.prices, Prices):
+            raise ConfigError(f"prices is a Prices, not {self.prices!r}")
+        if self.observe is not None and not callable(self.observe):
+            raise ConfigError(f"observe is a function, not {self.observe!r}")
+
+    def tell(self, event: Observed) -> None:
+        if self.observe is not None:
+            self.observe(event)
+
+    def wrap(self, store: Store) -> Store:
+        """`store`, its operations observed when there is an observer."""
+        if self.observe is None:
+            return store
+        return ObservingStore(store, self.observe, self.prices)
+
+
+class ObservingStore:
+    """A store whose every operation is told to an observer once it answered."""
+
+    def __init__(self, inner: Store, observe: Observe, prices: Prices | None) -> None:
+        self._inner = inner
+        self._observe = observe
+        self._prices = prices
+
+    @property
+    def capabilities(self) -> Capabilities:
+        return self._inner.capabilities
+
+    async def _observed[T](
+        self, op: str, call: Callable[[], Awaitable[T]], outcome: Callable[[T], str]
+    ) -> T:
+        started = time.monotonic()
+        try:
+            with measured() as sent:
+                result = await call()
+        except Exception:
+            self._tell(op, started, sent.n, "failed")
+            raise
+        self._tell(op, started, sent.n, outcome(result))
+        return result
+
+    def _tell(self, op: str, started: float, attempts: int, outcome: str) -> None:
+        event = StoreOp(
+            op=op,
+            seconds=time.monotonic() - started,
+            attempts=attempts,
+            outcome=outcome,
+            cost=None if self._prices is None else self._prices._of(op, attempts),
+        )
+        try:
+            self._observe(event)
+        except Exception as e:
+            raise ObserverRaised(e) from e
+
+    async def create(self, key: str, data: bytes) -> Create:
+        return await self._observed("create", lambda: self._inner.create(key, data), str)
+
+    async def get(self, key: str) -> bytes | None:
+        def found(data: bytes | None) -> str:
+            return "missing" if data is None else "found"
+
+        return await self._observed("get", lambda: self._inner.get(key), found)
+
+    async def list(
+        self, prefix: str, *, start_after: str | None, max_keys: int, wait: ListWait | None
+    ) -> Listing:
+        def listed() -> Awaitable[Listing]:
+            return self._inner.list(prefix, start_after=start_after, max_keys=max_keys, wait=wait)
+
+        return await self._observed("list", listed, lambda _: "listed")
+
+    async def delete(self, key: str) -> None:
+        await self._observed("delete", lambda: self._inner.delete(key), lambda _: "deleted")
+
+    async def open(self) -> None:
+        await self._inner.open()
+
+    async def close(self) -> None:
+        await self._inner.close()

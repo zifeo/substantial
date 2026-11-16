@@ -14,9 +14,10 @@ from typing import TYPE_CHECKING, Any, Protocol, overload
 
 from substantial._proto import json_value, layout, run
 from substantial.clock import Clock
+from substantial.cost import MAX
 from substantial.durations import millis
 from substantial.errors import InvalidArgument, NotInWorkflow, ValueTooLarge
-from substantial.names import check_name
+from substantial.names import check_step_name
 from substantial.scheduler import Shared, StepBody, StepSpec, UndoBody, decode_json
 from substantial.workflow import Permanent, Retry
 
@@ -26,7 +27,18 @@ if TYPE_CHECKING:
 CURRENT: ContextVar[Context] = ContextVar("substantial.context")
 # The saga the steps called here belong to, set by `async with c.saga()`.
 SAGA: ContextVar[int | None] = ContextVar("substantial.saga", default=None)
-_STEP_KEY: ContextVar[str] = ContextVar("substantial.step_key")
+
+
+class LiveAttempt:
+    """The step attempt running: its step key, and what it charged so far, in call order."""
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        self.charges: list[layout.Amount] = []
+
+
+# A thread a sync step runs in copies the context, and with it the attempt.
+_ATTEMPT: ContextVar[LiveAttempt] = ContextVar("substantial.attempt")
 # The tasks whose step body runs in a thread, which cannot be interrupted: the testing environment
 # waits for them rather than cancelling them.
 THREADED: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
@@ -42,9 +54,24 @@ def current() -> Context:
 def step_key() -> str:
     """`<run>/<step>/<occurrence>`, the same for every attempt and replay of the step running."""
     try:
-        return _STEP_KEY.get()
+        return _ATTEMPT.get().key
     except LookupError:
         raise NotInWorkflow("step_key is called inside a step") from None
+
+
+def charge(currency: str, nano: int) -> None:
+    """Adds `nano` nano-units of `currency` to the charges of the step attempt running, recorded
+    with its outcome and counted in the run's cost; a currency outside ISO 4217 fails the step at
+    once with `InvalidArgument`, once the attempt ended."""
+    try:
+        running = _ATTEMPT.get()
+    except LookupError:
+        raise NotInWorkflow("charge is called inside a step") from None
+    if not isinstance(currency, str):
+        raise InvalidArgument(f"a currency is a string, not {currency!r}")
+    if isinstance(nano, bool) or not isinstance(nano, int) or not 0 <= nano <= MAX:
+        raise InvalidArgument(f"a charge is an int from 0 to {MAX}, not {nano!r}")
+    running.charges.append(layout.Amount(currency=currency, nano=nano))
 
 
 def _is_async(fn: Callable[..., Any]) -> bool:
@@ -124,7 +151,7 @@ class Step[**P, R]:
             raise InvalidArgument(f"a step is a function, not {fn!r}")
         check_options(retry, timeout, undo)
         self.fn = fn
-        self.name: str = check_name("step name", fn.__name__ if name is None else name)
+        self.name: str = check_step_name(fn.__name__ if name is None else name)
         self.retry = retry
         self.timeout = timeout
         self.undo = undo
@@ -186,13 +213,16 @@ def _failure(type_: str, message: str, retryable: bool) -> run.Outcome:
 
 async def attempt(
     clock: Clock, name: str, body: StepBody, key: str, timeout_ms: int | None
-) -> run.Outcome:
-    """Runs one attempt of a step with its step key; a `Permanent` error is not retryable."""
-    _STEP_KEY.set(key)
+) -> tuple[run.Outcome, list[layout.Amount]]:
+    """Runs one attempt of a step with its step key, to its outcome and its charges; a
+    `Permanent` error is not retryable."""
+    running = LiveAttempt(key)
+    _ATTEMPT.set(running)
     outcome = await clock.attempt(name, key, lambda: _outcome(body), timeout_ms)
     if outcome is None:
-        return _failure("StepTimeout", f"attempt past {timeout_ms} ms", True)
-    return outcome
+        outcome = _failure("StepTimeout", f"attempt past {timeout_ms} ms", True)
+    # A copy: an attempt left running in its thread charges on, past its end.
+    return outcome, list(running.charges)
 
 
 async def _outcome(body: StepBody) -> run.Outcome:

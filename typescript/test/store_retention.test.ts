@@ -11,7 +11,7 @@ import {
   workflow,
 } from "../src/mod.ts";
 import type { Store } from "../src/stores/store.ts";
-import { eachAdapter, eventually, LONG, script } from "./helpers.ts";
+import { eachAdapter, eventually, LONG, Recording, script } from "./helpers.ts";
 
 const SHORT = {
   retention: milliseconds(300),
@@ -27,18 +27,26 @@ async function keys(store: Store, prefix: string): Promise<string[]> {
 }
 
 eachAdapter("a run is collected and its id taken until the tombstone ends", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  // The tombstone's end held until the checks made during it are done.
+  const released = Promise.withResolvers<void>();
+  const recording = new Recording(store);
+  recording.holdDelete = ["runs/q/gone", released.promise];
+  const sub = await createOn(recording);
   await using _ = script(sub, [quick], SHORT);
   const run = await sub.start(quick, undefined, { id: "q" });
   assert.equal(await run.result({ timeout: LONG }), 1);
   const collected = async () =>
     JSON.stringify(await keys(store, "runs/q/")) === JSON.stringify(["runs/q/gone"]);
-  await eventually("the collection", collected, 10_000);
-  await assert.rejects(run.status(), (e) => e instanceof RunNotFound && e.collected);
-  await assert.rejects(
-    sub.start(quick, undefined, { id: "q" }),
-    (e) => e instanceof RunExists && e.collected,
-  );
+  try {
+    await eventually("the collection", collected, 10_000);
+    await assert.rejects(run.status(), (e) => e instanceof RunNotFound && e.collected);
+    await assert.rejects(
+      sub.start(quick, undefined, { id: "q" }),
+      (e) => e instanceof RunExists && e.collected,
+    );
+  } finally {
+    released.resolve();
+  }
   const ended = async () => (await keys(store, "runs/q/")).length === 0;
   await eventually("the tombstone's end", ended, 10_000);
   const again = await sub.start(quick, undefined, { id: "q" });

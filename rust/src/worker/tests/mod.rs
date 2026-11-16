@@ -242,6 +242,7 @@ async fn other_calls_than_the_history_fail_the_run() {
         occurrence: 0,
         attempt: 1,
         value: Some(json(b"1".to_vec()).unwrap()),
+        charges: Vec::new(),
     };
     h.history.push(layout::Event {
         kind: Some(Kind::Step(recorded)),
@@ -271,6 +272,7 @@ async fn inputs_and_errors_of_the_code() {
         kind: "Negative".into(),
         message: "x < 0".into(),
         retryable: false,
+        details: None,
     };
     let workflow = Workflow::new("typed", move |_c, input: Input| async move {
         if input.x < 0 {

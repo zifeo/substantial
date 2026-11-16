@@ -95,9 +95,7 @@ async fn backup(c: s::Context, input: BackupInput) -> s::Result<Report> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let sub = s::Substantial::create("memory://backups")
-        .partitions(1)
-        .await?;
+    let sub = s::Substantial::create("memory://backups").await?;
     let worker = sub
         .worker((backup, verify))
         .preset(s::Preset::Script)

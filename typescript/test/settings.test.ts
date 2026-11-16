@@ -4,7 +4,6 @@ import { test } from "node:test";
 import {
   ConfigError,
   days,
-  FOREVER,
   hours,
   InvalidArgument,
   milliseconds,
@@ -26,7 +25,7 @@ test("presets differ where the table says", () => {
   assert.deepEqual([script.shutdownGrace, service.shutdownGrace], [seconds(5), seconds(25)]);
   assert.deepEqual(script.continueAsNewAfter, { segments: 1000, bytes: 8 * 1024 * 1024 });
   assert.deepEqual(script.wait, seconds(20));
-  assert.equal(script.duePage, 100);
+  assert.equal(script.duePage, 1000);
   assert.deepEqual([script.stepTimeout, service.stepTimeout], [minutes(5), minutes(5)]);
   assert.deepEqual([script.retention, service.retention], [days(30), days(30)]);
 });
@@ -47,13 +46,10 @@ test("overrides replace and refuse", () => {
   assert.equal(s.concurrency, 4);
   assert.deepEqual(s.commitEvery, milliseconds(250));
   assert.deepEqual(s.continueAsNewAfter, { segments: 0, bytes: 0 });
-  assert.equal(
-    resolveSettings({ preset: "script", retention: FOREVER }, false, false).retention,
-    FOREVER,
+  assert.deepEqual(
+    resolveSettings({ preset: "script", retention: days(400) }, false, false).retention,
+    days(400),
   );
-  // As another loaded copy of the package names it.
-  const theirs = { preset: "script", retention: Symbol.for("substantial.forever") } as const;
-  assert.equal(resolveSettings(theirs as never, false, false).retention, FOREVER);
   const lowered = { preset: "script", retention: minutes(30), retentionMin: minutes(10) } as const;
   assert.deepEqual(resolveSettings(lowered, false, true).retention, minutes(30));
   const refused: Record<string, unknown>[] = [

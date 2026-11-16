@@ -41,56 +41,29 @@ impl StoreRetry {
     }
 }
 
-/// How long a run is kept after its chain's last run ends, then collected (I-16): a duration of
-/// at least an hour and at most 100 years, or [`FOREVER`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Retention {
-    For(Duration),
-    Forever,
+/// Refuses a retention, how long a run is kept after its chain's last run ends (I-16), under `min`
+/// or over 100 years.
+pub(crate) fn check_retention(retention: Duration, min: Duration, what: &str) -> Result<()> {
+    if retention < min {
+        return Err(Error::ConfigError(format!(
+            "{what} must be at least {} ms, not {} ms",
+            millis(min),
+            retention.as_millis()
+        )));
+    }
+    if retention > RETENTION_MAX {
+        return Err(Error::ConfigError(format!(
+            "{what} must be at most {} ms, not {} ms",
+            millis(RETENTION_MAX),
+            retention.as_millis()
+        )));
+    }
+    Ok(())
 }
 
-/// A run kept until its namespace is deleted.
-pub const FOREVER: Retention = Retention::Forever;
-
-impl From<Duration> for Retention {
-    fn from(d: Duration) -> Self {
-        Retention::For(d)
-    }
-}
-
-impl std::fmt::Display for Retention {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Retention::For(d) => write!(f, "{}ms", millis(*d)),
-            Retention::Forever => f.write_str("forever"),
-        }
-    }
-}
-
-impl Retention {
-    pub(crate) fn check(&self, min: Duration, what: &str) -> Result<()> {
-        match self {
-            Retention::For(d) if *d < min => Err(Error::ConfigError(format!(
-                "{what} must be at least {} ms or forever, not {} ms",
-                millis(min),
-                d.as_millis()
-            ))),
-            Retention::For(d) if *d > RETENTION_MAX => Err(Error::ConfigError(format!(
-                "{what} must be at most {} ms or forever, not {} ms",
-                millis(RETENTION_MAX),
-                d.as_millis()
-            ))),
-            _ => Ok(()),
-        }
-    }
-
-    pub(crate) fn proto(&self) -> b::Retention {
-        b::Retention {
-            keep: Some(match self {
-                Retention::For(d) => b::retention::Keep::Ms(millis(*d)),
-                Retention::Forever => b::retention::Keep::Forever(b::Empty {}),
-            }),
-        }
+pub(crate) fn retention_proto(retention: Duration) -> b::Retention {
+    b::Retention {
+        ms: millis(retention),
     }
 }
 
@@ -115,7 +88,7 @@ pub(crate) struct Settings {
     pub(crate) continue_as_new_after: ContinueAsNewAfter,
     pub(crate) dedup_window: Duration,
     pub(crate) step_timeout: Duration,
-    pub(crate) retention: Retention,
+    pub(crate) retention: Duration,
     pub(crate) tombstone: Duration,
     pub(crate) retention_min: Duration,
     pub(crate) recheck: Duration,
@@ -136,8 +109,8 @@ pub(crate) const PUBLIC: [&str; 7] = [
 /// half of (I-17).
 pub(crate) const RETENTION_MIN: Duration = hours(1);
 
-/// The longest retention, 100 years; longer is [`FOREVER`]. A collection's due key names its year
-/// in 4 digits, which far longer retentions would pass.
+/// The longest retention, 100 years. A collection's due key names its year in 4 digits, which far
+/// longer retentions would pass.
 pub(crate) const RETENTION_MAX: Duration = days(36_500);
 
 /// The retries of every store (I-26).
@@ -166,7 +139,7 @@ impl Settings {
                 (true, true) => minutes(5),
             },
             wait: seconds(20),
-            due_page: 100,
+            due_page: 1000,
             due_pages: 10,
             snapshot_every: 64,
             continue_as_new_after: ContinueAsNewAfter {
@@ -175,7 +148,7 @@ impl Settings {
             },
             dedup_window: days(7),
             step_timeout: minutes(5),
-            retention: Retention::For(days(30)),
+            retention: days(30),
             tombstone: days(7),
             retention_min: RETENTION_MIN,
             recheck: days(1),
@@ -197,7 +170,7 @@ impl Settings {
     ///
     /// Durations take a unit (`100ms`, `5s`, `10min`, `1h`, `7d`), sizes too (`64KiB`, `8MiB`);
     /// `continue_as_new_after` is `segments,size`, or `0` to compress at every boundary;
-    /// `retention` a duration or `forever`.
+    /// `retention` a duration.
     pub(crate) fn apply(&mut self, name: &str, value: &str) -> Result<()> {
         let invalid = |e: Error| match e {
             Error::ConfigError(message) => Error::ConfigError(format!("setting {name}: {message}")),
@@ -229,12 +202,7 @@ impl Settings {
             }
             "dedup_window" => self.dedup_window = duration(value).map_err(invalid)?,
             "step_timeout" => self.step_timeout = duration(value).map_err(invalid)?,
-            "retention" => {
-                self.retention = match value.trim() {
-                    "forever" => Retention::Forever,
-                    _ => Retention::For(duration(value).map_err(invalid)?),
-                }
-            }
+            "retention" => self.retention = duration(value).map_err(invalid)?,
             "tombstone" => self.tombstone = duration(value).map_err(invalid)?,
             "retention_min" => self.retention_min = duration(value).map_err(invalid)?,
             "recheck" => self.recheck = duration(value).map_err(invalid)?,
@@ -268,7 +236,7 @@ impl Settings {
         if self.tombstone.is_zero() || self.retention_min.is_zero() || self.recheck.is_zero() {
             return invalid("tombstone, retention_min and recheck");
         }
-        self.retention.check(self.retention_min, "retention")?;
+        check_retention(self.retention, self.retention_min, "retention")?;
         if self.wait.subsec_nanos() != 0 || !(1..=20).contains(&self.wait.as_secs()) {
             return Err(Error::ConfigError(
                 "wait must be whole seconds from 1 s to 20 s".into(),
@@ -353,8 +321,8 @@ mod tests {
             (script.step_timeout, service.step_timeout),
             (minutes(5), minutes(5))
         );
-        assert_eq!(script.retention, Retention::For(days(30)));
-        assert_eq!(service.retention, Retention::For(days(30)));
+        assert_eq!(script.retention, days(30));
+        assert_eq!(service.retention, days(30));
     }
 
     #[test]
@@ -385,13 +353,15 @@ mod tests {
             s.set("step_timeout", "0s"),
             Err(Error::ConfigError(_))
         ));
-        s.set("retention", "forever").unwrap();
-        assert_eq!(s.retention, FOREVER);
+        assert!(matches!(
+            s.set("retention", "forever"),
+            Err(Error::ConfigError(_))
+        ));
         s.set("retention", "90d").unwrap();
-        assert_eq!(s.retention, Retention::For(days(90)));
+        assert_eq!(s.retention, days(90));
         assert_eq!(
             s.set("retention", "59min").unwrap_err().to_string(),
-            "config error: retention must be at least 3600000 ms or forever, not 3540000 ms"
+            "config error: retention must be at least 3600000 ms, not 3540000 ms"
         );
         assert!(matches!(
             "daemon".parse::<Preset>(),

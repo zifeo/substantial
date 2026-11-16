@@ -108,6 +108,13 @@ impl State {
         }
     }
 
+    /// The deadlines the tasks of workers not paused wait on.
+    fn deadlines(&self) -> impl Iterator<Item = i64> + '_ {
+        (self.tasks.values())
+            .filter(|t| !t.owner.paused())
+            .filter_map(|t| t.waiter.as_ref().and_then(|w| w.at))
+    }
+
     /// The real time left to the oldest step body running.
     fn budget(&self) -> Option<Duration> {
         let oldest = self.bodies.values().map(|(_, started)| *started).min()?;
@@ -282,6 +289,39 @@ impl Time {
         let _settling = self.settling.lock().await;
         let target = self.now() + by;
         self.settled().await?;
+        self.move_to(target, &mut skip).await
+    }
+
+    /// Settles, then moves the clock from deadline to deadline until `done()`; `Stuck` once
+    /// `paused()`, or when no task waits on a deadline.
+    pub(super) async fn until_done(
+        &self,
+        paused: impl Fn() -> bool,
+        done: impl Fn() -> bool,
+        what: &str,
+        mut skip: impl FnMut(&mut State, i64),
+    ) -> Result<()> {
+        outside()?;
+        let _settling = self.settling.lock().await;
+        self.settled().await?;
+        while !done() {
+            if paused() {
+                return Err(Error::Stuck(format!(
+                    "{what} cannot end: its worker is paused"
+                )));
+            }
+            let Some(next) = self.lock().deadlines().min() else {
+                return Err(Error::Stuck(format!(
+                    "{what} cannot end: nothing it waits on can come"
+                )));
+            };
+            self.move_to(next, &mut skip).await?;
+        }
+        Ok(())
+    }
+
+    /// Moves to each deadline up to `target`, settling there.
+    async fn move_to(&self, target: i64, skip: &mut impl FnMut(&mut State, i64)) -> Result<()> {
         loop {
             {
                 let mut st = self.lock();
@@ -289,10 +329,7 @@ impl Time {
                     return Ok(());
                 }
                 skip(&mut st, target);
-                let deadlines = (st.tasks.values())
-                    .filter(|t| !t.owner.paused())
-                    .filter_map(|t| t.waiter.as_ref().and_then(|w| w.at));
-                let next = deadlines.fold(target, i64::min);
+                let next = st.deadlines().fold(target, i64::min);
                 if next <= st.ms {
                     return Err(Error::Protocol(format!(
                         "a deadline at {next} ms is not after now, {} ms",

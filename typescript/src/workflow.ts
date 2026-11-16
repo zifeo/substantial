@@ -1,11 +1,12 @@
 // Workflows (I-5), the retry policy and permanent errors of steps (I-6).
 import { create } from "@bufbuild/protobuf";
 import type { Context } from "./context.ts";
+import { type Budget, budgetProto } from "./cost.ts";
 import { Duration } from "./durations.ts";
 import { ConfigError, InvalidArgument, onlyOptions } from "./errors.ts";
 import { checkKey } from "./names.ts";
 import { run } from "./proto.ts";
-import { checkRetention, FOREVER, type Retention } from "./settings.ts";
+import { checkRetention } from "./settings.ts";
 
 const U32 = 2 ** 32;
 
@@ -55,7 +56,9 @@ export interface WorkflowOptions {
   /** The timeout of each attempt of its steps without their own, over the worker's. */
   readonly stepTimeout?: Duration;
   /** How long its runs are kept after their chain ends, over the worker's `retention`. */
-  readonly retention?: Retention;
+  readonly retention?: Duration;
+  /** The budget of its runs started without one of their own (I-28). */
+  readonly budget?: Budget;
 }
 
 export type WorkflowFn<I, O> = (c: Context, input: I) => O | PromiseLike<O>;
@@ -65,14 +68,15 @@ export class Workflow<I = Record<string, never>, O = unknown> {
   readonly name: string;
   readonly version: number | undefined;
   readonly stepTimeout: Duration | undefined;
-  readonly retention: Retention | undefined;
+  readonly retention: Duration | undefined;
+  readonly budget: Budget | undefined;
   readonly fn: WorkflowFn<I, O>;
 
   constructor(name: string, fn: WorkflowFn<I, O>, options: WorkflowOptions = {}) {
     checkKey("workflow name", name);
     if (typeof fn !== "function") throw new InvalidArgument(`a workflow is a function, not ${fn}`);
-    onlyOptions(options, ["version", "stepTimeout", "retention"], "workflow");
-    const { version, stepTimeout, retention } = options;
+    onlyOptions(options, ["version", "stepTimeout", "retention", "budget"], "workflow");
+    const { version, stepTimeout, retention, budget } = options;
     if (version !== undefined && (!Number.isInteger(version) || version < 0 || version >= U32)) {
       throw new InvalidArgument(`a workflow version is an integer in [0, 2**32), not ${version}`);
     }
@@ -81,15 +85,15 @@ export class Workflow<I = Record<string, never>, O = unknown> {
         `a workflow's stepTimeout is a positive Duration, not ${stepTimeout}`,
       );
     }
-    if (retention !== undefined && retention !== FOREVER && !(retention instanceof Duration)) {
-      throw new InvalidArgument(
-        `a workflow's retention is a Duration or s.FOREVER, not ${String(retention)}`,
-      );
+    if (retention !== undefined && !(retention instanceof Duration)) {
+      throw new InvalidArgument(`a workflow's retention is a Duration, not ${String(retention)}`);
     }
+    if (budget !== undefined) budgetProto(budget);
     this.name = name;
     this.version = version;
     this.stepTimeout = stepTimeout;
     this.retention = retention;
+    this.budget = budget === undefined ? undefined : Object.freeze({ ...budget });
     this.fn = fn;
   }
 
@@ -98,7 +102,8 @@ export class Workflow<I = Record<string, never>, O = unknown> {
   }
 }
 
-/** `workflow("name", fn, { version, stepTimeout, retention })`: the name is given, as bundlers rename functions. */
+/** `workflow("name", fn, { version, stepTimeout, retention, budget })`: the name is given, as
+ * bundlers rename functions. */
 export function workflow<I = Record<string, never>, O = unknown>(
   name: string,
   fn: WorkflowFn<I, O>,
@@ -128,7 +133,7 @@ export class Workflows {
     }
     if (this.#byKey.size === 0) throw new ConfigError("a worker needs at least one workflow");
     // The core keeps one retention per name.
-    const retentions = new Map<string, Retention | undefined>();
+    const retentions = new Map<string, Duration | undefined>();
     for (const w of this.#byKey.values()) {
       const what = `the retention of workflow ${JSON.stringify(w.name)}`;
       if (w.retention !== undefined) checkRetention(w.retention, retentionMin, what);
@@ -155,7 +160,7 @@ export class Workflows {
     name: string;
     versions: number[];
     unversioned: boolean;
-    retention: Retention | undefined;
+    retention: Duration | undefined;
   }[] {
     const all = [...this.#byKey.values()];
     const names = [...new Set(all.map((w) => w.name))].sort();
@@ -173,6 +178,6 @@ export class Workflows {
   }
 }
 
-function sameRetention(a: Retention | undefined, b: Retention | undefined): boolean {
-  return a instanceof Duration && b instanceof Duration ? a.ms === b.ms : a === b;
+function sameRetention(a: Duration | undefined, b: Duration | undefined): boolean {
+  return a?.ms === b?.ms;
 }

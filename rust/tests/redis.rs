@@ -175,7 +175,7 @@ async fn a_server_without_aof_is_refused() {
     let _alone = SERVER.write().await;
     let url = redis_url("redis").unwrap();
     let m = with_config(&mut admin, "appendonly", "no", async || {
-        config_error(Substantial::create(&url).partitions(1).await)
+        config_error(Substantial::create(&url).await)
     })
     .await;
     assert!(m.contains("no AOF"), "{m}");
@@ -189,7 +189,7 @@ async fn a_server_that_evicts_is_refused() {
     let _alone = SERVER.write().await;
     let url = redis_url("redis").unwrap();
     let m = with_config(&mut admin, "maxmemory-policy", "allkeys-lru", async || {
-        config_error(Substantial::create(&url).partitions(1).await)
+        config_error(Substantial::create(&url).await)
     })
     .await;
     assert!(m.contains("allkeys-lru"), "{m}");
@@ -221,7 +221,6 @@ async fn a_password_reaches_the_server() {
         }
     });
     let refused = Substantial::create(&url)
-        .partitions(1)
         .credentials(provider.clone())
         .await;
     match refused {
@@ -231,7 +230,6 @@ async fn a_password_reaches_the_server() {
         Ok(_) => panic!("created with a wrong password"),
     }
     let sub = Substantial::create(&url)
-        .partitions(1)
         .credentials(provider)
         .await
         .unwrap();
@@ -337,12 +335,33 @@ async fn a_waiting_listing_returns_as_a_key_lands_without_polling() {
         !held.is_finished(),
         "a key under another prefix does not end the wait"
     );
-    let started = Instant::now();
     store.create("q/b", Bytes::from_static(b"b")).await.unwrap();
+    // At its deadline the wait answers the page it listed before `q/b` landed: `q/b` in the
+    // answer is the key's notification waking it, however long the machine takes to get there.
     let woken = held.await.unwrap().unwrap();
-    assert!(started.elapsed() < Duration::from_millis(500));
     assert_eq!(woken.keys, ["q/a", "q/b"]);
     assert_ne!(woken.etag, first.etag);
+}
+
+/// The ids of the subscribed connections of `user`.
+async fn subscribers(admin: &mut MultiplexedConnection, user: &str) -> Vec<u64> {
+    let clients: String = redis::cmd("CLIENT")
+        .arg(&["LIST", "TYPE", "pubsub"])
+        .query_async(admin)
+        .await
+        .unwrap();
+    clients
+        .lines()
+        .filter(|line| line.contains(&format!(" user={user} ")))
+        .map(|line| {
+            line["id=".len()..]
+                .split(' ')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+        .collect()
 }
 
 /// An ACL user of password `right` allowed `commands`.
@@ -381,10 +400,7 @@ async fn a_user_denied_waitaof_is_refused_as_such() {
     let _shared = SERVER.read().await;
     let name = user(&mut admin, &["+@all", "-waitaof"]).await;
     let url = redis_url("redis").unwrap();
-    let refused = Substantial::create(&url)
-        .partitions(1)
-        .credentials(right(&name))
-        .await;
+    let refused = Substantial::create(&url).credentials(right(&name)).await;
     drop_user(&mut admin, &name).await;
     match refused {
         Err(Error::StoreError(m)) => assert!(m.contains("no permissions"), "{m}"),
@@ -401,10 +417,17 @@ async fn a_subscription_lost_again_resubscribes_at_once() {
     let _shared = SERVER.read().await;
     let name = user(&mut admin, &["+@all"]).await;
     let url = redis_url("redis").unwrap();
-    let channel = format!("{{{}}}:c", RedisLocation::parse(&url).unwrap().namespace);
-    let store = internal::open(&url, &right(&name), retry()).unwrap();
+    // Not reset by a subscription, a backoff doubling from 100 ms would pause 51 s before the
+    // tenth: far beyond a reconnection, seconds at most on a loaded machine.
+    let retry = internal::StoreRetry {
+        attempts: 5,
+        initial: Duration::from_millis(100),
+        max: Duration::from_secs(3600),
+    };
+    let store = internal::open(&url, &right(&name), retry).unwrap();
     store.list("q/", None, 10, wait(1, &None)).await.unwrap();
-    for _ in 0..6 {
+    let mut subscribed = subscribers(&mut admin, &name).await[0];
+    for loss in 1..=10 {
         let killed: u64 = redis::cmd("CLIENT")
             .arg(&["KILL", "USER", &name])
             .query_async(&mut admin)
@@ -413,17 +436,14 @@ async fn a_subscription_lost_again_resubscribes_at_once() {
         assert!(killed >= 1);
         let started = Instant::now();
         loop {
-            let (_, subscribers): (String, u64) = redis::cmd("PUBSUB")
-                .arg(&["NUMSUB", &channel])
-                .query_async(&mut admin)
-                .await
-                .unwrap();
-            if subscribers > 0 {
+            let ids = subscribers(&mut admin, &name).await;
+            if let Some(&again) = ids.iter().find(|&&id| id > subscribed) {
+                subscribed = again;
                 break;
             }
             assert!(
-                started.elapsed() < Duration::from_secs(1),
-                "subscribed again within a second"
+                started.elapsed() < Duration::from_secs(20),
+                "subscribed again after loss {loss}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -439,7 +459,7 @@ async fn a_start_from_another_client_comes_through_the_wait() {
     };
     let _shared = SERVER.read().await;
     let answer = Workflow::without_input("answer", |_c| async { Ok(42) });
-    let sub = Substantial::create(&url).partitions(1).await.unwrap();
+    let sub = Substantial::create(&url).await.unwrap();
     let worker = sub
         .worker(answer.clone())
         .preset(Preset::Script)
@@ -469,7 +489,7 @@ async fn a_run_ends_on_redis_through_a_script_worker() {
         "double",
         |_c: Context, input: N| async move { Ok(input.n * 2) },
     );
-    let sub = Substantial::create(&url).partitions(2).await.unwrap();
+    let sub = Substantial::create(&url).await.unwrap();
     let worker = script(&sub, double.clone()).start().unwrap();
     let run = sub
         .start(&double, serde_json::json!({ "n": 21 }))

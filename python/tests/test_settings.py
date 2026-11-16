@@ -6,7 +6,6 @@ from datetime import timedelta
 import pytest
 
 from substantial import (
-    FOREVER,
     ConfigError,
     ContinueAsNewAfter,
     Substantial,
@@ -39,10 +38,10 @@ def test_override_replaces_and_refuses() -> None:
         claim_ttl=seconds(40),
         continue_as_new_after=0,
         step_timeout=seconds(30),
-        retention=FOREVER,
+        retention=days(400),
     )
     assert s.step_timeout == seconds(30)
-    assert s.retention is FOREVER
+    assert s.retention == days(400)
     assert s.override(retention=days(90)).retention == days(90)
     assert (s.concurrency, s.max_idle, s.shutdown_grace) == (4, seconds(2), seconds(3))
     assert s.claim_ttl == seconds(40)
@@ -75,7 +74,7 @@ async def test_a_worker_refuses_the_settings_of_the_preset_only() -> None:
     async def example(c) -> None:
         return None
 
-    sub = await Substantial.create("memory://settings-hidden", partitions=1)
+    sub = await Substantial.create("memory://settings-hidden")
     for name in [
         "commit_every",
         "claim_skew",

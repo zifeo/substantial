@@ -6,6 +6,7 @@ import logging
 
 from substantial._proto import boundary
 from substantial.errors import ConfigError
+from substantial.stores.attempts import measured
 from substantial.stores.base import (
     Capabilities,
     Create,
@@ -69,10 +70,11 @@ def open_store(url: str, credentials: CredentialsArg) -> Store:
         try:
             from substantial.stores.s3_store import S3Store
         except ModuleNotFoundError as e:
-            if e.name is None or e.name.partition(".")[0] != "aiobotocore":
+            if e.name is None or e.name.partition(".")[0] not in ("aiohttp", "botocore", "yarl"):
                 raise
             raise ConfigError(
-                f'{url!r} needs aiobotocore, which `pip install "substantial[s3]"` installs'
+                f'{url!r} needs aiohttp and botocore, which `pip install "substantial[s3]"` '
+                "installs"
             ) from e
         return S3Store(location, credentials)
     if url.startswith(tuple(f"{scheme}://" for scheme in REDIS_SCHEMES)):
@@ -128,7 +130,15 @@ async def _perform(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
 
 
 async def perform(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
-    """Performs one `StoreOp` of the core and answers with its `OpResult`."""
+    """Performs one `StoreOp` of the core and answers with its `OpResult`, with the requests the
+    adapter sent."""
+    with measured() as sent:
+        result = await _perform_once(store, op)
+    result.attempts = sent.n
+    return result
+
+
+async def _perform_once(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
     try:
         return await _perform(store, op)
     except StoreFailure as e:

@@ -8,36 +8,24 @@ const U32 = 0xffff_ffff;
 export const PRESETS = ["script", "service"] as const;
 export type Preset = (typeof PRESETS)[number];
 
-/** A run kept until its namespace is deleted; registered with `Symbol.for`, so that two loaded
- * copies of the package agree on it. */
-export const FOREVER: unique symbol = Symbol.for("substantial.forever");
-
-/** How long a run is kept after its chain's last run ends, then collected (I-16). */
-export type Retention = Duration | typeof FOREVER;
-
 /** The least retention of the presets; a `result` wait follows its chain again within half of
  * it. */
 export const RETENTION_MIN = hours(1);
 
-/** The longest retention, 100 years; longer is `FOREVER`. A collection's due key names its year
- * in 4 digits, which far longer retentions would pass. */
+/** The longest retention, 100 years. A collection's due key names its year in 4 digits, which
+ * far longer retentions would pass. */
 export const RETENTION_MAX = days(36_500);
 
-/** Refuses a retention that is neither a Duration from `minimum` to `RETENTION_MAX` nor `FOREVER`. */
+/** Refuses a retention that is not a Duration from `minimum` to `RETENTION_MAX`. */
 export function checkRetention(retention: unknown, minimum: Duration, what: string): void {
-  if (retention === FOREVER) return;
   if (!(retention instanceof Duration)) {
-    throw new ConfigError(`${what} must be a Duration or s.FOREVER, not ${String(retention)}`);
+    throw new ConfigError(`${what} must be a Duration, not ${String(retention)}`);
   }
   if (retention.ms < minimum.ms) {
-    throw new ConfigError(
-      `${what} must be at least ${minimum.ms} ms or forever, not ${retention.ms} ms`,
-    );
+    throw new ConfigError(`${what} must be at least ${minimum.ms} ms, not ${retention.ms} ms`);
   }
   if (retention.ms > RETENTION_MAX.ms) {
-    throw new ConfigError(
-      `${what} must be at most ${RETENTION_MAX.ms} ms or forever, not ${retention.ms} ms`,
-    );
+    throw new ConfigError(`${what} must be at most ${RETENTION_MAX.ms} ms, not ${retention.ms} ms`);
   }
 }
 
@@ -70,7 +58,7 @@ export interface Settings {
   readonly continueAsNewAfter: ContinueAsNewAfter;
   readonly dedupWindow: Duration;
   readonly stepTimeout: Duration;
-  readonly retention: Retention;
+  readonly retention: Duration;
   readonly tombstone: Duration;
   readonly retentionMin: Duration;
   readonly recheck: Duration;
@@ -89,8 +77,8 @@ export interface WorkerOptions {
   /** Whichever of the two the history passes first. */
   readonly continueAsNewAfter?: { readonly segments: number; readonly bytes: number } | 0;
   /** How long a run is kept after its chain ends, unless its workflow gives one: at least an
-   * hour and at most 100 years, or `FOREVER`. */
-  readonly retention?: Retention;
+   * hour and at most 100 years. */
+  readonly retention?: Duration;
 }
 
 const PUBLIC = [
@@ -131,7 +119,7 @@ export function presetSettings(preset: Preset, waitingStore: boolean): Settings 
     claimSkew: seconds(5),
     maxIdle: !service ? seconds(1) : waitingStore ? minutes(5) : seconds(30),
     wait: seconds(20),
-    duePage: 100,
+    duePage: 1000,
     duePages: 10,
     snapshotEvery: 64,
     continueAsNewAfter: { segments: 1000, bytes: 8 * MIB },

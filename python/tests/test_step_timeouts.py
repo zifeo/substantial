@@ -70,7 +70,7 @@ async def longer(c: Context, own: float | None = None) -> str:
 async def test_a_step_timeout_is_its_own_else_its_workflow_s_else_its_worker_s(
     w: Workflow, own: float | None, expected: str
 ) -> None:
-    sub = await Substantial._create(MemoryStore(f"timeouts-{secrets.token_hex(4)}"), partitions=1)
+    sub = await Substantial._create(MemoryStore(f"timeouts-{secrets.token_hex(4)}"))
     async with script(sub, [w], step_timeout=SHORT):
         run = await sub.start(w, {"own": own})
         assert await run.result(timeout=LONG) == expected
@@ -128,7 +128,7 @@ async def test_a_failed_run_holds_the_cause_of_the_step_that_failed_it() -> None
             return [e.error.type, e.cause.type, e.cause.message, e.cause.retryable]
         raise AssertionError("the child did not fail")
 
-    sub = await Substantial._create(MemoryStore(f"causes-{secrets.token_hex(4)}"), partitions=1)
+    sub = await Substantial._create(MemoryStore(f"causes-{secrets.token_hex(4)}"))
     async with script(sub, [paying, refusing, ordering]):
         with pytest.raises(RunFailed) as paid:
             await (await sub.start(paying)).result(timeout=LONG)
@@ -178,7 +178,7 @@ async def test_a_timed_out_async_step_is_interrupted() -> None:
             return e.cause.type
         return "returned"
 
-    sub = await Substantial._create(MemoryStore(f"hang-{secrets.token_hex(4)}"), partitions=1)
+    sub = await Substantial._create(MemoryStore(f"hang-{secrets.token_hex(4)}"))
     async with script(sub, [hanging]):
         assert await (await sub.start(hanging)).result(timeout=LONG) == "StepTimeout"
     await asyncio.sleep(0.6)
@@ -197,7 +197,7 @@ async def test_an_uninterruptible_step_runs_to_its_end_with_its_outcome_dropped(
     async def blocking(c: Context) -> str:
         return await c.step("block", block, timeout=SHORT)
 
-    sub = await Substantial._create(MemoryStore(f"block-{secrets.token_hex(4)}"), partitions=1)
+    sub = await Substantial._create(MemoryStore(f"block-{secrets.token_hex(4)}"))
     async with script(sub, [blocking]):
         with pytest.raises(RunFailed) as failed:
             await (await sub.start(blocking)).result(timeout=LONG)

@@ -73,7 +73,7 @@ async def backup(c: s.Context, source: str, target: str) -> dict:
 
 async def main(url: str) -> dict:
     async with (
-        s.Substantial.create(url, partitions=1) as sub,
+        s.Substantial.create(url) as sub,
         sub.worker([backup, verify], preset="script"),
     ):
         run = await sub.start(

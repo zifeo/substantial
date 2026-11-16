@@ -56,7 +56,7 @@ async def test_a_rollback_undoes_every_step_most_recent_first(store: Store) -> N
         await undoable(c, log, "c", 1, "x")
         await c.rollback("why")
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     error = await rolled_back(sub, rolling)
     assert (error.type, error.message) == ("RolledBack", "why")
     assert log == [["c", 1, "x"], "a"]
@@ -84,7 +84,7 @@ async def test_a_saga_undoes_its_own_steps_then_raises_again(store: Store) -> No
             await c.step("fine", lambda: None)
         await c.rollback("after the saga")
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     error = await rolled_back(sub, saga)
     assert error.type == "RolledBack", error
     assert log == ["c", "b", "a"]
@@ -103,7 +103,7 @@ async def test_an_undo_without_attempts_left_fails_the_run(store: Store) -> None
         await charge("visa")
         await c.rollback("fraud")
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     error = await rolled_back(sub, stuck)
     assert error.type == "UndoFailed", error
     assert "charge.undo" in error.message, error
@@ -124,7 +124,7 @@ async def test_a_step_of_a_saga_that_ended_is_invalid(store: Store) -> None:
             return "refused"
         return "accepted"
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [late]):
         run = await sub.start(late)
         assert await run.result(timeout=LONG) == "refused"
@@ -152,7 +152,7 @@ async def test_an_inner_saga_ended_hands_its_steps_to_the_outer_one(store: Store
             raise AssertionError("the saga did not raise again")
         await c.rollback("after")
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     error = await rolled_back(sub, nested)
     assert error.type == "RolledBack", error
     assert log == ["c", "b", "a", "z"]

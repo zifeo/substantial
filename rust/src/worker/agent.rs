@@ -10,26 +10,34 @@ use std::time::Duration;
 use futures::FutureExt;
 
 use super::Wakes;
-use super::replay::ToReplay;
+use super::replay::{Host, ToReplay};
 use super::replays::Replays;
 use crate::clock::{Clock, Inbox, Ready, Task, Tasks};
 use crate::core::{AgentMachine, Core};
+use crate::cost::Prices;
 use crate::error::{Error, Result};
-use crate::proto::boundary::v1::{self as b, agent_command::Command, op_result, replay_end};
-use crate::settings::Settings;
+use crate::observe::{self, Metering, Observed};
+use crate::proto::boundary::v1::{self as b, ErrorKind, agent_command::Command, replay_end};
+use crate::proto::layout::v1 as layout;
+use crate::settings::{Settings, retention_proto};
 use crate::store::{self, Store};
 use crate::time::millis;
 use crate::workflow::Workflows;
 
 /// What the agent loop of a worker waits on: store answers, replays, and the process.
 pub(crate) enum Event {
-    Feed(u64, op_result::Result),
-    Commit(String, b::Commit),
+    Feed(u64, b::OpResult),
+    Commit(String, Box<b::Commit>),
     Ended(String, replay_end::End),
+    /// A full scan.
     Wake,
+    /// A scan of this workflow's due entries alone.
+    WakeWorkflow(String),
     /// Starts no new replay, and stops those still running after this grace.
     Shutdown(Duration),
-    /// A store operation panicked, a bug that kills the worker.
+    /// Serves the entries due by this time, in ms, then stops.
+    Drain(i64),
+    /// A store operation or an observer panicked, a bug that kills the worker.
     Panicked(String),
 }
 
@@ -44,15 +52,24 @@ pub(crate) struct Agent {
 }
 
 impl Agent {
-    /// Wakes the agent at once, as after a message sent from this process.
+    /// Wakes the agent at once for a full scan.
     pub(crate) fn wake(&self) {
         if !self.wake_pending.swap(true, Ordering::SeqCst) {
             self.events.push(Event::Wake);
         }
     }
 
+    /// Wakes the agent at once on `workflow`, as after a start or a send from this process.
+    pub(crate) fn wake_workflow(&self, workflow: &str) {
+        self.events.push(Event::WakeWorkflow(workflow.to_owned()));
+    }
+
     pub(crate) fn shutdown(&self, grace: Duration) {
         self.events.push(Event::Shutdown(grace));
+    }
+
+    pub(crate) fn drain(&self, until: i64) {
+        self.events.push(Event::Drain(until));
     }
 
     #[cfg(feature = "testing")]
@@ -65,6 +82,10 @@ impl Wakes for Agent {
     fn wake(&self) {
         Agent::wake(self);
     }
+
+    fn wake_workflow(&self, workflow: &str) {
+        Agent::wake_workflow(self, workflow);
+    }
 }
 
 /// An agent loop on its task.
@@ -73,6 +94,7 @@ pub(crate) struct Running {
     pub(crate) task: Task<Result<()>>,
     /// The worker's `shutdown_grace`.
     pub(super) grace: Duration,
+    clock: Clock,
 }
 
 impl Running {
@@ -80,6 +102,13 @@ impl Running {
         self.agent.shutdown(grace);
         self.task.returned().await;
         self.ended()
+    }
+
+    /// Asks the agent to drain within `within` of now, without waiting for it.
+    pub(crate) fn drain(&self, within: Duration) -> i64 {
+        let until = self.clock.now().ms + i64::try_from(millis(within)).expect("ms fit in i64");
+        self.agent.drain(until);
+        until
     }
 
     pub(crate) fn ended(&self) -> Result<()> {
@@ -114,13 +143,14 @@ impl Drop for Running {
 pub(crate) struct Launch<'a> {
     pub(crate) store: Arc<dyn Store>,
     pub(crate) workflows: &'a Workflows,
-    pub(crate) partitions: u32,
     pub(crate) settings: &'a Settings,
     pub(crate) died: OnDeath,
     pub(crate) clock: Clock,
     pub(crate) id: String,
     /// The core's seed, each replay's derived from it.
     pub(crate) seed: Vec<u8>,
+    /// The `Substantial`'s prices and observer; `store` is observed already.
+    pub(crate) metering: Metering,
 }
 
 impl Launch<'_> {
@@ -130,20 +160,32 @@ impl Launch<'_> {
         let config = agent_config(
             &self.id,
             self.workflows,
-            self.partitions,
             self.store.capabilities().wait,
             self.settings,
             self.seed,
+            self.metering.prices.as_ref(),
         );
         let core = Core::new()?;
-        let machine = AgentMachine::new(&core, &config)?;
+        // The config is the worker's: one the core refuses, such as prices in a currency outside
+        // ISO 4217, is a ConfigError where the worker starts.
+        let machine = AgentMachine::new(&core, &config).map_err(|e| match e {
+            Error::Core {
+                kind: ErrorKind::Invalid,
+                message,
+            } => Error::ConfigError(message),
+            other => other,
+        })?;
         let agent = Arc::new(Agent::default());
-        let replays = Replays::new(
+        let host = Host {
             core,
-            self.store.clone(),
+            store: self.store.clone(),
+            clock: self.clock.clone(),
+            metering: self.metering.clone(),
+        };
+        let replays = Replays::new(
+            host,
             self.workflows.clone(),
             self.settings.step_timeout,
-            self.clock.clone(),
             agent.events.clone(),
         );
         let looped = AgentLoop {
@@ -152,6 +194,7 @@ impl Launch<'_> {
             replays,
             clock: self.clock.clone(),
             agent: agent.clone(),
+            metering: self.metering,
         };
         let (id, died) = (self.id.clone(), self.died);
         let looped = async move {
@@ -170,12 +213,16 @@ impl Launch<'_> {
         let task = self
             .clock
             .spawn_then(format_args!("worker {}", self.id), looped, ended);
-        let grace = self.settings.shutdown_grace;
-        Ok(Running { agent, task, grace })
+        Ok(Running {
+            agent,
+            task,
+            grace: self.settings.shutdown_grace,
+            clock: self.clock,
+        })
     }
 }
 
-pub(super) fn panicked(panic: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panicked(panic: &(dyn std::any::Any + Send)) -> String {
     let message = panic
         .downcast_ref::<&str>()
         .copied()
@@ -201,10 +248,10 @@ pub(super) fn os_seed() -> Vec<u8> {
 fn agent_config(
     id: &str,
     workflows: &Workflows,
-    partitions: u32,
     store_waits: bool,
     s: &Settings,
     seed: Vec<u8>,
+    prices: Option<&Prices>,
 ) -> b::AgentConfig {
     let mut served: BTreeMap<&str, b::Served> = BTreeMap::new();
     for (name, version) in workflows.keys() {
@@ -212,7 +259,7 @@ fn agent_config(
             name: name.to_owned(),
             versions: Vec::new(),
             unversioned: Some(false),
-            retention: workflows.retention(name).map(|r| r.proto()),
+            retention: workflows.retention(name).map(retention_proto),
         });
         match version {
             Some(v) => s.versions.push(v),
@@ -228,7 +275,6 @@ fn agent_config(
         .collect();
     b::AgentConfig {
         prefix: String::new(),
-        partitions,
         worker: id.to_owned(),
         workflows: served,
         concurrency: s.concurrency,
@@ -250,7 +296,8 @@ fn agent_config(
             continue_as_new_after_segments: s.continue_as_new_after.segments,
             continue_as_new_after_bytes: s.continue_as_new_after.bytes,
             dedup_window_ms: millis(s.dedup_window),
-            retention: Some(s.retention.proto()),
+            retention: Some(retention_proto(s.retention)),
+            prices: prices.map(Prices::to_proto),
         }),
     }
 }
@@ -261,6 +308,7 @@ struct AgentLoop {
     replays: Replays,
     clock: Clock,
     agent: Arc<Agent>,
+    metering: Metering,
 }
 
 impl AgentLoop {
@@ -284,10 +332,10 @@ impl AgentLoop {
                         });
                     }));
                 }
-                Command::Replay(b::agent_command::Replay { run, input }) => {
+                Command::Replay(b::agent_command::Replay { run, input, due_at }) => {
                     let input = input
                         .ok_or_else(|| Error::Protocol(format!("replay of {run} without input")))?;
-                    self.replays.spawn(run, input);
+                    self.replays.spawn(run, input, due_at);
                 }
                 Command::Committed(c) => self.replays.tell(
                     &c.run,
@@ -295,8 +343,16 @@ impl AgentLoop {
                         n: c.n,
                         won: c.won,
                         inbox: c.inbox,
+                        cost: c.cost,
                     },
                 ),
+                Command::Scanned(s) => {
+                    let scan = Observed::Scan(observe::Scan {
+                        workflow: s.workflow,
+                        due: s.due,
+                    });
+                    self.metering.tell(|| scan).map_err(Error::Protocol)?;
+                }
                 Command::StopReplay(run) => self.replays.tell(&run, ToReplay::Stop),
                 Command::WaitUntil(mut at) => {
                     let past_grace = grace_ends.filter(|_| !self.replays.is_empty());
@@ -318,7 +374,7 @@ impl AgentLoop {
                     };
                     match event {
                         Event::Feed(id, result) => self.machine.feed(id, result)?,
-                        Event::Commit(run, commit) => self.machine.commit(run, commit)?,
+                        Event::Commit(run, commit) => self.machine.commit(run, *commit)?,
                         Event::Ended(run, end) => {
                             self.replays.ended(&run);
                             self.machine.replay_ended(run, end)?;
@@ -327,12 +383,14 @@ impl AgentLoop {
                             self.agent.wake_pending.store(false, Ordering::SeqCst);
                             self.machine.wake()?;
                         }
+                        Event::WakeWorkflow(workflow) => self.machine.wake_workflow(workflow)?,
                         Event::Shutdown(g) if grace_ends.is_none() => {
                             grace = i64::try_from(millis(g)).expect("a grace fits in i64 ms");
                             grace_ends = Some(self.clock.elapsed() + grace);
                             self.machine.shutdown()?;
                         }
                         Event::Shutdown(_) => {}
+                        Event::Drain(until) => self.machine.drain(layout::Time { ms: until })?,
                         Event::Panicked(message) => return Err(Error::Protocol(message)),
                     }
                 }

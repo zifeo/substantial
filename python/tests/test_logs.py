@@ -30,7 +30,7 @@ async def logging_workflow(c: Context) -> int:
 async def test_logs_are_muted_while_a_replay_walks_the_history(
     store: Store, caplog: pytest.LogCaptureFixture
 ) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     with caplog.at_level(logging.INFO, logger="substantial.workflow"):
         async with script(sub, [logging_workflow]):
             run = await sub.start(logging_workflow)
@@ -57,7 +57,7 @@ async def test_a_run_that_fails_or_is_cancelled_logs_one_warning(
     async def waiting(c: Context) -> None:
         await c.receive("never")
 
-    sub = await Substantial.create("memory://logs-ends", partitions=1)
+    sub = await Substantial.create("memory://logs-ends")
     with caplog.at_level(logging.WARNING, logger="substantial"):
         async with script(sub, [failing, waiting]):
             failed = await sub.start(failing, id="fails")

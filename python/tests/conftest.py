@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import fcntl
 import os
 import secrets
+import tempfile
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import timedelta
 from pathlib import Path
 
@@ -30,6 +32,22 @@ REDIS_URLS = {
     "redis-cluster": "SUBSTANTIAL_REDIS_CLUSTER_URL",
 }
 ADAPTERS = ["memory", "file", "s3", *REDIS_URLS]
+# The adapters a test applies to, so no case is generated only to be skipped.
+PLAIN_LISTINGS = ["memory", "file", "s3"]
+KEYED_BY_NAME = ["file", "s3", *REDIS_URLS]
+# Shared by every test process on the machine, as the Redis containers are.
+FAILOVER_LOCK = Path(tempfile.gettempdir()) / "substantial-tests-failover.lock"
+
+
+@pytest.fixture(autouse=True)
+def failover_exclusion(request: pytest.FixtureRequest) -> Iterator[None]:
+    """A test marked `failover` stops shared Redis containers or changes their configuration: it
+    holds the lock exclusively, every other test holds it shared, across the xdist workers and any
+    other session."""
+    exclusive = request.node.get_closest_marker("failover") is not None
+    with FAILOVER_LOCK.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        yield
 
 
 def s3_url(scheme: str = "s3") -> str | None:
@@ -120,9 +138,11 @@ class Recording:
         self.listed: list[str] = []
         self.created: list[tuple[str, str]] = []
         self.failing = False
-        # When set, the first create of a segment freezes every operation for this many seconds.
-        self.freeze_on_segment: float | None = None
-        self._frozen_until: float | None = None
+        # When set, the first create of a segment freezes every operation until this is set.
+        self.freeze_on_segment: asyncio.Event | None = None
+        self._frozen: asyncio.Event | None = None
+        # When set, a delete of this key waits until its event is set.
+        self.hold_delete: tuple[str, asyncio.Event] | None = None
 
     @property
     def capabilities(self):
@@ -131,14 +151,14 @@ class Recording:
     async def _gate(self) -> None:
         from substantial.stores import StoreFailure
 
-        if self._frozen_until is not None:
-            await asyncio.sleep(max(0.0, self._frozen_until - time.monotonic()))
+        if self._frozen is not None:
+            await self._frozen.wait()
         if self.failing:
             raise StoreFailure("injected")
 
     async def create(self, key: str, data: bytes) -> str:
         if "/log/" in key and self.freeze_on_segment is not None:
-            self._frozen_until = time.monotonic() + self.freeze_on_segment
+            self._frozen = self.freeze_on_segment
             self.freeze_on_segment = None
         await self._gate()
         outcome = await self.inner.create(key, data)
@@ -155,6 +175,8 @@ class Recording:
         return await self.inner.list(prefix, start_after=start_after, max_keys=max_keys, wait=wait)
 
     async def delete(self, key: str) -> None:
+        if self.hold_delete is not None and self.hold_delete[0] == key:
+            await self.hold_delete[1].wait()
         await self._gate()
         await self.inner.delete(key)
 

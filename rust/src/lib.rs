@@ -9,8 +9,10 @@
 mod client;
 mod clock;
 mod core;
+mod cost;
 mod error;
 mod names;
+pub mod observe;
 mod plan;
 mod proto;
 mod settings;
@@ -22,17 +24,20 @@ mod worker;
 mod workflow;
 
 pub use client::{
-    Create, Open, ResultWait, Run, RunStatus, SendMessage, StartRun, Substantial, WorkerBuilder,
+    Create, HistoryEvent, Open, ResultWait, RetryRun, Run, RunInfo, RunStatus, ScheduleRun,
+    SendMessage, StartRun, Substantial, WaitingOn, WorkerBuilder,
 };
+pub use cost::{Amount, Budget, Cost, Meters, Prices};
 pub use error::{Continuation, Error, Failure, Result};
-pub use settings::{FOREVER, Preset, Retention};
+pub use observe::Observed;
+pub use settings::Preset;
 pub use store::{Credentials, Keys, Password};
 pub use substantial_macros::{step, workflow};
 pub use time::{days, hours, minutes, seconds};
 pub use worker::Worker;
 pub use workflow::{
-    AsWorkflow, Child, Context, Handlers, IntoWorkflows, Log, Permanent, Retry, SendFromWorkflow,
-    StartChild, Step, Var, WaitUntil, Workflow, step_key,
+    AsWorkflow, ChainResult, Child, Context, Cron, Handlers, IntoWorkflows, Log, Permanent, Poll,
+    Receive, Retry, SendFromWorkflow, StartChild, Step, Var, WaitUntil, Workflow, charge, step_key,
 };
 
 /// What the code `#[workflow]` and `#[step]` generate refers to; not an API.
@@ -51,6 +56,9 @@ pub mod __internal {
         Capabilities, Create, FsStore, ListWait, Listing, MemoryStore, RedisLocation, S3Location,
         S3Store, Store, StoreFailure, StoreFuture, Topology, open,
     };
+
+    pub use crate::proto::layout::v1 as layout;
+    pub use crate::workflow::schedule::{Plan, Skipped, iso, next_fire, parse, plan};
 
     use crate::client::{self, Source};
     use crate::{Worker, WorkerBuilder};
@@ -78,7 +86,7 @@ pub mod __internal {
         wait.refollow(refollow)
     }
 
-    /// Wakes the worker at once, as a start or a send from this process does.
+    /// Wakes the worker at once for a full scan of every workflow it serves.
     pub fn wake(worker: &Worker) {
         worker.wake();
     }

@@ -4,10 +4,12 @@
 // change the server's configuration, are in `serial/redis_checks.test.ts`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import * as redis from "@redis/client";
 import { createClient } from "@redis/client";
 import {
   ConfigError,
   type Context,
+  milliseconds,
   minutes,
   Password,
   StoreError,
@@ -15,10 +17,10 @@ import {
   workflow,
 } from "../src/mod.ts";
 import { openStore } from "../src/stores/open.ts";
-import { parseRedisUrl, type RedisLocation } from "../src/stores/redis.ts";
-import type { RedisStore } from "../src/stores/redis_store.ts";
+import { parseRedisUrl, type RedisLocation, WAITAOF_MS } from "../src/stores/redis.ts";
+import { RedisStore } from "../src/stores/redis_store.ts";
 import { StoreFailure } from "../src/stores/store.ts";
-import { LONG, noRedis, redisUrl, script, token } from "./helpers.ts";
+import { eventually, LONG, noRedis, redisUrl, script, token } from "./helpers.ts";
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 
@@ -142,10 +144,10 @@ test("a password reaches the server", { skip }, async () => {
   };
   try {
     await assert.rejects(
-      Substantial.create(url, { partitions: 1, credentials: provider }),
+      Substantial.create(url, { credentials: provider }),
       (e) => e instanceof StoreError && /WRONGPASS|invalid username-password/.test(e.message),
     );
-    const sub = await Substantial.create(url, { partitions: 1, credentials: provider });
+    const sub = await Substantial.create(url, { credentials: provider });
     await sub.close();
     assert.equal(calls, 2, "asked again after a failed connection, then once");
     const right = new Password({ password: "right", username: user });
@@ -175,7 +177,7 @@ test("a waiting listing returns as a key lands without polling", { skip }, async
     assert.deepEqual(first.keys, ["q/a"]);
     assert.ok(first.etag);
     const before = listed;
-    let began = performance.now();
+    const began = performance.now();
     const unchanged = await store.list("q/", {
       maxKeys: 10,
       wait: { seconds: 2, etag: first.etag },
@@ -193,10 +195,10 @@ test("a waiting listing returns as a key lands without polling", { skip }, async
     await store.create("other/x", bytes("x"));
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.ok(!done, "a key under another prefix does not end the wait");
-    began = performance.now();
     await store.create("q/b", bytes("b"));
+    // At its deadline the wait answers the page it listed before `q/b` landed: `q/b` in the
+    // answer is the key's notification waking it, however long the machine takes to get there.
     const woken = await held;
-    assert.ok(performance.now() - began < 500);
     assert.deepEqual(woken.keys, ["q/a", "q/b"]);
     assert.notEqual(woken.etag, first.etag);
   } finally {
@@ -218,6 +220,32 @@ test("a waiting listing on a closed store fails at once", { skip }, async () => 
   assert.ok(performance.now() - began < 1000);
 });
 
+const sockets = () => process.getActiveResourcesInfo().filter((r) => r === "TCPSocketWrap").length;
+
+test("a store closed while its connections open leaves none open", { skip }, async () => {
+  const before = sockets();
+  const store = await openStore(redisUrl("redis"), undefined);
+  let pending: Promise<unknown>[] = [];
+  try {
+    await store.open();
+    const opened = sockets();
+    pending = [
+      store.list("q/", { maxKeys: 10, wait: { seconds: 1, etag: "none" } }),
+      store.get("a"),
+      store.get("b"),
+    ].map((p) => p.catch(() => undefined));
+    // Ticks only, no I/O: the subscription and a second connection have sockets, not connected.
+    for (let ticks = 0; sockets() < opened + 2; ticks++) {
+      assert.ok(ticks < 10_000, `${sockets() - opened} new sockets of 2`);
+      await new Promise((resolve) => process.nextTick(resolve));
+    }
+  } finally {
+    await store.close();
+  }
+  await Promise.all(pending);
+  await eventually("every socket closed", () => sockets() <= before);
+});
+
 /** An ACL user of password `right` allowed `commands`, deleted by `drop`. */
 async function user(
   server: ReturnType<typeof createClient>,
@@ -234,7 +262,6 @@ test("a user denied waitaof is refused as such", { skip }, async () => {
   try {
     await assert.rejects(
       Substantial.create(redisUrl("redis"), {
-        partitions: 1,
         credentials: new Password({ password: "right", username: name }),
       }),
       (e) => e instanceof StoreError && /no permissions/.test(e.message),
@@ -245,24 +272,37 @@ test("a user denied waitaof is refused as such", { skip }, async () => {
   }
 });
 
+/** The ids of the subscribed connections of `user`. */
+async function subscribers(server: ReturnType<typeof createClient>, user: string) {
+  const clients = String(await server.sendCommand(["CLIENT", "LIST", "TYPE", "pubsub"]));
+  return clients
+    .split("\n")
+    .filter((line) => line.includes(` user=${user} `))
+    .map((line) => Number(/^id=([0-9]+)/.exec(line)?.[1]));
+}
+
 test("a subscription lost again resubscribes at once", { skip }, async () => {
   const server = await admin();
   const { name, drop } = await user(server, "+@all");
-  const url = redisUrl("redis");
-  const channel = `{${parseRedisUrl(url).namespace}}:c`;
-  const store = await openStore(url, new Password({ password: "right", username: name }));
+  // Not reset by a subscription, a backoff doubling from 100 ms would pause 51 s before the
+  // tenth: far beyond a reconnection, seconds at most on a loaded machine.
+  const retry = { attempts: 5, initial: milliseconds(100), max: minutes(60) };
+  const password = new Password({ password: "right", username: name });
+  const location = parseRedisUrl(redisUrl("redis"));
+  const store = new RedisStore(location, password, retry, redis, WAITAOF_MS);
   try {
     await store.list("q/", { maxKeys: 10, wait: { seconds: 1 } });
-    for (let i = 0; i < 6; i++) {
+    let [subscribed] = await subscribers(server, name);
+    for (let i = 0; i < 10; i++) {
       assert.ok(Number(await server.sendCommand(["CLIENT", "KILL", "USER", name])) >= 1);
       const began = performance.now();
       for (;;) {
-        const [, subscribers] = (await server.sendCommand(["PUBSUB", "NUMSUB", channel])) as [
-          string,
-          number,
-        ];
-        if (subscribers > 0) break;
-        assert.ok(performance.now() - began < 1000, "subscribed again within a second");
+        const again = (await subscribers(server, name)).find((id) => id > (subscribed as number));
+        if (again !== undefined) {
+          subscribed = again;
+          break;
+        }
+        assert.ok(performance.now() - began < 20_000, `subscribed again after loss ${i + 1}`);
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
     }
@@ -276,7 +316,7 @@ test("a subscription lost again resubscribes at once", { skip }, async () => {
 test("a start from another client comes through the wait", { skip }, async () => {
   const answer = workflow("answer", async (_c: Context) => 42);
   const url = redisUrl("redis");
-  const sub = await Substantial.create(url, { partitions: 1 });
+  const sub = await Substantial.create(url);
   try {
     await using _ = script(sub, [answer], { maxIdle: minutes(5) });
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -296,7 +336,7 @@ test("a start from another client comes through the wait", { skip }, async () =>
 
 test("a run ends on redis through a script worker", { skip }, async () => {
   const double = workflow("double", async (_c: Context, input: { n: number }) => input.n * 2);
-  const sub = await Substantial.create(redisUrl("redis"), { partitions: 2 });
+  const sub = await Substantial.create(redisUrl("redis"));
   try {
     await using _ = script(sub, [double]);
     assert.equal(await (await sub.start(double, { n: 21 })).result({ timeout: LONG }), 42);

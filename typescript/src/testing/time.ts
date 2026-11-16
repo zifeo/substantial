@@ -221,18 +221,42 @@ export class Time {
     return this.#locked(async () => {
       const target = this.ms + ms;
       await this.#settle();
-      while (this.ms < target) {
-        this.skip(target);
-        let next = target;
-        for (const w of this.parked.values()) {
-          if (w.at !== undefined && !w.owner.paused && w.at < next) next = w.at;
+      await this.#move(target);
+    });
+  }
+
+  /** Settles, then moves the clock from deadline to deadline until `done()`. */
+  async untilDone(paused: () => boolean, done: () => boolean, what: string): Promise<void> {
+    outside();
+    return this.#locked(async () => {
+      await this.#settle();
+      while (!done()) {
+        if (paused()) throw new Stuck(`${what} cannot end: its worker is paused`);
+        const deadlines = this.#deadlines();
+        if (deadlines.length === 0) {
+          throw new Stuck(`${what} cannot end: nothing it waits on can come`);
         }
-        if (next <= this.ms)
-          throw new Error(`a deadline at ${next} ms is not after now, ${this.ms} ms`);
-        this.ms = next;
-        await this.#settle();
+        await this.#move(Math.min(...deadlines));
       }
     });
+  }
+
+  #deadlines(): number[] {
+    return [...this.parked.values()].flatMap((w) =>
+      w.at !== undefined && !w.owner.paused ? [w.at] : [],
+    );
+  }
+
+  async #move(target: number): Promise<void> {
+    while (this.ms < target) {
+      this.skip(target);
+      const next = Math.min(target, ...this.#deadlines());
+      if (next <= this.ms) {
+        throw new Error(`a deadline at ${next} ms is not after now, ${this.ms} ms`);
+      }
+      this.ms = next;
+      await this.#settle();
+    }
   }
 
   #locked(fn: () => Promise<void>): Promise<void> {

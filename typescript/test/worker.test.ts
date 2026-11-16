@@ -8,7 +8,9 @@ import {
   InvalidArgument,
   LayoutError,
   milliseconds,
+  type Observed,
   RunFailed,
+  StoreOp,
   Substantial,
   seconds,
   step,
@@ -21,13 +23,14 @@ import { eachAdapter, eventually, LONG, Recording, script } from "./helpers.ts";
 
 const example = workflow("example", async () => 1);
 
-eachAdapter("an idle worker lists every partition then shuts down", async (store) => {
+eachAdapter("an idle worker lists every workflow then shuts down", async (store) => {
   const recording = new Recording(store);
-  const sub = await createOn(recording, { partitions: 3 });
-  const worker = script(sub, [example]);
-  await eventually("listings", () => recording.listed.length >= 9);
-  for (let p = 0; p < 3; p++) {
-    const prefix = `queues/example/${String(p).padStart(4, "0")}/due/`;
+  const sub = await createOn(recording);
+  const other = workflow("other", async () => 2);
+  const worker = script(sub, [example, other]);
+  await eventually("listings", () => recording.listed.length >= 4);
+  for (const name of ["example", "other"]) {
+    const prefix = `queues/${name}/due/`;
     const count = recording.listed.filter((l) => l === prefix).length;
     assert.ok(count >= 2, `${prefix} listed again: ${recording.listed}`);
   }
@@ -39,7 +42,7 @@ eachAdapter("an idle worker lists every partition then shuts down", async (store
 
 test("a failing store never stops the worker", async () => {
   const recording = new Recording(new MemoryStore("worker-failing"));
-  const sub = await createOn(recording, { partitions: 1 });
+  const sub = await createOn(recording);
   recording.failing = true;
   await using _ = script(sub, [example]);
   const before = recording.listed.length;
@@ -47,7 +50,7 @@ test("a failing store never stops the worker", async () => {
 });
 
 test("workers refuse invalid configuration", async () => {
-  const sub = await Substantial.create("memory://worker-config", { partitions: 1 });
+  const sub = await Substantial.create("memory://worker-config");
   assert.throws(() => script(sub, [example, example]), ConfigError);
   assert.throws(() => script(sub, []), ConfigError);
   assert.throws(() => script(sub, [((c: unknown) => c) as never]), ConfigError);
@@ -63,58 +66,60 @@ test("workers refuse invalid configuration", async () => {
   await sub.worker([example], { preset: "script", maxIdle: milliseconds(50) }).shutdown();
   assert.throws(() => workflow("v", async () => 1, { version: -1 }), InvalidArgument);
   assert.throws(() => workflow("v", async () => 1, { verison: 1 } as never), InvalidArgument);
-  await assert.rejects(
-    Substantial.create("memory://worker-config", undefined as never),
-    (e) => e instanceof ConfigError && /needs partitions, a positive whole number/.test(e.message),
-  );
 });
 
 test("create states what is unknown or not built", async () => {
   for (const url of ["file//tmp/x", "/tmp/x", "ftp://host/x"]) {
     await assert.rejects(
-      Substantial.create(url, { partitions: 1 }),
+      Substantial.create(url),
       (e) =>
         e instanceof ConfigError && /^unknown scheme .* memory:\/\/, file:, s3:/.test(e.message),
     );
   }
   for (const url of ["sqlite:x.db", "mysql://u@h/db"]) {
     await assert.rejects(
-      Substantial.create(url, { partitions: 1 }),
+      Substantial.create(url),
       (e) => e instanceof ConfigError && /not available in this host yet/.test(e.message),
     );
   }
   await assert.rejects(
-    Substantial.create("file:~/x", { partitions: 1 }),
+    Substantial.create("file:~/x"),
     (e) => e instanceof ConfigError && /give an absolute or relative path/.test(e.message),
   );
 });
 
 eachAdapter("create and open check the layout", async (store) => {
   await assert.rejects(openOn(store), LayoutError);
-  assert.equal((await createOn(store, { partitions: 4 })).partitions, 4);
-  assert.equal((await createOn(store, { partitions: 4 })).partitions, 4);
-  assert.equal((await openOn(store)).partitions, 4);
-  await assert.rejects(createOn(store, { partitions: 2 }), LayoutError);
-  for (const partitions of [0, -1, true, 1.5, "1"]) {
-    await assert.rejects(createOn(store, { partitions: partitions as number }), ConfigError);
+  await createOn(store);
+  await createOn(store);
+  await openOn(store);
+  const marker = new TextDecoder().decode((await store.get("substantial.json")) ?? undefined);
+  assert.equal(marker, '{"layout":2,"encoding":"protobuf"}');
+});
+
+test("a namespace of the layout before is refused", async () => {
+  // With its partitions: drained by the version that wrote it, never opened by this one.
+  const old = new MemoryStore("worker-layout-1");
+  await old.create("probe/exclusive", new Uint8Array());
+  const marker = '{"layout":1,"encoding":"protobuf","partitions":4,"hash":"xxh3-64"}';
+  await old.create("substantial.json", new TextEncoder().encode(marker));
+  for (const opened of [openOn(old), createOn(old)]) {
+    await assert.rejects(opened, (e) => e instanceof LayoutError && /has layout 1/.test(e.message));
   }
 });
 
 test("create and open take a URL and its credentials only", async () => {
   const url = "memory://create-options";
   const refused: [string, () => Promise<unknown>][] = [
-    ["credentials", () => Substantial.create(url, { partitions: 1, credentials: "env" })],
-    ["extra", () => Substantial.create(url, { partitions: 1, extra: 1 } as never)],
+    ["credentials", () => Substantial.create(url, { credentials: "env" })],
+    ["extra", () => Substantial.create(url, { extra: 1 } as never)],
     ["storeRetry", () => Substantial.open(url, { storeRetry: {} } as never)],
-    [
-      "store object",
-      () => Substantial.create(new MemoryStore("object") as never, { partitions: 1 }),
-    ],
+    ["store object", () => Substantial.create(new MemoryStore("object") as never)],
     ["incomplete URL", () => Substantial.open("s3://bucket/ns", { credentials: "env" })],
   ];
   for (const [what, call] of refused) await assert.rejects(call(), ConfigError, what);
   await assert.rejects(
-    Substantial.create(3 as never, { partitions: 1 }),
+    Substantial.create(3 as never),
     (e) => e instanceof ConfigError && /a store is a URL string/.test(e.message),
   );
 });
@@ -126,17 +131,12 @@ test("a store that accepts two creates fails the probe", async () => {
       return super.create(key, data);
     }
   }
-  await assert.rejects(
-    createOn(new Overwriting("probe-overwrite"), { partitions: 1 }),
-    LayoutError,
-  );
+  await assert.rejects(createOn(new Overwriting("probe-overwrite")), LayoutError);
 });
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   test(`serve shuts down on ${signal}`, async () => {
-    const sub = await Substantial.create(`memory://serve-${signal.toLowerCase()}`, {
-      partitions: 1,
-    });
+    const sub = await Substantial.create(`memory://serve-${signal.toLowerCase()}`, {});
     const worker = script(sub, [example]);
     const served = worker.serve();
     const run = await sub.start(example);
@@ -154,8 +154,7 @@ test("workflow names are checked when declared", () => {
 test("await using a client closes it", async (t) => {
   const closed = t.mock.method(MemoryStore.prototype, "close");
   {
-    await using sub = await Substantial.create("memory://dispose", { partitions: 1 });
-    assert.equal(sub.partitions, 1);
+    await using _sub = await Substantial.create("memory://dispose");
   }
   assert.equal(closed.mock.callCount(), 1);
 });
@@ -181,7 +180,7 @@ test("declarations refuse bad arguments with InvalidArgument", async () => {
     () => step("a step", work),
   ];
   for (const declare of refused) assert.throws(declare, InvalidArgument, String(declare));
-  const sub = await Substantial.create("memory://declarations", { partitions: 1 });
+  const sub = await Substantial.create("memory://declarations");
   const run = sub.run(example, "r");
   await assert.rejects(run.send("note", 1, null as never), InvalidArgument);
   await assert.rejects(run.result(null as never), InvalidArgument);
@@ -204,7 +203,7 @@ test("a worker on a waiting store lists with waits", async () => {
       return { keys: listing.keys, etag: "etag" };
     }
   }
-  const sub = await createOn(new Waiting("waiting-store"), { partitions: 1 });
+  const sub = await createOn(new Waiting("waiting-store"));
   {
     await using _ = script(sub, [example], { wait: seconds(3) });
     assert.equal(await (await sub.start(example)).result({ timeout: LONG }), 1);
@@ -227,7 +226,7 @@ test("a worker that dies fails the waits pending on its namespace", async () => 
       await c.step("first", () => null);
       await c.receive("never");
     });
-    const sub = await Substantial.create("memory://worker-dies", { partitions: 1 });
+    const sub = await Substantial.create("memory://worker-dies");
     const worker = script(sub, [waiting]);
     const run = await sub.start(waiting);
     const pending = run.result({ timeout: LONG });
@@ -279,7 +278,7 @@ test("a result wait abandoned when its worker dies stops listing", async () => {
       await c.receive("never");
     });
     const store = new Waiting("worker-abandoned");
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     const worker = script(sub, [waiting]);
     const run = await sub.start(waiting);
     await eventually("a suspended run", async () => (await run.status()) === "suspended");
@@ -314,7 +313,7 @@ test("a run that ends failed or cancelled logs one warning", async () => {
       await c.step("first", () => null);
       await c.receive("never");
     });
-    const sub = await Substantial.create("memory://worker-warns", { partitions: 1 });
+    const sub = await Substantial.create("memory://worker-warns");
     await using _ = script(sub, [failing, waiting, example]);
     const failed = await sub.start(failing, {}, { id: "warn-failed" });
     await assert.rejects(failed.result({ timeout: LONG }), RunFailed);
@@ -332,5 +331,29 @@ test("a run that ends failed or cancelled logs one warning", async () => {
       "substantial: run warn-failed failed: RangeError: boom",
       "substantial: run warn-cancelled cancelled: not needed",
     ],
+  );
+});
+
+const aSecond = workflow("a-second", async (c) => {
+  await c.sleep(seconds(1));
+  return 1;
+});
+
+test("result polls up to max interval", async () => {
+  const gets: StoreOp[] = [];
+  const observe = (event: Observed) => {
+    if (event instanceof StoreOp && event.op === "get") gets.push(event);
+  };
+  const url = "memory://max-interval";
+  await using sub = await Substantial.create(url);
+  await using client = await Substantial.open(url, { observe });
+  await using _ = script(sub, [aSecond]);
+  const run = await client.start(aSecond);
+  assert.equal(await run.result({ maxInterval: milliseconds(20) }), 1);
+  // Every 20 ms for a second, where doubling from 10 ms up to 30 s polls 8 times.
+  assert.ok(gets.length > 20, String(gets.length));
+  await assert.rejects(
+    run.result({ maxInterval: milliseconds(0) }),
+    (e) => e instanceof InvalidArgument && /maxInterval/.test(e.message),
   );
 });

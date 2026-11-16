@@ -104,6 +104,18 @@ async fn everything(c: Context) -> Result<()> {
     Ok(())
 }
 
+#[workflow(budget = [("requests", 1000), ("USD", 2_000_000_000)])]
+async fn limited(c: Context) -> Result<()> {
+    Ok(())
+}
+
+#[test]
+fn a_declared_budget() {
+    let budget = substantial::Budget::from([("USD", 2_000_000_000), ("requests", 1000)]);
+    assert_eq!(limited.workflow().budget(), Some(&budget));
+    assert_eq!(sum.workflow().budget(), None);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn declared_workflows_steps_and_handlers() {
     assert_eq!(everything_v2.workflow().name(), "everything");
@@ -112,10 +124,7 @@ async fn declared_workflows_steps_and_handlers() {
     let timeout = everything.workflow().step_timeout();
     assert_eq!(timeout, Some(substantial::minutes(1)));
     assert_eq!(sum.workflow().name(), "sum");
-    let sub = Substantial::create("memory://macros")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://macros").await.unwrap();
     let worker = script(&sub, (everything, everything_v2, sum))
         .start()
         .unwrap();
@@ -154,10 +163,7 @@ async fn reserving(c: Context) -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_undo_gets_the_value_then_the_arguments() {
-    let sub = Substantial::create("memory://macros-undo")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://macros-undo").await.unwrap();
     let worker = script(&sub, reserving).start().unwrap();
     let run = sub.start(reserving, ()).await.unwrap();
     match run.result().timeout(LONG).await {
@@ -196,10 +202,7 @@ async fn inline(c: Context) -> Result<u32> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_inline_step_takes_a_closure_async_or_blocking() {
-    let sub = Substantial::create("memory://macros-inline")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://macros-inline").await.unwrap();
     let worker = script(&sub, inline).start().unwrap();
     let run = sub.start(inline, ()).id("inline-1").await.unwrap();
     assert_eq!(run.result().timeout(LONG).await.unwrap(), 42);

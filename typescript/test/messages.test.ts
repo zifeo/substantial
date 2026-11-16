@@ -1,6 +1,5 @@
 // Handlers, waits and messages sent from a workflow (I-8, I-9), end to end.
 import assert from "node:assert/strict";
-import { setTimeout as sleep } from "node:timers/promises";
 import { createOn } from "../src/client.ts";
 import {
   type Context,
@@ -33,7 +32,7 @@ const approver = workflow("approver", async (c: Context, input: { target: string
 const waiting = workflow("waiting", async (c: Context) => c.receive<string>("note"));
 
 eachAdapter("a handler sees past messages and a workflow sends", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const target = await sub.start(waiting, {}, { id: "target" });
   const run = await sub.start(approver, { target: "target" });
   for (const name of ["alice", "alice", "bob"]) await run.send("approve", name);
@@ -60,7 +59,7 @@ const refused = workflow("refused", async (c: Context, input: { ended: string })
 });
 
 eachAdapter("a workflow's send to no chain or an ended run throws, recorded", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [quick, refused]);
   await (await sub.start(quick, {}, { id: "ended" })).result({ timeout: LONG });
   const run = await sub.start(refused, { ended: "ended" });
@@ -82,7 +81,7 @@ eachAdapter("handlers see every message and receive takes the next", async (stor
     await c.waitUntil(() => seen.length >= 3);
     return { first, seen, second: await c.receive<string>("note") };
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = await sub.start(notes);
   for (const note of ["a", "b", "c"]) await run.send("note", note);
   await using _ = script(sub, [notes]);
@@ -105,7 +104,7 @@ eachAdapter("handlers bound together see past messages in arrival order", async 
     c.handle<number>("add", (n) => adds.push(n));
     return { seen, adds };
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = await sub.start(ordered);
   for (const [name, n] of [
     ["add", 1],
@@ -127,13 +126,14 @@ eachAdapter("a wait returns false when its timeout passes", async (store) => {
   const impatient = workflow("impatient", async (c: Context) => {
     const names = approvals(c);
     const late = await c.waitUntil(() => names.length >= 1, { timeout: milliseconds(200) });
+    c.publish("late", late);
     const onTime = await c.waitUntil(() => names.length >= 1, { timeout: seconds(30) });
     return [late, onTime];
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [impatient]);
   const run = await sub.start(impatient);
-  await sleep(600);
+  await eventually("the first wait's end", async () => (await run.read("late")) === false);
   await run.send("approve", "alice");
   assert.deepEqual(await run.result({ timeout: LONG }), [false, true]);
 });
@@ -148,7 +148,7 @@ eachAdapter("a message no handler can decode fails the run", async (store) => {
     c.handle("n", (n: number) => seen.push(n), { decode: asNumber });
     await c.waitUntil(() => seen.length >= 2);
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [typed]);
   const run = await sub.start(typed);
   await run.send("n", 1);
@@ -167,7 +167,7 @@ eachAdapter(
         throw new RangeError("no way");
       });
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [broken]);
     const failed = await (await sub.start(broken)).result({ timeout: LONG }).catch((e) => e);
     assert.ok(failed instanceof RunFailed, String(failed));
@@ -196,7 +196,7 @@ eachAdapter(
       }
       return refused;
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [refusing]);
     assert.deepEqual(await (await sub.start(refusing)).result({ timeout: LONG }), [
       "async handler",

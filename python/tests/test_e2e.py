@@ -8,7 +8,7 @@ import re
 from datetime import timedelta
 
 import pytest
-from conftest import LONG, eventually, script
+from conftest import KEYED_BY_NAME, LONG, eventually, script
 
 from substantial import (
     Context,
@@ -54,7 +54,7 @@ async def example(c: Context) -> float:
 
 
 async def test_a_first_workflow(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [example]):
         run = await sub.start(example)
         await run.send("by", 2)
@@ -76,7 +76,7 @@ async def waiting(c: Context) -> str:
 
 
 async def test_status_moves_from_pending_to_the_end(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=2)
+    sub = await Substantial._create(store)
     run = await sub.start(waiting, id="status-1")
     assert await run.status() == "pending"
     async with script(sub, [waiting]):
@@ -90,12 +90,12 @@ async def test_status_moves_from_pending_to_the_end(store: Store) -> None:
         await run.send("note", "hi", id="note-1")
         assert await run.result(timeout=LONG) == "hi"
         assert await run.status() == RunStatus.COMPLETED
-        with pytest.raises(RunEnded):
+        with pytest.raises(RunEnded, match=r"has ended, completed$"):
             await run.send("note", "again")
 
 
 async def test_a_waiting_run_is_cancelled(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [waiting]):
         run = await sub.start(waiting)
 
@@ -127,7 +127,7 @@ async def looping(c: Context) -> None:
 
 async def test_a_cancel_reaches_a_run_looping_on_steps(store: Store) -> None:
     TICKS.clear()
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [looping]):
         run = await sub.start(looping)
 
@@ -142,7 +142,7 @@ async def test_a_cancel_reaches_a_run_looping_on_steps(store: Store) -> None:
 
 
 async def test_unknown_chains_are_not_found(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     run = sub.run(waiting, "nobody")
     for call in (run.send("by", 1), run.cancel("x"), run.status(), run.result(timeout=LONG)):
         with pytest.raises(RunNotFound):
@@ -162,7 +162,7 @@ async def test_starts_are_idempotent_by_id(store: Store) -> None:
         await count()
         return fields
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     first = await sub.start(counted, {"x": 1}, id="once")
     again = await sub.start(counted, {"x": 1}, id="once")
     assert first.chain == again.chain
@@ -182,11 +182,11 @@ async def test_inputs_are_compared_as_canonical_json(store: Store) -> None:
     async def echo(c: Context, **fields: object) -> dict[str, object]:
         return fields
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     first = await sub.start(echo, {"b": [1.0, {"d": 2, "c": "é"}], "a": 0.5}, id="same")
     again = await sub.start(echo, {"a": 0.5, "b": [1, {"c": "é", "d": 2.0}]}, id="same")
     assert first.chain == again.chain
-    for bad in (math.nan, math.inf, -math.inf, 2**53, -(2**53)):
+    for bad in (math.nan, math.inf, -math.inf, 2**53, -(2**53), {1: "a"}):
         with pytest.raises(InvalidArgument, match="the input is not JSON"):
             await sub.start(echo, {"x": [bad]})
     async with script(sub, [echo]):
@@ -194,7 +194,7 @@ async def test_inputs_are_compared_as_canonical_json(store: Store) -> None:
 
 
 async def test_names_outside_the_rules_are_invalid_arguments(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     long = "a" * 101
     key_rule = re.escape("must match [a-z0-9._-]{1,100}")
     for bad in ["Upper", ".", "..", "a/b", long]:
@@ -223,10 +223,9 @@ async def test_names_outside_the_rules_are_invalid_arguments(store: Store) -> No
             return None
 
 
-async def test_ids_of_a_hundred_bytes_work_end_to_end(adapter: str, store: Store) -> None:
-    if adapter == "memory":
-        pytest.skip("names reach store keys only on stores with paths")
-    sub = await Substantial._create(store, partitions=1)
+@pytest.mark.parametrize("adapter", KEYED_BY_NAME)
+async def test_ids_of_a_hundred_bytes_work_end_to_end(store: Store) -> None:
+    sub = await Substantial._create(store)
     async with script(sub, [waiting]):
         run = await sub.start(waiting, id="r" * 100)
         await run.send("note", "hi", id="m" * 100)
@@ -238,7 +237,7 @@ async def test_a_step_name_outside_the_rules_fails_the_run(store: Store) -> None
     async def bad(c: Context) -> int:
         return await c.step("a step", lambda: 1)
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [bad]):
         run = await sub.start(bad)
         with pytest.raises(RunFailed) as failed:
@@ -258,7 +257,7 @@ async def test_a_message_no_handler_can_decode_fails_the_run(store: Store) -> No
         c.handle("n", take)
         await c.wait_until(lambda: len(seen) >= 2)
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [typed]):
         run = await sub.start(typed)
         await run.send("n", 1)
@@ -288,7 +287,7 @@ async def lambda_checkout(c: Context) -> list[str]:
 
 async def test_a_lambda_returning_a_coroutine_is_a_step(store: Store) -> None:
     CHARGES.clear()
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [lambda_checkout]):
         run = await sub.start(lambda_checkout)
 

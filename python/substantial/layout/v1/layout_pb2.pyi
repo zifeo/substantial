@@ -2,368 +2,488 @@ from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from collections.abc import Iterable as _Iterable, Mapping as _Mapping
-from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
+from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
-
-class Status(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
-    __slots__ = ()
-    STATUS_UNSPECIFIED: _ClassVar[Status]
-    STATUS_COMPLETED: _ClassVar[Status]
-    STATUS_FAILED: _ClassVar[Status]
-    STATUS_CANCELLED: _ClassVar[Status]
-    STATUS_CONTINUED: _ClassVar[Status]
-STATUS_UNSPECIFIED: Status
-STATUS_COMPLETED: Status
-STATUS_FAILED: Status
 STATUS_CANCELLED: Status
+STATUS_COMPLETED: Status
 STATUS_CONTINUED: Status
+STATUS_FAILED: Status
+STATUS_UNSPECIFIED: Status
 
-class Time(_message.Message):
-    __slots__ = ("ms",)
-    MS_FIELD_NUMBER: _ClassVar[int]
-    ms: int
-    def __init__(self, ms: _Optional[int] = ...) -> None: ...
+class Amount(_message.Message):
+    __slots__ = ["currency", "nano"]
+    CURRENCY_FIELD_NUMBER: _ClassVar[int]
+    NANO_FIELD_NUMBER: _ClassVar[int]
+    currency: str
+    nano: int
+    def __init__(self, currency: _Optional[str] = ..., nano: _Optional[int] = ...) -> None: ...
 
-class Value(_message.Message):
-    __slots__ = ("json", "raw")
-    JSON_FIELD_NUMBER: _ClassVar[int]
-    RAW_FIELD_NUMBER: _ClassVar[int]
-    json: bytes
-    raw: bytes
-    def __init__(self, json: _Optional[bytes] = ..., raw: _Optional[bytes] = ...) -> None: ...
+class Budget(_message.Message):
+    __slots__ = ["limits"]
+    LIMITS_FIELD_NUMBER: _ClassVar[int]
+    limits: _containers.RepeatedCompositeFieldContainer[Limit]
+    def __init__(self, limits: _Optional[_Iterable[_Union[Limit, _Mapping]]] = ...) -> None: ...
 
-class Failure(_message.Message):
-    __slots__ = ("type", "message", "retryable", "details")
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    RETRYABLE_FIELD_NUMBER: _ClassVar[int]
-    DETAILS_FIELD_NUMBER: _ClassVar[int]
-    type: str
-    message: str
-    retryable: bool
-    details: Value
-    def __init__(self, type: _Optional[str] = ..., message: _Optional[str] = ..., retryable: _Optional[bool] = ..., details: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
+class BudgetExceeded(_message.Message):
+    __slots__ = ["limit", "meter", "used"]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    METER_FIELD_NUMBER: _ClassVar[int]
+    USED_FIELD_NUMBER: _ClassVar[int]
+    limit: int
+    meter: str
+    used: int
+    def __init__(self, meter: _Optional[str] = ..., limit: _Optional[int] = ..., used: _Optional[int] = ...) -> None: ...
 
-class Parent(_message.Message):
-    __slots__ = ("run", "occurrence", "segment")
-    RUN_FIELD_NUMBER: _ClassVar[int]
-    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
-    SEGMENT_FIELD_NUMBER: _ClassVar[int]
-    run: str
-    occurrence: int
-    segment: int
-    def __init__(self, run: _Optional[str] = ..., occurrence: _Optional[int] = ..., segment: _Optional[int] = ...) -> None: ...
-
-class Seen(_message.Message):
-    __slots__ = ("id", "at")
-    ID_FIELD_NUMBER: _ClassVar[int]
-    AT_FIELD_NUMBER: _ClassVar[int]
-    id: str
-    at: Time
-    def __init__(self, id: _Optional[str] = ..., at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
-
-class Start(_message.Message):
-    __slots__ = ("workflow", "version", "input", "chain", "seq", "previous", "resumes", "parent", "state", "carried", "created_at", "seen")
-    WORKFLOW_FIELD_NUMBER: _ClassVar[int]
-    VERSION_FIELD_NUMBER: _ClassVar[int]
-    INPUT_FIELD_NUMBER: _ClassVar[int]
-    CHAIN_FIELD_NUMBER: _ClassVar[int]
-    SEQ_FIELD_NUMBER: _ClassVar[int]
-    PREVIOUS_FIELD_NUMBER: _ClassVar[int]
-    RESUMES_FIELD_NUMBER: _ClassVar[int]
-    PARENT_FIELD_NUMBER: _ClassVar[int]
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    CARRIED_FIELD_NUMBER: _ClassVar[int]
-    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
-    SEEN_FIELD_NUMBER: _ClassVar[int]
-    workflow: str
-    version: int
-    input: Value
-    chain: str
-    seq: int
-    previous: str
-    resumes: str
-    parent: Parent
-    state: Value
-    carried: _containers.RepeatedScalarFieldContainer[str]
-    created_at: Time
-    seen: _containers.RepeatedCompositeFieldContainer[Seen]
-    def __init__(self, workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[Value, _Mapping]] = ..., chain: _Optional[str] = ..., seq: _Optional[int] = ..., previous: _Optional[str] = ..., resumes: _Optional[str] = ..., parent: _Optional[_Union[Parent, _Mapping]] = ..., state: _Optional[_Union[Value, _Mapping]] = ..., carried: _Optional[_Iterable[str]] = ..., created_at: _Optional[_Union[Time, _Mapping]] = ..., seen: _Optional[_Iterable[_Union[Seen, _Mapping]]] = ...) -> None: ...
-
-class Step(_message.Message):
-    __slots__ = ("name", "occurrence", "attempt", "value")
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
-    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
-    VALUE_FIELD_NUMBER: _ClassVar[int]
-    name: str
-    occurrence: int
-    attempt: int
-    value: Value
-    def __init__(self, name: _Optional[str] = ..., occurrence: _Optional[int] = ..., attempt: _Optional[int] = ..., value: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
-
-class StepRetry(_message.Message):
-    __slots__ = ("name", "occurrence", "attempt", "error", "at")
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
-    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    AT_FIELD_NUMBER: _ClassVar[int]
-    name: str
-    occurrence: int
-    attempt: int
-    error: Failure
-    at: Time
-    def __init__(self, name: _Optional[str] = ..., occurrence: _Optional[int] = ..., attempt: _Optional[int] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
-
-class StepFailed(_message.Message):
-    __slots__ = ("name", "occurrence", "attempt", "error")
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
-    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    name: str
-    occurrence: int
-    attempt: int
-    error: Failure
-    def __init__(self, name: _Optional[str] = ..., occurrence: _Optional[int] = ..., attempt: _Optional[int] = ..., error: _Optional[_Union[Failure, _Mapping]] = ...) -> None: ...
-
-class Timer(_message.Message):
-    __slots__ = ("occurrence", "until")
-    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
-    UNTIL_FIELD_NUMBER: _ClassVar[int]
-    occurrence: int
-    until: Time
-    def __init__(self, occurrence: _Optional[int] = ..., until: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
-
-class Fired(_message.Message):
-    __slots__ = ("occurrence",)
-    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
-    occurrence: int
-    def __init__(self, occurrence: _Optional[int] = ...) -> None: ...
-
-class MessageConsumed(_message.Message):
-    __slots__ = ("key", "id", "name", "value", "ended", "at")
-    KEY_FIELD_NUMBER: _ClassVar[int]
-    ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    VALUE_FIELD_NUMBER: _ClassVar[int]
-    ENDED_FIELD_NUMBER: _ClassVar[int]
-    AT_FIELD_NUMBER: _ClassVar[int]
-    key: str
-    id: str
-    name: str
-    value: Value
-    ended: Ended
-    at: Time
-    def __init__(self, key: _Optional[str] = ..., id: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., ended: _Optional[_Union[Ended, _Mapping]] = ..., at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+class Cancelled(_message.Message):
+    __slots__ = ["reason"]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    reason: str
+    def __init__(self, reason: _Optional[str] = ...) -> None: ...
 
 class Child(_message.Message):
-    __slots__ = ("occurrence", "run", "workflow", "version", "input")
-    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
-    RUN_FIELD_NUMBER: _ClassVar[int]
-    WORKFLOW_FIELD_NUMBER: _ClassVar[int]
-    VERSION_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ["budget", "input", "occurrence", "run", "version", "workflow"]
+    BUDGET_FIELD_NUMBER: _ClassVar[int]
     INPUT_FIELD_NUMBER: _ClassVar[int]
-    occurrence: int
-    run: str
-    workflow: str
-    version: int
-    input: Value
-    def __init__(self, occurrence: _Optional[int] = ..., run: _Optional[str] = ..., workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
-
-class Sent(_message.Message):
-    __slots__ = ("occurrence", "run", "id", "name", "value", "to", "refused")
     OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
     RUN_FIELD_NUMBER: _ClassVar[int]
-    ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    VALUE_FIELD_NUMBER: _ClassVar[int]
-    TO_FIELD_NUMBER: _ClassVar[int]
-    REFUSED_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOW_FIELD_NUMBER: _ClassVar[int]
+    budget: Budget
+    input: Value
     occurrence: int
     run: str
-    id: str
-    name: str
+    version: int
+    workflow: str
+    def __init__(self, occurrence: _Optional[int] = ..., run: _Optional[str] = ..., workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[Value, _Mapping]] = ..., budget: _Optional[_Union[Budget, _Mapping]] = ...) -> None: ...
+
+class Claim(_message.Message):
+    __slots__ = ["at", "ttl_ms", "worker"]
+    AT_FIELD_NUMBER: _ClassVar[int]
+    TTL_MS_FIELD_NUMBER: _ClassVar[int]
+    WORKER_FIELD_NUMBER: _ClassVar[int]
+    at: Time
+    ttl_ms: int
+    worker: str
+    def __init__(self, worker: _Optional[str] = ..., at: _Optional[_Union[Time, _Mapping]] = ..., ttl_ms: _Optional[int] = ...) -> None: ...
+
+class Completed(_message.Message):
+    __slots__ = ["value"]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
     value: Value
-    to: Delivery
-    refused: Failure
-    def __init__(self, occurrence: _Optional[int] = ..., run: _Optional[str] = ..., id: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., to: _Optional[_Union[Delivery, _Mapping]] = ..., refused: _Optional[_Union[Failure, _Mapping]] = ...) -> None: ...
+    def __init__(self, value: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
+
+class Continued(_message.Message):
+    __slots__ = ["carried", "input", "run", "seen", "state", "version", "workflow"]
+    CARRIED_FIELD_NUMBER: _ClassVar[int]
+    INPUT_FIELD_NUMBER: _ClassVar[int]
+    RUN_FIELD_NUMBER: _ClassVar[int]
+    SEEN_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOW_FIELD_NUMBER: _ClassVar[int]
+    carried: _containers.RepeatedScalarFieldContainer[str]
+    input: Value
+    run: str
+    seen: _containers.RepeatedCompositeFieldContainer[Seen]
+    state: Value
+    version: int
+    workflow: str
+    def __init__(self, run: _Optional[str] = ..., workflow: _Optional[str] = ..., input: _Optional[_Union[Value, _Mapping]] = ..., state: _Optional[_Union[Value, _Mapping]] = ..., carried: _Optional[_Iterable[str]] = ..., version: _Optional[int] = ..., seen: _Optional[_Iterable[_Union[Seen, _Mapping]]] = ...) -> None: ...
+
+class Cost(_message.Message):
+    __slots__ = ["children", "steps", "store"]
+    CHILDREN_FIELD_NUMBER: _ClassVar[int]
+    STEPS_FIELD_NUMBER: _ClassVar[int]
+    STORE_FIELD_NUMBER: _ClassVar[int]
+    children: Meters
+    steps: _containers.RepeatedCompositeFieldContainer[StepCharges]
+    store: Meters
+    def __init__(self, store: _Optional[_Union[Meters, _Mapping]] = ..., steps: _Optional[_Iterable[_Union[StepCharges, _Mapping]]] = ..., children: _Optional[_Union[Meters, _Mapping]] = ...) -> None: ...
 
 class Delivery(_message.Message):
-    __slots__ = ("run", "workflow")
+    __slots__ = ["run", "workflow"]
     RUN_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_FIELD_NUMBER: _ClassVar[int]
     run: str
     workflow: str
     def __init__(self, run: _Optional[str] = ..., workflow: _Optional[str] = ...) -> None: ...
 
+class Ended(_message.Message):
+    __slots__ = ["cost", "error", "reason", "run", "status", "value"]
+    COST_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    RUN_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    cost: Cost
+    error: Failure
+    reason: str
+    run: str
+    status: Status
+    value: Value
+    def __init__(self, run: _Optional[str] = ..., status: _Optional[_Union[Status, str]] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., reason: _Optional[str] = ..., cost: _Optional[_Union[Cost, _Mapping]] = ...) -> None: ...
+
+class Event(_message.Message):
+    __slots__ = ["budget_exceeded", "cancelled", "child", "completed", "continued", "failed", "fired", "message", "published", "sent", "step", "step_failed", "step_retry", "timer", "watched"]
+    BUDGET_EXCEEDED_FIELD_NUMBER: _ClassVar[int]
+    CANCELLED_FIELD_NUMBER: _ClassVar[int]
+    CHILD_FIELD_NUMBER: _ClassVar[int]
+    COMPLETED_FIELD_NUMBER: _ClassVar[int]
+    CONTINUED_FIELD_NUMBER: _ClassVar[int]
+    FAILED_FIELD_NUMBER: _ClassVar[int]
+    FIRED_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    PUBLISHED_FIELD_NUMBER: _ClassVar[int]
+    SENT_FIELD_NUMBER: _ClassVar[int]
+    STEP_FAILED_FIELD_NUMBER: _ClassVar[int]
+    STEP_FIELD_NUMBER: _ClassVar[int]
+    STEP_RETRY_FIELD_NUMBER: _ClassVar[int]
+    TIMER_FIELD_NUMBER: _ClassVar[int]
+    WATCHED_FIELD_NUMBER: _ClassVar[int]
+    budget_exceeded: BudgetExceeded
+    cancelled: Cancelled
+    child: Child
+    completed: Completed
+    continued: Continued
+    failed: Failed
+    fired: Fired
+    message: MessageConsumed
+    published: Published
+    sent: Sent
+    step: Step
+    step_failed: StepFailed
+    step_retry: StepRetry
+    timer: Timer
+    watched: Watched
+    def __init__(self, step: _Optional[_Union[Step, _Mapping]] = ..., step_retry: _Optional[_Union[StepRetry, _Mapping]] = ..., step_failed: _Optional[_Union[StepFailed, _Mapping]] = ..., timer: _Optional[_Union[Timer, _Mapping]] = ..., fired: _Optional[_Union[Fired, _Mapping]] = ..., message: _Optional[_Union[MessageConsumed, _Mapping]] = ..., child: _Optional[_Union[Child, _Mapping]] = ..., sent: _Optional[_Union[Sent, _Mapping]] = ..., published: _Optional[_Union[Published, _Mapping]] = ..., completed: _Optional[_Union[Completed, _Mapping]] = ..., failed: _Optional[_Union[Failed, _Mapping]] = ..., cancelled: _Optional[_Union[Cancelled, _Mapping]] = ..., continued: _Optional[_Union[Continued, _Mapping]] = ..., budget_exceeded: _Optional[_Union[BudgetExceeded, _Mapping]] = ..., watched: _Optional[_Union[Watched, _Mapping]] = ...) -> None: ...
+
+class Failed(_message.Message):
+    __slots__ = ["error"]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    error: Failure
+    def __init__(self, error: _Optional[_Union[Failure, _Mapping]] = ...) -> None: ...
+
+class Failure(_message.Message):
+    __slots__ = ["details", "message", "retryable", "type"]
+    DETAILS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    RETRYABLE_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    details: Value
+    message: str
+    retryable: bool
+    type: str
+    def __init__(self, type: _Optional[str] = ..., message: _Optional[str] = ..., retryable: bool = ..., details: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
+
+class Fired(_message.Message):
+    __slots__ = ["occurrence"]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    occurrence: int
+    def __init__(self, occurrence: _Optional[int] = ...) -> None: ...
+
+class Gone(_message.Message):
+    __slots__ = ["until"]
+    UNTIL_FIELD_NUMBER: _ClassVar[int]
+    until: Time
+    def __init__(self, until: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+
+class Limit(_message.Message):
+    __slots__ = ["limit", "meter"]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    METER_FIELD_NUMBER: _ClassVar[int]
+    limit: int
+    meter: str
+    def __init__(self, meter: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
+
+class Message(_message.Message):
+    __slots__ = ["ended", "id", "name", "sent_at", "value"]
+    ENDED_FIELD_NUMBER: _ClassVar[int]
+    ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    SENT_AT_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    ended: Ended
+    id: str
+    name: str
+    sent_at: Time
+    value: Value
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., sent_at: _Optional[_Union[Time, _Mapping]] = ..., ended: _Optional[_Union[Ended, _Mapping]] = ...) -> None: ...
+
+class MessageConsumed(_message.Message):
+    __slots__ = ["at", "ended", "id", "key", "name", "value"]
+    AT_FIELD_NUMBER: _ClassVar[int]
+    ENDED_FIELD_NUMBER: _ClassVar[int]
+    ID_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    at: Time
+    ended: Ended
+    id: str
+    key: str
+    name: str
+    value: Value
+    def __init__(self, key: _Optional[str] = ..., id: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., ended: _Optional[_Union[Ended, _Mapping]] = ..., at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+
+class Meters(_message.Message):
+    __slots__ = ["amounts", "requests"]
+    AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+    REQUESTS_FIELD_NUMBER: _ClassVar[int]
+    amounts: _containers.RepeatedCompositeFieldContainer[Amount]
+    requests: Requests
+    def __init__(self, requests: _Optional[_Union[Requests, _Mapping]] = ..., amounts: _Optional[_Iterable[_Union[Amount, _Mapping]]] = ...) -> None: ...
+
+class Origin(_message.Message):
+    __slots__ = ["created_at", "events", "n", "run"]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    EVENTS_FIELD_NUMBER: _ClassVar[int]
+    N_FIELD_NUMBER: _ClassVar[int]
+    RUN_FIELD_NUMBER: _ClassVar[int]
+    created_at: Time
+    events: int
+    n: int
+    run: str
+    def __init__(self, run: _Optional[str] = ..., n: _Optional[int] = ..., created_at: _Optional[_Union[Time, _Mapping]] = ..., events: _Optional[int] = ...) -> None: ...
+
+class Parent(_message.Message):
+    __slots__ = ["occurrence", "run", "segment"]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    RUN_FIELD_NUMBER: _ClassVar[int]
+    SEGMENT_FIELD_NUMBER: _ClassVar[int]
+    occurrence: int
+    run: str
+    segment: int
+    def __init__(self, run: _Optional[str] = ..., occurrence: _Optional[int] = ..., segment: _Optional[int] = ...) -> None: ...
+
 class Published(_message.Message):
-    __slots__ = ("key", "value")
+    __slots__ = ["key", "value"]
     KEY_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     key: str
     value: Value
     def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
 
-class Completed(_message.Message):
-    __slots__ = ("value",)
+class PublishedValue(_message.Message):
+    __slots__ = ["value"]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     value: Value
     def __init__(self, value: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
 
-class Failed(_message.Message):
-    __slots__ = ("error",)
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    error: Failure
-    def __init__(self, error: _Optional[_Union[Failure, _Mapping]] = ...) -> None: ...
-
-class Cancelled(_message.Message):
-    __slots__ = ("reason",)
-    REASON_FIELD_NUMBER: _ClassVar[int]
-    reason: str
-    def __init__(self, reason: _Optional[str] = ...) -> None: ...
-
-class Continued(_message.Message):
-    __slots__ = ("run", "workflow", "input", "state", "carried", "version", "seen")
-    RUN_FIELD_NUMBER: _ClassVar[int]
-    WORKFLOW_FIELD_NUMBER: _ClassVar[int]
-    INPUT_FIELD_NUMBER: _ClassVar[int]
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    CARRIED_FIELD_NUMBER: _ClassVar[int]
-    VERSION_FIELD_NUMBER: _ClassVar[int]
-    SEEN_FIELD_NUMBER: _ClassVar[int]
-    run: str
-    workflow: str
-    input: Value
-    state: Value
-    carried: _containers.RepeatedScalarFieldContainer[str]
-    version: int
-    seen: _containers.RepeatedCompositeFieldContainer[Seen]
-    def __init__(self, run: _Optional[str] = ..., workflow: _Optional[str] = ..., input: _Optional[_Union[Value, _Mapping]] = ..., state: _Optional[_Union[Value, _Mapping]] = ..., carried: _Optional[_Iterable[str]] = ..., version: _Optional[int] = ..., seen: _Optional[_Iterable[_Union[Seen, _Mapping]]] = ...) -> None: ...
-
-class Event(_message.Message):
-    __slots__ = ("step", "step_retry", "step_failed", "timer", "fired", "message", "child", "sent", "published", "completed", "failed", "cancelled", "continued")
-    STEP_FIELD_NUMBER: _ClassVar[int]
-    STEP_RETRY_FIELD_NUMBER: _ClassVar[int]
-    STEP_FAILED_FIELD_NUMBER: _ClassVar[int]
-    TIMER_FIELD_NUMBER: _ClassVar[int]
-    FIRED_FIELD_NUMBER: _ClassVar[int]
-    MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    CHILD_FIELD_NUMBER: _ClassVar[int]
-    SENT_FIELD_NUMBER: _ClassVar[int]
-    PUBLISHED_FIELD_NUMBER: _ClassVar[int]
-    COMPLETED_FIELD_NUMBER: _ClassVar[int]
-    FAILED_FIELD_NUMBER: _ClassVar[int]
-    CANCELLED_FIELD_NUMBER: _ClassVar[int]
-    CONTINUED_FIELD_NUMBER: _ClassVar[int]
-    step: Step
-    step_retry: StepRetry
-    step_failed: StepFailed
-    timer: Timer
-    fired: Fired
-    message: MessageConsumed
-    child: Child
-    sent: Sent
-    published: Published
-    completed: Completed
-    failed: Failed
-    cancelled: Cancelled
-    continued: Continued
-    def __init__(self, step: _Optional[_Union[Step, _Mapping]] = ..., step_retry: _Optional[_Union[StepRetry, _Mapping]] = ..., step_failed: _Optional[_Union[StepFailed, _Mapping]] = ..., timer: _Optional[_Union[Timer, _Mapping]] = ..., fired: _Optional[_Union[Fired, _Mapping]] = ..., message: _Optional[_Union[MessageConsumed, _Mapping]] = ..., child: _Optional[_Union[Child, _Mapping]] = ..., sent: _Optional[_Union[Sent, _Mapping]] = ..., published: _Optional[_Union[Published, _Mapping]] = ..., completed: _Optional[_Union[Completed, _Mapping]] = ..., failed: _Optional[_Union[Failed, _Mapping]] = ..., cancelled: _Optional[_Union[Cancelled, _Mapping]] = ..., continued: _Optional[_Union[Continued, _Mapping]] = ...) -> None: ...
-
-class Segment(_message.Message):
-    __slots__ = ("n", "events", "next_wake", "worker", "created_at", "retention_ms")
-    N_FIELD_NUMBER: _ClassVar[int]
-    EVENTS_FIELD_NUMBER: _ClassVar[int]
-    NEXT_WAKE_FIELD_NUMBER: _ClassVar[int]
-    WORKER_FIELD_NUMBER: _ClassVar[int]
-    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
-    RETENTION_MS_FIELD_NUMBER: _ClassVar[int]
-    n: int
-    events: _containers.RepeatedCompositeFieldContainer[Event]
-    next_wake: Time
-    worker: str
-    created_at: Time
-    retention_ms: int
-    def __init__(self, n: _Optional[int] = ..., events: _Optional[_Iterable[_Union[Event, _Mapping]]] = ..., next_wake: _Optional[_Union[Time, _Mapping]] = ..., worker: _Optional[str] = ..., created_at: _Optional[_Union[Time, _Mapping]] = ..., retention_ms: _Optional[int] = ...) -> None: ...
-
-class Snapshot(_message.Message):
-    __slots__ = ("n", "events", "next_wake")
-    N_FIELD_NUMBER: _ClassVar[int]
-    EVENTS_FIELD_NUMBER: _ClassVar[int]
-    NEXT_WAKE_FIELD_NUMBER: _ClassVar[int]
-    n: int
-    events: _containers.RepeatedCompositeFieldContainer[Event]
-    next_wake: Time
-    def __init__(self, n: _Optional[int] = ..., events: _Optional[_Iterable[_Union[Event, _Mapping]]] = ..., next_wake: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
-
-class Message(_message.Message):
-    __slots__ = ("id", "name", "value", "sent_at", "ended")
-    ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    VALUE_FIELD_NUMBER: _ClassVar[int]
-    SENT_AT_FIELD_NUMBER: _ClassVar[int]
-    ENDED_FIELD_NUMBER: _ClassVar[int]
-    id: str
-    name: str
-    value: Value
-    sent_at: Time
-    ended: Ended
-    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., sent_at: _Optional[_Union[Time, _Mapping]] = ..., ended: _Optional[_Union[Ended, _Mapping]] = ...) -> None: ...
-
-class Ended(_message.Message):
-    __slots__ = ("run", "status", "value", "error", "reason")
-    RUN_FIELD_NUMBER: _ClassVar[int]
-    STATUS_FIELD_NUMBER: _ClassVar[int]
-    VALUE_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    REASON_FIELD_NUMBER: _ClassVar[int]
-    run: str
-    status: Status
-    value: Value
-    error: Failure
-    reason: str
-    def __init__(self, run: _Optional[str] = ..., status: _Optional[_Union[Status, str]] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., reason: _Optional[str] = ...) -> None: ...
-
-class Claim(_message.Message):
-    __slots__ = ("worker", "at", "ttl_ms")
-    WORKER_FIELD_NUMBER: _ClassVar[int]
-    AT_FIELD_NUMBER: _ClassVar[int]
-    TTL_MS_FIELD_NUMBER: _ClassVar[int]
-    worker: str
-    at: Time
-    ttl_ms: int
-    def __init__(self, worker: _Optional[str] = ..., at: _Optional[_Union[Time, _Mapping]] = ..., ttl_ms: _Optional[int] = ...) -> None: ...
+class Requests(_message.Message):
+    __slots__ = ["create", "delete", "get", "list"]
+    CREATE_FIELD_NUMBER: _ClassVar[int]
+    DELETE_FIELD_NUMBER: _ClassVar[int]
+    GET_FIELD_NUMBER: _ClassVar[int]
+    LIST_FIELD_NUMBER: _ClassVar[int]
+    create: int
+    delete: int
+    get: int
+    list: int
+    def __init__(self, create: _Optional[int] = ..., get: _Optional[int] = ..., list: _Optional[int] = ..., delete: _Optional[int] = ...) -> None: ...
 
 class Result(_message.Message):
-    __slots__ = ("status", "value", "error", "reason", "next", "ended_at", "written_at")
+    __slots__ = ["ended_at", "error", "next", "reason", "status", "value", "written_at"]
+    ENDED_AT_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    NEXT_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    REASON_FIELD_NUMBER: _ClassVar[int]
-    NEXT_FIELD_NUMBER: _ClassVar[int]
-    ENDED_AT_FIELD_NUMBER: _ClassVar[int]
     WRITTEN_AT_FIELD_NUMBER: _ClassVar[int]
+    ended_at: Time
+    error: Failure
+    next: str
+    reason: str
     status: Status
     value: Value
-    error: Failure
-    reason: str
-    next: str
-    ended_at: Time
     written_at: Time
     def __init__(self, status: _Optional[_Union[Status, str]] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., reason: _Optional[str] = ..., next: _Optional[str] = ..., ended_at: _Optional[_Union[Time, _Mapping]] = ..., written_at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
 
-class Gone(_message.Message):
-    __slots__ = ("until",)
-    UNTIL_FIELD_NUMBER: _ClassVar[int]
-    until: Time
-    def __init__(self, until: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+class Seen(_message.Message):
+    __slots__ = ["at", "id"]
+    AT_FIELD_NUMBER: _ClassVar[int]
+    ID_FIELD_NUMBER: _ClassVar[int]
+    at: Time
+    id: str
+    def __init__(self, id: _Optional[str] = ..., at: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
 
-class PublishedValue(_message.Message):
-    __slots__ = ("value",)
+class Segment(_message.Message):
+    __slots__ = ["cost", "created_at", "events", "n", "next_wake", "rest", "retention_ms", "worker"]
+    COST_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    EVENTS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_WAKE_FIELD_NUMBER: _ClassVar[int]
+    N_FIELD_NUMBER: _ClassVar[int]
+    REST_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_MS_FIELD_NUMBER: _ClassVar[int]
+    WORKER_FIELD_NUMBER: _ClassVar[int]
+    cost: Cost
+    created_at: Time
+    events: _containers.RepeatedCompositeFieldContainer[Event]
+    n: int
+    next_wake: Time
+    rest: bool
+    retention_ms: int
+    worker: str
+    def __init__(self, n: _Optional[int] = ..., events: _Optional[_Iterable[_Union[Event, _Mapping]]] = ..., next_wake: _Optional[_Union[Time, _Mapping]] = ..., worker: _Optional[str] = ..., created_at: _Optional[_Union[Time, _Mapping]] = ..., retention_ms: _Optional[int] = ..., rest: bool = ..., cost: _Optional[_Union[Cost, _Mapping]] = ...) -> None: ...
+
+class Sent(_message.Message):
+    __slots__ = ["id", "name", "occurrence", "refused", "run", "to", "value"]
+    ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    REFUSED_FIELD_NUMBER: _ClassVar[int]
+    RUN_FIELD_NUMBER: _ClassVar[int]
+    TO_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    name: str
+    occurrence: int
+    refused: Failure
+    run: str
+    to: Delivery
     value: Value
-    def __init__(self, value: _Optional[_Union[Value, _Mapping]] = ...) -> None: ...
+    def __init__(self, occurrence: _Optional[int] = ..., run: _Optional[str] = ..., id: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., to: _Optional[_Union[Delivery, _Mapping]] = ..., refused: _Optional[_Union[Failure, _Mapping]] = ...) -> None: ...
+
+class Snapshot(_message.Message):
+    __slots__ = ["cost", "events", "n", "next_wake", "origins", "rest"]
+    COST_FIELD_NUMBER: _ClassVar[int]
+    EVENTS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_WAKE_FIELD_NUMBER: _ClassVar[int]
+    N_FIELD_NUMBER: _ClassVar[int]
+    ORIGINS_FIELD_NUMBER: _ClassVar[int]
+    REST_FIELD_NUMBER: _ClassVar[int]
+    cost: Cost
+    events: _containers.RepeatedCompositeFieldContainer[Event]
+    n: int
+    next_wake: Time
+    origins: _containers.RepeatedCompositeFieldContainer[Origin]
+    rest: bool
+    def __init__(self, n: _Optional[int] = ..., events: _Optional[_Iterable[_Union[Event, _Mapping]]] = ..., next_wake: _Optional[_Union[Time, _Mapping]] = ..., rest: bool = ..., origins: _Optional[_Iterable[_Union[Origin, _Mapping]]] = ..., cost: _Optional[_Union[Cost, _Mapping]] = ...) -> None: ...
+
+class Start(_message.Message):
+    __slots__ = ["budget", "carried", "chain", "cost", "created_at", "input", "line", "parent", "previous", "resumes", "seen", "seq", "state", "version", "workflow"]
+    BUDGET_FIELD_NUMBER: _ClassVar[int]
+    CARRIED_FIELD_NUMBER: _ClassVar[int]
+    CHAIN_FIELD_NUMBER: _ClassVar[int]
+    COST_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    INPUT_FIELD_NUMBER: _ClassVar[int]
+    LINE_FIELD_NUMBER: _ClassVar[int]
+    PARENT_FIELD_NUMBER: _ClassVar[int]
+    PREVIOUS_FIELD_NUMBER: _ClassVar[int]
+    RESUMES_FIELD_NUMBER: _ClassVar[int]
+    SEEN_FIELD_NUMBER: _ClassVar[int]
+    SEQ_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    WORKFLOW_FIELD_NUMBER: _ClassVar[int]
+    budget: Budget
+    carried: _containers.RepeatedScalarFieldContainer[str]
+    chain: str
+    cost: Cost
+    created_at: Time
+    input: Value
+    line: str
+    parent: Parent
+    previous: str
+    resumes: str
+    seen: _containers.RepeatedCompositeFieldContainer[Seen]
+    seq: int
+    state: Value
+    version: int
+    workflow: str
+    def __init__(self, workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[Value, _Mapping]] = ..., chain: _Optional[str] = ..., seq: _Optional[int] = ..., previous: _Optional[str] = ..., resumes: _Optional[str] = ..., parent: _Optional[_Union[Parent, _Mapping]] = ..., state: _Optional[_Union[Value, _Mapping]] = ..., carried: _Optional[_Iterable[str]] = ..., created_at: _Optional[_Union[Time, _Mapping]] = ..., seen: _Optional[_Iterable[_Union[Seen, _Mapping]]] = ..., line: _Optional[str] = ..., budget: _Optional[_Union[Budget, _Mapping]] = ..., cost: _Optional[_Union[Cost, _Mapping]] = ...) -> None: ...
+
+class Step(_message.Message):
+    __slots__ = ["attempt", "charges", "name", "occurrence", "value"]
+    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    CHARGES_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    attempt: int
+    charges: _containers.RepeatedCompositeFieldContainer[Amount]
+    name: str
+    occurrence: int
+    value: Value
+    def __init__(self, name: _Optional[str] = ..., occurrence: _Optional[int] = ..., attempt: _Optional[int] = ..., value: _Optional[_Union[Value, _Mapping]] = ..., charges: _Optional[_Iterable[_Union[Amount, _Mapping]]] = ...) -> None: ...
+
+class StepCharges(_message.Message):
+    __slots__ = ["amounts", "step"]
+    AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+    STEP_FIELD_NUMBER: _ClassVar[int]
+    amounts: _containers.RepeatedCompositeFieldContainer[Amount]
+    step: str
+    def __init__(self, step: _Optional[str] = ..., amounts: _Optional[_Iterable[_Union[Amount, _Mapping]]] = ...) -> None: ...
+
+class StepFailed(_message.Message):
+    __slots__ = ["attempt", "charges", "error", "name", "occurrence"]
+    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    CHARGES_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    attempt: int
+    charges: _containers.RepeatedCompositeFieldContainer[Amount]
+    error: Failure
+    name: str
+    occurrence: int
+    def __init__(self, name: _Optional[str] = ..., occurrence: _Optional[int] = ..., attempt: _Optional[int] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., charges: _Optional[_Iterable[_Union[Amount, _Mapping]]] = ...) -> None: ...
+
+class StepRetry(_message.Message):
+    __slots__ = ["at", "attempt", "charges", "error", "name", "occurrence"]
+    ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    AT_FIELD_NUMBER: _ClassVar[int]
+    CHARGES_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    at: Time
+    attempt: int
+    charges: _containers.RepeatedCompositeFieldContainer[Amount]
+    error: Failure
+    name: str
+    occurrence: int
+    def __init__(self, name: _Optional[str] = ..., occurrence: _Optional[int] = ..., attempt: _Optional[int] = ..., error: _Optional[_Union[Failure, _Mapping]] = ..., at: _Optional[_Union[Time, _Mapping]] = ..., charges: _Optional[_Iterable[_Union[Amount, _Mapping]]] = ...) -> None: ...
+
+class Time(_message.Message):
+    __slots__ = ["ms"]
+    MS_FIELD_NUMBER: _ClassVar[int]
+    ms: int
+    def __init__(self, ms: _Optional[int] = ...) -> None: ...
+
+class Timer(_message.Message):
+    __slots__ = ["occurrence", "until"]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    UNTIL_FIELD_NUMBER: _ClassVar[int]
+    occurrence: int
+    until: Time
+    def __init__(self, occurrence: _Optional[int] = ..., until: _Optional[_Union[Time, _Mapping]] = ...) -> None: ...
+
+class Value(_message.Message):
+    __slots__ = ["json", "raw"]
+    JSON_FIELD_NUMBER: _ClassVar[int]
+    RAW_FIELD_NUMBER: _ClassVar[int]
+    json: bytes
+    raw: bytes
+    def __init__(self, json: _Optional[bytes] = ..., raw: _Optional[bytes] = ...) -> None: ...
+
+class Watched(_message.Message):
+    __slots__ = ["chain", "ended", "occurrence", "refused", "waiting"]
+    CHAIN_FIELD_NUMBER: _ClassVar[int]
+    ENDED_FIELD_NUMBER: _ClassVar[int]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
+    REFUSED_FIELD_NUMBER: _ClassVar[int]
+    WAITING_FIELD_NUMBER: _ClassVar[int]
+    chain: str
+    ended: Ended
+    occurrence: int
+    refused: Failure
+    waiting: str
+    def __init__(self, occurrence: _Optional[int] = ..., chain: _Optional[str] = ..., waiting: _Optional[str] = ..., ended: _Optional[_Union[Ended, _Mapping]] = ..., refused: _Optional[_Union[Failure, _Mapping]] = ...) -> None: ...
+
+class Status(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = []

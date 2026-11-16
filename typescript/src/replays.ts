@@ -1,7 +1,7 @@
 // The replays of a worker, each talking to the agent loop through its channel.
 import type { Clock } from "./clock.ts";
 import type { Core } from "./core.ts";
-import type { agent, run } from "./proto.ts";
+import type { agent, layout, run } from "./proto.ts";
 import { Channel, dropped, type ReplayEvent, type ReplayHost, replay } from "./replay.ts";
 import type { Workflows } from "./workflow.ts";
 
@@ -30,7 +30,8 @@ export class Replays {
     this.#clock = clock;
   }
 
-  spawn(runId: string, input: run.RunInput): void {
+  /** Starts the replay of `runId`, which serves a due entry of `dueAt` if any. */
+  spawn(runId: string, input: run.RunInput, dueAt: layout.Time | undefined): void {
     const start = input.start;
     const workflow = start && this.#workflows.get(start.workflow, start.version);
     if (workflow === undefined) {
@@ -44,7 +45,7 @@ export class Replays {
     const emit = (event: ReplayEvent) => this.#events.push(event);
     const clock = this.#clock;
     clock.spawn(
-      () => replay(this.#core, workflow, input, clock, emit, channel, this.#host),
+      () => replay(this.#core, workflow, input, dueAt, clock, emit, channel, this.#host),
       `${REPLAY}${runId}`,
     );
   }

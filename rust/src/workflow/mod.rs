@@ -8,7 +8,9 @@ pub(crate) mod executor;
 mod iterate;
 mod log;
 mod messages;
+mod poll;
 mod saga;
+pub(crate) mod schedule;
 pub(crate) mod scheduler;
 mod step;
 mod var;
@@ -25,17 +27,20 @@ use serde::de::DeserializeOwned;
 
 pub use as_workflow::{AsWorkflow, IntoWorkflows};
 pub(crate) use canonical::input_object;
-pub use child::{Child, SendFromWorkflow, StartChild};
-pub use context::{Context, WaitUntil};
+pub use child::{ChainResult, Child, SendFromWorkflow, StartChild};
+pub use context::{Context, Receive, WaitUntil};
 pub use log::Log;
 pub use messages::Handlers;
-pub(crate) use step::with_step_key;
-pub use step::{Step, step_key};
+pub use poll::Poll;
+pub use schedule::Cron;
+pub(crate) use step::{LiveAttempt, with_attempt};
+pub use step::{Step, charge, step_key};
 pub use var::Var;
 
+use crate::cost::Budget;
 use crate::error::{Error, Failure, Result};
 use crate::proto::layout::v1::{self as layout, value};
-use crate::settings::Retention;
+use crate::settings::check_retention;
 
 type Run = dyn Fn(Context, Vec<u8>) -> BoxFuture<'static, Result<Vec<u8>>> + Send + Sync;
 
@@ -64,7 +69,8 @@ pub struct Workflow<O> {
     name: String,
     version: Option<u32>,
     step_timeout: Option<Duration>,
-    retention: Option<Retention>,
+    retention: Option<Duration>,
+    budget: Option<Budget>,
     run: Arc<Run>,
     output: PhantomData<fn() -> O>,
 }
@@ -76,6 +82,7 @@ impl<O> Clone for Workflow<O> {
             version: self.version,
             step_timeout: self.step_timeout,
             retention: self.retention,
+            budget: self.budget.clone(),
             run: self.run.clone(),
             output: PhantomData,
         }
@@ -103,6 +110,7 @@ impl<O: Serialize + Send + 'static> Workflow<O> {
             version: None,
             step_timeout: None,
             retention: None,
+            budget: None,
             run: Arc::new(run),
             output: PhantomData,
         }
@@ -141,10 +149,17 @@ impl<O> Workflow<O> {
     }
 
     /// How long its runs are kept after their chain ends, instead of the worker's `retention`:
-    /// a duration (`s::days(90)`) or `s::FOREVER`; one under an hour or over 100 years is a
+    /// a duration (`s::days(90)`); one under an hour or over 100 years is a
     /// `ConfigError` when a worker starts with it.
-    pub fn with_retention(mut self, retention: impl Into<Retention>) -> Self {
-        self.retention = Some(retention.into());
+    pub fn with_retention(mut self, retention: Duration) -> Self {
+        self.retention = Some(retention);
+        self
+    }
+
+    /// The budget of its runs started without one of their own: `InvalidArgument` at the start
+    /// for a malformed meter or limit.
+    pub fn with_budget(mut self, budget: impl Into<Budget>) -> Self {
+        self.budget = Some(budget.into());
         self
     }
 
@@ -160,8 +175,12 @@ impl<O> Workflow<O> {
         self.step_timeout
     }
 
-    pub fn retention(&self) -> Option<Retention> {
+    pub fn retention(&self) -> Option<Duration> {
         self.retention
+    }
+
+    pub fn budget(&self) -> Option<&Budget> {
+        self.budget.as_ref()
     }
 
     /// The same workflow, its result read as JSON: workflows of different results in one `Vec`.
@@ -171,6 +190,7 @@ impl<O> Workflow<O> {
             version: self.version,
             step_timeout: self.step_timeout,
             retention: self.retention,
+            budget: self.budget.clone(),
             run: self.run.clone(),
             output: PhantomData,
         }
@@ -205,10 +225,11 @@ impl Workflows {
             ));
         }
         // The core keeps one retention per name.
-        let mut retentions: HashMap<&str, Option<Retention>> = HashMap::new();
+        let mut retentions: HashMap<&str, Option<Duration>> = HashMap::new();
         for ((name, _), w) in &map {
             if let Some(r) = w.retention {
-                r.check(
+                check_retention(
+                    r,
                     retention_min,
                     &format!("the retention of workflow {name:?}"),
                 )?;
@@ -223,7 +244,7 @@ impl Workflows {
     }
 
     /// The retention the workflows of `name` give, the same for all its versions.
-    pub(crate) fn retention(&self, name: &str) -> Option<Retention> {
+    pub(crate) fn retention(&self, name: &str) -> Option<Duration> {
         self.0
             .iter()
             .find(|((n, _), _)| n == name)
@@ -248,6 +269,31 @@ pub struct Retry {
     pub initial: Duration,
     pub max: Duration,
     pub multiplier: f64,
+}
+
+impl Retry {
+    /// The checks of the other hosts at declaration, made here at the call: the fields are public.
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.max_attempts == 0 {
+            return Err(Error::InvalidArgument(format!(
+                "max_attempts must be a positive integer: {}",
+                self.max_attempts
+            )));
+        }
+        if self.max < self.initial {
+            return Err(Error::InvalidArgument(format!(
+                "invalid backoff from {:?} to {:?}",
+                self.initial, self.max
+            )));
+        }
+        if !self.multiplier.is_finite() || self.multiplier < 1.0 {
+            return Err(Error::InvalidArgument(format!(
+                "multiplier must be at least 1: {}",
+                self.multiplier
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// An error that fails a step at once, attempts left or not.
@@ -303,11 +349,13 @@ pub(crate) fn failure_of(e: &Error) -> Failure {
             kind: "RolledBack".into(),
             message: reason.clone(),
             retryable: false,
+            details: None,
         },
         other => Failure {
             kind: error_kind(other).into(),
             message: other.to_string(),
             retryable: false,
+            details: None,
         },
     }
 }
@@ -329,6 +377,7 @@ fn error_kind(e: &Error) -> &'static str {
         Error::InvalidArgument(_) => "InvalidArgument",
         Error::RunExists { .. } => "RunExists",
         Error::RunFailed { .. } => "RunFailed",
+        Error::BudgetExceeded { .. } => "BudgetExceeded",
         Error::WaitTimeout => "WaitTimeout",
         Error::Stuck(_) => "Stuck",
         Error::Unchecked(_) => "Unchecked",

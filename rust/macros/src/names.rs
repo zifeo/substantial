@@ -35,3 +35,15 @@ pub fn call(lit: &LitStr, what: &str) -> syn::Result<()> {
         format!("{what} name {name:?} must match [A-Za-z0-9._-]{{1,128}}"),
     ))
 }
+
+/// `schedule.next` is the step `c.schedule()` records its fires in.
+pub fn not_reserved(lit: &LitStr) -> syn::Result<()> {
+    const RESERVED: &str = "schedule.next";
+    if lit.value() != RESERVED {
+        return Ok(());
+    }
+    Err(syn::Error::new(
+        lit.span(),
+        format!("the step name {RESERVED:?} is reserved for c.schedule()"),
+    ))
+}

@@ -56,7 +56,7 @@ async def parent(c: Context) -> list[object]:
 
 
 async def test_a_parent_awaits_its_children(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [parent, double, listener]):
         run = await sub.start(parent)
         assert await run.result(timeout=LONG) == [42, "StepFailed", "kid-ok", "now"]
@@ -75,7 +75,7 @@ async def asker(c: Context) -> list[str]:
 
 
 async def test_a_run_knows_its_chain_as_its_parent_and_clients_do(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [asker, whoami]):
         run = await sub.start(asker)
         mine, kid, answered = await run.result(timeout=LONG)
@@ -96,7 +96,7 @@ async def adopter(c: Context) -> str:
 
 
 async def test_a_child_id_taken_by_another_run_fails_the_child(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [adopter, double]):
         taken = await sub.start(double, {"n": 1}, id="taken")
         assert await taken.result(timeout=LONG) == 2
@@ -113,7 +113,7 @@ async def test_the_result_of_a_run_not_a_child_is_invalid(store: Store) -> None:
             return "refused"
         return "accepted"
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [stranger]):
         run = await sub.start(stranger)
         assert await run.result(timeout=LONG) == "refused"
@@ -142,7 +142,7 @@ async def test_a_loop_compresses_at_every_boundary(store: Store) -> None:
             beside += 10
         return [s.i, s.total, beside]
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [counter], continue_as_new_after=0):
         run = await sub.start(counter, id="counter-1")
         result = await run.result(timeout=LONG)
@@ -166,7 +166,7 @@ async def test_a_state_that_is_not_json_fails_a_compression(store: Store) -> Non
         async for s in c.iterate(Opaque()):
             s.at = started
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [opaque], continue_as_new_after=0):
         run = await sub.start(opaque)
         with pytest.raises(RunFailed) as failed:
@@ -194,7 +194,7 @@ async def flight(c: Context, n: int) -> str:
 
 
 async def test_continue_as_new_by_hand(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [countdown, flight, landing]):
         run = await sub.start(countdown, {"n": 3})
         assert await run.result(timeout=LONG) == "liftoff"

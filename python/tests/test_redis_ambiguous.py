@@ -22,11 +22,13 @@ class Dropping:
         self.forward = False
         self.dropped = 0
         self.port = 0
+        self._clients: set[asyncio.StreamWriter] = set()
 
     def drop(self, marker: bytes, *, forward: bool) -> None:
         self.marker, self.forward = marker, forward
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._clients.add(writer)
         up_reader, up_writer = await asyncio.open_connection(*self._target)
         muted = False
 
@@ -55,6 +57,7 @@ class Dropping:
         with contextlib.suppress(ConnectionError):
             await upstream()
         down.cancel()
+        self._clients.discard(writer)
         for w in (writer, up_writer):
             w.close()
 
@@ -64,7 +67,8 @@ class Dropping:
         self.port = server.sockets[0].getsockname()[1]
         async with server:
             yield
-            server.close_clients()
+            for writer in self._clients:
+                writer.close()
 
 
 @pytest.fixture

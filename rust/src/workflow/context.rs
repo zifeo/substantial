@@ -1,15 +1,18 @@
 use std::future::{Future, IntoFuture};
+use std::marker::PhantomData;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IgnoredAny};
 
 use super::log::Log;
-use super::scheduler::{Answer, CallFuture, Shared};
+use super::scheduler::{Answer, CallFuture, Receives, Shared};
 use super::{decode, json};
+use crate::cost::Cost;
 use crate::error::{Error, Result};
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
 use crate::proto::layout::v1::{self as layout, Time, Value};
@@ -72,9 +75,15 @@ impl Context {
         self.resolved(Call::SleepUntil(until)).await.map(drop)
     }
 
-    /// The next message of `name` that no `receive` took yet.
-    pub async fn receive<T: DeserializeOwned>(&self, name: &str) -> Result<T> {
-        decode(self.resolved(Call::Receive(name.to_owned())).await?)
+    /// The next message of `name` that no `receive` took yet; with `.timeout(..)`, `WaitTimeout`
+    /// once it passed with none.
+    pub fn receive<T: DeserializeOwned>(&self, name: &str) -> Receive<T> {
+        Receive {
+            ctx: self.clone(),
+            name: name.to_owned(),
+            timeout: None,
+            output: PhantomData,
+        }
     }
 
     /// Makes `value` the last one published under `key` by the chain.
@@ -109,6 +118,11 @@ impl Context {
     pub async fn uuid(&self) -> Result<String> {
         decode(self.resolved(Call::Uuid(b::Empty {})).await?)
     }
+
+    /// The chain's cost so far, recorded.
+    pub async fn cost(&self) -> Result<Cost> {
+        decode(self.resolved(Call::Cost(b::Empty {})).await?)
+    }
 }
 
 pub(super) fn value(answer: Answer) -> Result<Option<Value>> {
@@ -124,6 +138,106 @@ fn done(called: Called) -> Result<()> {
     match called {
         Called::Done(_) => Ok(()),
         other => Err(Error::Protocol(format!("expected done, got {other:?}"))),
+    }
+}
+
+/// A receive of a message, awaited to take it.
+#[must_use = "a receive does nothing until awaited"]
+pub struct Receive<T> {
+    ctx: Context,
+    name: String,
+    timeout: Option<Duration>,
+    output: PhantomData<fn() -> T>,
+}
+
+impl<T> Receive<T> {
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+}
+
+impl<T: DeserializeOwned + 'static> IntoFuture for Receive<T> {
+    type Output = Result<T>;
+    type IntoFuture = BoxFuture<'static, Result<T>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let Receive {
+            ctx, name, timeout, ..
+        } = self;
+        Box::pin(async move {
+            let counts = ctx.shared.receives(&name);
+            let _pending = Pending::new(&counts, &name, timeout.is_some())?;
+            let Some(timeout) = timeout else {
+                let received = ctx.call(Call::Receive(name));
+                counts.lock().expect(POISONED).taken += 1;
+                return decode(value(received.await?)?);
+            };
+            if !counts.lock().expect(POISONED).bound {
+                let delivered = counts.clone();
+                ctx.handle(&name, move |_: IgnoredAny| {
+                    delivered.lock().expect(POISONED).delivered += 1;
+                })?;
+                counts.lock().expect(POISONED).bound = true;
+            }
+            let claimed = Arc::new(AtomicBool::new(false));
+            // Claiming in the predicate keeps two receives woken by one message from both taking
+            // it.
+            let claim = {
+                let claimed = claimed.clone();
+                move || {
+                    let mut counts = counts.lock().expect(POISONED);
+                    if !claimed.load(Ordering::Relaxed) && counts.delivered > counts.taken {
+                        counts.taken += 1;
+                        claimed.store(true, Ordering::Relaxed);
+                    }
+                    claimed.load(Ordering::Relaxed)
+                }
+            };
+            if !claim() {
+                ctx.wait_until(claim).timeout(timeout).await?;
+            }
+            if !claimed.load(Ordering::Relaxed) {
+                return Err(Error::WaitTimeout);
+            }
+            decode(ctx.resolved(Call::Receive(name)).await?)
+        })
+    }
+}
+
+const POISONED: &str = "the receive counts are never locked across a panic";
+
+/// A receive pending from its first poll until it ends or is dropped.
+struct Pending {
+    counts: Arc<std::sync::Mutex<Receives>>,
+    timed: bool,
+}
+
+impl Pending {
+    fn new(counts: &Arc<std::sync::Mutex<Receives>>, name: &str, timed: bool) -> Result<Self> {
+        let mut c = counts.lock().expect(POISONED);
+        if (if timed { c.plain } else { c.timed }) > 0 {
+            return Err(Error::InvalidArgument(format!(
+                "a receive of {name:?} with a timeout and one without are pending at once: which \
+                 one takes a message would depend on the order of the code's branches"
+            )));
+        }
+        *(if timed { &mut c.timed } else { &mut c.plain }) += 1;
+        Ok(Self {
+            counts: counts.clone(),
+            timed,
+        })
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let mut c = self.counts.lock().expect(POISONED);
+        *(if self.timed {
+            &mut c.timed
+        } else {
+            &mut c.plain
+        }) -= 1;
     }
 }
 

@@ -45,13 +45,13 @@ async def test_debounce() -> None:
 
 Nothing runs between two calls of the test. Only `settle` and `advance` let workers work and the clock move:
 
-- `start`, `send`, `cancel`, `status` and `read` act on the store and return. As in production, a `Substantial` wakes the workers it started at once on its own `start`, `send` and `cancel`, and every other worker finds the run at its next scan, up to `max_idle` later; the woken worker acts at the next `settle`. So two `send` calls in a row reach the run together, and `await env.settle()` between them has the run see the first before the second exists.
+- `start`, `send`, `cancel`, `status` and `read` act on the store and return. As in production, a `Substantial` wakes the workers it started that serve the run's workflow at once on its own `start`, `send` and `cancel`, and every other worker finds the run at its next scan, up to `max_idle` later; the woken worker acts at the next `settle`. So two `send` calls in a row reach the run together, and `await env.settle()` between them has the run see the first before the second exists.
 - `await env.settle()` lets every worker do all it can at the current time, and returns once nothing can happen without the clock moving: every run waits on a timer, a message, its end or a held step, and no replay, step or store operation is in flight.
 - `await env.advance(d)` settles, then moves the clock forward by `d`, stopping at each moment a worker has something due (a run's timer, a scan, a claim renewal, a backoff, a step's timeout), settling there before moving on. A timer fires at its due instant, before the test's next call: a step whose timeout is due at 5:00 and is still held then has timed out, and a `release` after `advance` reached 5:00 comes too late. A cancel that reaches the replay in which a timer fires wins, and the run ends `cancelled`: sent from another pod 1 ms before the timer, it is read with the timer; sent once `advance` reached the timer's instant, it finds the run ended and raises `RunEnded`.
 - `await run.result()` settles, then returns the value if the run ended, and raises `s.testing.Stuck` naming what the run waits on otherwise: a timer and its due time, a message, a workflow no worker serves. `result(timeout=d)` raises `WaitTimeout` instead, at once, as it would once `d` passed. Neither moves the clock: advance it to where the run ends. Application code that polls in a loop of its own cannot run inside the environment.
 - **A step cannot wait for the environment.** `result`, `settle` and `advance` called from a step body raise `Stuck` at once, because the settle they start waits for that step to return. A step that needs another run's value in production (it starts a run through a client and awaits its `result`) is written for the environment as a workflow that starts the other run as a child with `c.start` and awaits its result, or that gives the step the value as an argument.
 - **The timing is production's.** Workers keep their settings: a worker wakes its own runs at their timers, finds a run another worker suspended or started at its next scan, renews its claims every `claim_ttl / 2`, and a crashed worker's runs are taken over 1 ms past `claim_ttl + claim_skew` after its last renewal. A child started with `c.start` is found at once by the worker that started it, and an ended run is collected after its `retention` (I-16), so a test that advances past it reads `RunNotFound`. Store operations take no virtual time; a worker's retries wait their backoff in virtual time, a client's retries take none.
-- **Idle time is cheap, a wake is not.** A scan that cannot find anything is skipped, so a month of an idle worker takes milliseconds. Each wake of a run costs a replay in the core, of the order of 10 to 30 ms in Python: a nightly job takes seconds for a year of virtual time, an actor applying an operation a day about 10 s. A replay reads the run's history since its last compression, so `continue_as_new_after=0` (I-19) makes a long test several times faster: about 7 s instead of 40 s for the nightly job. Under Chaos a scan is skipped only when the fault draw of each of its listings succeeds, drawn as the scan would draw it, so the instants stay those of a test that skips nothing; a scan whose draw fails runs, and its backoff moves the scans after it. At a `rate` of 0.05, a month of an idle worker under Chaos takes about 3 s in Python with `service` and 90 s with `script`, whose worker scans every second (TypeScript 0.3 s and 6 s, Rust 1 s and 25 s in a debug build). In an outage no scan is skipped, as every scan fails.
+- **Idle time is cheap, a wake is not.** A scan that cannot find anything is skipped, its instant computed from the worker's phase (I-18), so a month of an idle worker takes milliseconds. Each wake of a run costs a replay in the core, of the order of 10 to 30 ms in Python: a nightly job takes seconds for a year of virtual time, an actor applying an operation a day about 10 s. A replay reads the run's history since its last compression, so `continue_as_new_after=0` (I-19) makes a long test several times faster: about 7 s instead of 40 s for the nightly job. Under Chaos a scan is skipped only when the fault draw of each of its listings succeeds, drawn as the scan would draw it, so the instants stay those of a test that skips nothing; a scan whose draw fails runs, and its backoff moves the scans after it. At a `rate` of 0.05, a month of an idle worker under Chaos takes about 1 s in Python with `service` and 30 s with `script`, whose worker scans every second (TypeScript 0.5 s and 12 s, Rust 0.5 s and 15 s in a debug build). In an outage no scan is skipped, as every scan fails.
 - **Nothing hangs.** `settle` raises `Stuck` naming what is still active when a step body has not returned after 10 real seconds, or when runs keep waking each other without the clock moving, naming the run replayed more than 100 times in one settle. A synchronous TypeScript step that never returns blocks the event loop, and nothing can report it.
 
 ## Workers and steps
@@ -82,12 +82,14 @@ async with (
   - `h.release()` hands their outcomes to their workers.
   - `h.crash()` crashes the workers that hold them.
   - Otherwise a held attempt times out like a hung step once the clock reaches its timeout (I-18).
+- `await w.drain(within=d)` drains a worker as a job run on a schedule does (I-18): the environment settles, then moves the clock from one due instant to the next until the worker stopped, which may be at once. A run due within `d` is served, one due after it is left, a crashed worker's claim expiring within it is waited for, and the worker's error, if it died, is raised by `drain` and not again by the next settle. `Stuck` if the worker is paused.
 - A deploy: leave the old worker's `async with` (or `await w.shutdown()`), then start `env.worker([checkout_v2], preset="service")`.
 
 ## Failures and faults
 
 - `await env.check()` raises `s.testing.Unchecked` naming every run of the namespace, started by the test, the application or a workflow, that ended failed without anyone reading it: the test through `env` (a `result()` that raised its failure, or a `status()` that returned `failed`), or a workflow of the namespace (a parent whose `result()` of its child raised the failure, handled or not). A run collected by its retention before `check` is still named. End every test with it, or call it from the fixture that opens the environment, so a failure in the background fails the test.
 - `env.outage(d)`: for the next `d` of virtual time every store operation fails. Workers retry their store operations, waiting their backoff in virtual time, and a client call raises `StoreError` at once, after its retries. A worker's operation that still fails after its retries, a few seconds (I-26), drops the replay it served: a step that returned then has its outcome lost and runs again once the store is back and the claim lapsed, as after a crash. A step returned at the start of a 10 s outage runs again at about 40 s; one returned during a 5 s outage is recorded once the store is back.
+- `Env.open(now=, prices=, observe=)` takes the `prices` and `observe` of `Substantial.create` (I-27, I-29), for a test of a budget in money or of what an observer receives; `env.client()` shares them. The test clock drives `Attempt` and `Replay` times; `StoreOp.seconds` is real time.
 - `Env.open(now=, chaos=s.testing.Chaos(seed=7, rate=0.05))` faults the workers, not the clients: each worker store operation fails with probability `rate`, half of the failed creates applied anyway with their answer lost, and each step attempt that returns crashes its worker with probability `rate`, a fresh worker of the same workflows and settings taking its place. A fault is drawn from the seed and the operation itself (its kind, its key, the worker, and how many times that worker tried that operation on that key), not from its place in a sequence: the same seed replays the same faults whatever the workers' order, as long as the steps do the same thing, and a replaced worker draws afresh, so a run always ends. `env.faults` counts what was injected (`failed`, `ambiguous`, `crashed`), so a test can require that a seed injected something; `failed` counts the failures not applied and `ambiguous` the creates applied with their answer lost, never the same one twice.
 
 ## In TypeScript and Rust
@@ -110,9 +112,41 @@ env.advance(s::minutes(5)).await?;
 assert_eq!(run.result().await?, vec![1]);
 ```
 
-The same names in every host: `Env.open`, `client`, `worker`, `crash`, `pause`, `resume`, `hold`, `held`, `release`, `outage`, `settle`, `advance`, `now`, `check`, `Chaos`, `faults`, `Stuck`, `Unchecked`. TypeScript takes options as objects (`env.hold("charge", { times: 2 })`, `new s.testing.Chaos({ seed: 7, rate: 0.05 })`).
+The same names in every host: `Env.open`, `client`, `worker`, `crash`, `pause`, `resume`, `drain`, `hold`, `held`, `release`, `outage`, `settle`, `advance`, `now`, `check`, `Chaos`, `faults`, `Stuck`, `Unchecked`. TypeScript takes options as objects (`env.hold("charge", { times: 2 })`, `new s.testing.Chaos({ seed: 7, rate: 0.05 })`). Rust takes them as builders and structs (`env.hold("charge").times(2)`, `s::testing::Chaos { seed: 7, rate: 0.05 }`), `Stuck` and `Unchecked` are variants of `s::Error`, and `crash`, `pause` and `resume` are methods of `s::Worker` under the feature `testing`.
 
 - In TypeScript `s.testing` comes with the library, `import * as s from "@substantial/substantial"`, and a test is an async function of any runner. Node 24 or later runs `.test.ts` files as they are: `node --test` runs this repository's (`npm test`). A `Date` holds whole milliseconds, as the clock does.
 - In Rust `s::testing` is behind the feature `testing`, and a test is a `#[tokio::test]`.
 
 - In TypeScript a worker runs from its creation, as `Substantial.worker` does, and `await using` only shuts it down. Leaving `await using` on an error cannot see the error, so it settles and shuts the worker down rather than crashing it; if that fails too, JavaScript throws a `SuppressedError` holding both.
+
+## Testing an ASGI app
+
+An ASGI app whose lifespan starts a worker (as in [Integration](integration.md#the-worker-in-the-lifespan)) is tested on the test's own event loop: run its lifespan yourself, then send requests through `httpx.ASGITransport`, which calls the app in the test's task, with no server and no thread. `python/tests/test_integration_guide.py` runs this pattern on the guide's app.
+
+```python
+import contextlib
+
+import httpx
+
+
+@contextlib.asynccontextmanager
+async def serving(app):
+    async with app.router.lifespan_context(app):           # Starlette; or drive the ASGI lifespan messages
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
+            yield client
+
+
+async def test_the_webhook() -> None:
+    async with s.testing.Env.open(now=T0) as env:
+        app = create_app(env.client, concurrency=4)
+        async with serving(app) as http:
+            response = await http.post("/webhooks/provider", json=event)
+            assert response.status_code == 200
+            await env.settle()
+        await env.check()
+```
+
+- **Why not a thread-portal test client.** Starlette's `TestClient` and other synchronous clients run the app in a thread with an event loop of its own. The environment's workers, its clock and its futures belong to the test's loop: the app's calls, made from the other loop, would wait on futures no loop resolves, and `settle` could not see their work, so the test hangs. In Python, the environment refuses a call from another event loop with `InvalidArgument` naming both loops, so such a test fails at once. Rust refuses a call from another tokio runtime the same way: serve the app from a task the test spawns. TypeScript runs one event loop and is not concerned.
+- `ASGITransport` does not run the lifespan: enter it yourself, as `serving` does, so the app's worker starts and stops with the test.
+- Nothing runs between two requests but what they do: `settle` or `advance` lets the workers work, as in any test of the environment.

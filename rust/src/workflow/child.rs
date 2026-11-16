@@ -3,6 +3,7 @@
 
 use std::future::IntoFuture;
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 use serde::Serialize;
@@ -12,9 +13,11 @@ use super::context::Context;
 use super::scheduler::Answer;
 use super::{AsWorkflow, decode, input_object, json};
 use crate::client::RunStatus;
+use crate::cost::Budget;
 use crate::error::{Error, Result};
 use crate::names::{check_key, check_name};
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
+use crate::time::millis;
 
 /// A run started by this one, whose result is an `O`.
 pub struct Child<O> {
@@ -48,6 +51,7 @@ impl Context {
             version: workflow.version(),
             input: input_object(input),
             id: None,
+            budget: workflow.budget().cloned(),
             output: PhantomData,
         }
     }
@@ -63,6 +67,63 @@ impl Context {
             id: None,
         }
     }
+
+    /// The value the chain `chain` ended with, a child of this run or not; `RunFailed` if it
+    /// failed or was cancelled, `RunNotFound` if there is none, with `.timeout(..)`,
+    /// `WaitTimeout` once it passed first.
+    pub fn result<T: DeserializeOwned>(&self, chain: &str) -> ChainResult<T> {
+        ChainResult {
+            ctx: self.clone(),
+            chain: chain.to_owned(),
+            timeout: None,
+            output: PhantomData,
+        }
+    }
+}
+
+/// The end of a chain, awaited to wait for it.
+#[must_use = "a result does nothing until awaited"]
+pub struct ChainResult<T> {
+    ctx: Context,
+    chain: String,
+    timeout: Option<Duration>,
+    output: PhantomData<fn() -> T>,
+}
+
+impl<T> ChainResult<T> {
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+}
+
+impl<T: DeserializeOwned + 'static> IntoFuture for ChainResult<T> {
+    type Output = Result<T>;
+    type IntoFuture = BoxFuture<'static, Result<T>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            check_key("run id", &self.chain)?;
+            let call = b::call::ChainResult {
+                chain: self.chain.clone(),
+                timeout_ms: self.timeout.map(millis),
+            };
+            let resolved = self.ctx.resolved(Call::ChainResult(call)).await;
+            failure_read(&self.ctx, &self.chain, &resolved);
+            decode(resolved?)
+        })
+    }
+}
+
+/// Tells the clock when a result of `chain` gave the code its failure.
+fn failure_read<T>(ctx: &Context, chain: &str, resolved: &Result<T>) {
+    if let Err(Error::RunFailed {
+        status: RunStatus::Failed,
+        ..
+    }) = resolved
+    {
+        ctx.shared.clock().failure_read(chain);
+    }
 }
 
 /// A start of a child run, awaited to start it.
@@ -73,6 +134,7 @@ pub struct StartChild<O> {
     version: Option<u32>,
     input: Result<Vec<u8>>,
     id: Option<String>,
+    budget: Option<Budget>,
     output: PhantomData<fn() -> O>,
 }
 
@@ -80,6 +142,12 @@ impl<O> StartChild<O> {
     /// Starts the child under this id instead of one derived from the parent's.
     pub fn id(mut self, id: &str) -> Self {
         self.id = Some(id.to_owned());
+        self
+    }
+
+    /// The child's budget, instead of its workflow's.
+    pub fn budget(mut self, budget: impl Into<Budget>) -> Self {
+        self.budget = Some(budget.into());
         self
     }
 }
@@ -98,6 +166,7 @@ impl<O: 'static> IntoFuture for StartChild<O> {
                 version: self.version,
                 input: Some(json(self.input?)?),
                 id: self.id,
+                budget: self.budget.as_ref().map(Budget::to_proto).transpose()?,
             };
             match self.ctx.call(Call::Start(start)).await? {
                 Answer::Called(Called::Run(chain)) => Ok(Child {
@@ -137,6 +206,12 @@ impl IntoFuture for SendFromWorkflow {
         Box::pin(async move {
             check_key("run id", &self.run)?;
             check_name("message name", &self.name)?;
+            if self.name.starts_with("substantial.") {
+                return Err(Error::InvalidArgument(format!(
+                    "message name {:?} starts with substantial., which is reserved",
+                    self.name
+                )));
+            }
             if let Some(id) = &self.id {
                 check_key("message id", id)?;
             }
@@ -174,18 +249,25 @@ impl<O> Child<O> {
             .ctx
             .resolved(Call::ChildResult(self.chain.clone()))
             .await;
-        if let Err(Error::RunFailed {
-            status: RunStatus::Failed,
-            ..
-        }) = &resolved
-        {
-            self.ctx.shared.clock().failure_read(&self.chain);
-        }
+        failure_read(&self.ctx, &self.chain, &resolved);
         decode(resolved?)
     }
 
     /// Sends the child a message, as `Context::send`.
     pub fn send(&self, name: &str, value: impl Serialize) -> SendFromWorkflow {
         self.ctx.send(&self.chain, name, value)
+    }
+
+    /// Cancels the child as a client's `Run::cancel` does; returns once the outcome is recorded,
+    /// before the child ends: `result()` then fails with `RunFailed`, cancelled.
+    pub async fn cancel(&self, reason: &str) -> Result<()> {
+        let cancel = b::call::Cancel {
+            run: self.chain.clone(),
+            reason: reason.to_owned(),
+        };
+        match self.ctx.call(Call::Cancel(cancel)).await? {
+            Answer::Resolved(_) => Ok(()),
+            Answer::Called(called) => Err(Error::Protocol(format!("cancel answered {called:?}"))),
+        }
     }
 }

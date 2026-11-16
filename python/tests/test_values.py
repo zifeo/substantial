@@ -94,7 +94,7 @@ async def test_a_state_past_the_cap_fails_the_compression() -> None:
         async for s in c.iterate(Holder()):
             s.value = LARGE
 
-    sub = await Substantial.create("memory://values-state", partitions=1)
+    sub = await Substantial.create("memory://values-state")
     async with script(sub, [growing], continue_as_new_after=0):
         run = await sub.start(growing)
         with pytest.raises(RunFailed) as failed:
@@ -108,7 +108,7 @@ async def test_a_client_refuses_a_value_past_the_cap_before_the_store() -> None:
         return await c.receive("note")
 
     recording = Recording(MemoryStore("values-client"))
-    sub = await Substantial._create(recording, partitions=1)
+    sub = await Substantial._create(recording)
     run = await sub.start(waiting, id="w")
     before = (list(recording.created), list(recording.listed))
     with pytest.raises(ValueTooLarge, match=f"limit of {MAX_VALUE} bytes"):
@@ -126,7 +126,7 @@ async def test_a_run_whose_result_is_past_the_cap_fails() -> None:
     async def huge(c: Context) -> str:
         return LARGE
 
-    sub = await Substantial.create("memory://values-result", partitions=1)
+    sub = await Substantial.create("memory://values-result")
     async with script(sub, [huge]):
         run = await sub.start(huge)
         with pytest.raises(RunFailed) as failed:

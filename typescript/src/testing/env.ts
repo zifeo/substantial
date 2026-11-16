@@ -3,6 +3,7 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { createInput, type Host, opening, openOn, Substantial } from "../client.ts";
 import type { CoreModule } from "../core.ts";
+import type { Prices } from "../cost.ts";
 import { Duration } from "../durations.ts";
 import {
   InvalidArgument,
@@ -11,18 +12,21 @@ import {
   SubstantialError,
   WaitTimeout,
 } from "../errors.ts";
+import { Metering, type Observed } from "../observe.ts";
 import { layout } from "../proto.ts";
 import {
   type Ended,
   ended,
+  maxIntervalMs,
   type Namespace,
   type ResultOptions,
   Run,
   type RunStatus,
 } from "../run.ts";
 import type { WorkerOptions } from "../settings.ts";
+import type { Store } from "../stores/store.ts";
 import type { AnyWorkflow } from "../workflow.ts";
-import { Chaos, type FaultStore, type Faults } from "./store.ts";
+import { Chaos, type Faults } from "./store.ts";
 import { limits, Stuck } from "./time.ts";
 import { EnvWorker, Hold } from "./workers.ts";
 import { dueMs, World } from "./world.ts";
@@ -42,13 +46,15 @@ class EnvRun<O> extends Run<O> {
   }
 
   /** Settles, then the value the chain ended with; `Stuck` naming what it waits on if it has not
-   * ended, `WaitTimeout` instead when a `timeout` is given. The clock does not move. */
+   * ended, `WaitTimeout` instead when a `timeout` is given. The clock does not move, and nothing
+   * polls: `maxInterval` is only checked. */
   override async result(options: ResultOptions = {}): Promise<O> {
-    onlyOptions(options, ["timeout"], "result");
+    onlyOptions(options, ["timeout", "maxInterval"], "result");
     const { timeout } = options;
     if (timeout !== undefined && !(timeout instanceof Duration)) {
       throw new InvalidArgument(`timeout is a Duration, not ${timeout}`);
     }
+    maxIntervalMs(options.maxInterval);
     const world = this.#world;
     await world.env.settle();
     let end: Ended;
@@ -121,8 +127,8 @@ function host(world: World, mine: boolean): Host {
   return {
     now: () => world.time.ms,
     ulid: world.ulid,
-    worker: (module, _store, workflows, partitions, settings, hooks) =>
-      new EnvWorker(world, module, workflows, partitions, settings, hooks),
+    worker: (module, _store, workflows, settings, hooks, metering) =>
+      new EnvWorker(world, module, workflows, settings, hooks, metering),
     handle: (ns, workflow, chain) => new EnvRun(ns, workflow, chain, world, mine),
   };
 }
@@ -131,6 +137,10 @@ export interface EnvOptions {
   /** The instant its clock starts at. */
   readonly now: Date;
   readonly chaos?: Chaos;
+  /** As for `Substantial.create`, for the environment, its clients and its workers. */
+  readonly prices?: Prices;
+  /** As for `Substantial.create`, for the environment, its clients and its workers. */
+  readonly observe?: (event: Observed) => unknown;
 }
 
 export interface HoldOptions {
@@ -147,9 +157,9 @@ export function worldOf(env: Env): World {
 
 type SubstantialBase = abstract new (
   module: CoreModule,
-  store: FaultStore,
-  partitions: number,
+  store: Store,
   owned: boolean,
+  metering: Metering,
   host: Host,
 ) => Substantial;
 // Its instances are a `Substantial`; its own `open` takes no URL, unlike `Substantial.open`.
@@ -159,10 +169,12 @@ const Base: SubstantialBase = Substantial as unknown as SubstantialBase;
  * the test's process and move only in `settle` and `advance`. */
 export class Env extends Base {
   readonly #world: World;
+  readonly #metering: Metering;
 
-  private constructor(module: CoreModule, world: World, partitions: number) {
-    super(module, world.store(undefined), partitions, false, host(world, true));
+  private constructor(module: CoreModule, world: World, store: Store, metering: Metering) {
+    super(module, store, false, metering, host(world, true));
     this.#world = world;
+    this.#metering = metering;
   }
 
   static {
@@ -171,20 +183,22 @@ export class Env extends Base {
 
   /** A fresh namespace in memory whose clock starts at `now`; `await using` it. */
   static async open(options: EnvOptions): Promise<Env> {
-    onlyOptions(options, ["now", "chaos"], "Env.open");
-    const { now, chaos } = options;
+    onlyOptions(options, ["now", "chaos", "prices", "observe"], "Env.open");
+    const { now, chaos, prices, observe } = options;
     if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
       throw new InvalidArgument(`an environment starts at a valid Date, not ${now}`);
+    }
+    if (now.getTime() < 0) {
+      throw new InvalidArgument(`an environment starts after 1970, not at ${now.toISOString()}`);
     }
     if (chaos !== undefined && !(chaos instanceof Chaos)) {
       throw new InvalidArgument(`chaos is a Chaos, not ${chaos}`);
     }
+    const metering = new Metering(prices, observe);
     const world = new World(`testing-${crypto.randomUUID()}`, now.getTime(), chaos);
-    const { module, partitions } = await opening(
-      world.store(undefined),
-      createInput({ partitions: 1 }),
-    );
-    const env = new Env(module, world, partitions);
+    const store = metering.wrap(world.store(undefined));
+    const module = await opening(store, createInput());
+    const env = new Env(module, world, store, metering);
     world.env = env;
     return env;
   }
@@ -192,7 +206,12 @@ export class Env extends Base {
   /** Another `Substantial` on the same namespace and clock, as another pod or the application
    * under test would hold. */
   client(): Promise<Substantial> {
-    return openOn(this.#world.store(undefined), host(this.#world, false));
+    const { prices, observe } = this.#metering;
+    const shared = {
+      ...(prices === undefined ? {} : { prices }),
+      ...(observe === undefined ? {} : { observe }),
+    };
+    return openOn(this.#world.store(undefined), shared, host(this.#world, false));
   }
 
   override worker(workflows: Iterable<AnyWorkflow>, options: WorkerOptions): EnvWorker {

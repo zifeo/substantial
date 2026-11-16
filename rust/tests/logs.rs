@@ -84,10 +84,7 @@ async fn logging(c: Context) -> Result<u32> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn logs_are_muted_while_a_replay_walks_the_history() {
     lines();
-    let sub = Substantial::create("memory://logs")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://logs").await.unwrap();
     let worker = script(&sub, logging).start().unwrap();
     let run = sub.start(logging, ()).await.unwrap();
     assert_eq!(run.result().timeout(LONG).await.unwrap(), 3);
@@ -113,10 +110,7 @@ fn about(chain: &str) -> Vec<(Level, String)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_or_cancelled_run_logs_one_warning() {
     lines();
-    let sub = Substantial::create("memory://logs-ends")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://logs-ends").await.unwrap();
     // Each run is replayed several times before it ends: after its step, its sleep, its message.
     let ending = Workflow::without_input("ending", |c| async move {
         c.step("first", || async { Ok::<_, Error>(()) }).await?;
@@ -202,7 +196,7 @@ async fn a_worker_that_dies_logs_and_fails_the_waits() {
         inner: MemoryStore::open("logs-dies").unwrap(),
         armed: AtomicBool::new(false),
     });
-    let sub = internal::create(store.clone()).partitions(1).await.unwrap();
+    let sub = internal::create(store.clone()).await.unwrap();
     let waiting = Workflow::without_input(
         "waiting",
         |c| async move { c.receive::<u32>("never").await },

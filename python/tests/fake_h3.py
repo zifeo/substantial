@@ -1,5 +1,6 @@
 """A fake h3 server on 127.0.0.1: the S3 calls of the store contract on one in-memory bucket, its
-listings held on the wait headers, every request and the headers of every listing recorded."""
+listings held on the wait headers, every request and its headers recorded, and the answers of
+the next requests of a method replaceable."""
 
 from __future__ import annotations
 
@@ -31,23 +32,29 @@ class Answer:
     status: int
     body: bytes = b""
     headers: dict[str, str] | None = None
+    # An injected answer to a request that was applied all the same.
+    applied: bool = False
 
 
-def _error(status: int, code: str) -> Answer:
+def error(status: int, code: str, *, applied: bool = False) -> Answer:
     xml = f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{code}</Code></Error>'
-    return Answer(status, xml.encode())
+    return Answer(status, xml.encode(), applied=applied)
 
 
 class FakeH3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.listed: list[Listed] = []
-        # The method and target of every request, in the order received.
+        # The method and target of every request, in the order received, and its headers.
         self.requests: list[tuple[str, str]] = []
+        self.headers: list[dict[str, str]] = []
+        # Answers to the next requests of a method, in place of the bucket's.
+        self.inject: dict[str, list[Answer]] = {}
         self.holds = 0
         self.omit_etag = False
         self._changed = asyncio.Event()
         self._server: asyncio.Server | None = None
+        self._clients: set[asyncio.StreamWriter] = set()
         self._port = 0
 
     async def __aenter__(self) -> FakeH3:
@@ -58,7 +65,8 @@ class FakeH3:
     async def __aexit__(self, *_: object) -> None:
         if self._server is not None:
             self._server.close()
-            self._server.close_clients()
+            for writer in self._clients:
+                writer.close()
             await self._server.wait_closed()
 
     def url(self, namespace: str) -> str:
@@ -69,6 +77,7 @@ class FakeH3:
         self._changed = asyncio.Event()
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._clients.add(writer)
         with contextlib.suppress(asyncio.IncompleteReadError, ConnectionError):
             while True:
                 line = await reader.readline()
@@ -85,35 +94,48 @@ class FakeH3:
                 head = f"HTTP/1.1 {answer.status} X\r\ncontent-length: {len(answer.body)}\r\n"
                 writer.write(f"{head}{extra}\r\n".encode() + answer.body)
                 await writer.drain()
+        self._clients.discard(writer)
         writer.close()
 
     async def _answer(
         self, method: str, target: str, headers: dict[str, str], body: bytes
     ) -> Answer:
         self.requests.append((method, target))
+        self.headers.append(headers)
+        injected = self.inject.get(method)
+        if injected:
+            answer = injected.pop(0)
+            if answer.applied:
+                await self._apply(method, target, headers, body)
+            return answer
+        return await self._apply(method, target, headers, body)
+
+    async def _apply(
+        self, method: str, target: str, headers: dict[str, str], body: bytes
+    ) -> Answer:
         parts = urlsplit(target)
         path = unquote(parts.path)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         if not path.startswith(f"/{BUCKET}"):
-            return _error(404, "NoSuchBucket")
+            return error(404, "NoSuchBucket")
         key = path.removeprefix(f"/{BUCKET}").removeprefix("/")
         if method == "GET" and not key and query.get("list-type") == "2":
             return await self._list(headers, query)
         if method == "PUT" and key:
             if headers.get("if-none-match") == "*" and key in self.objects:
-                return _error(412, "PreconditionFailed")
+                return error(412, "PreconditionFailed")
             self.objects[key] = body
             self._change()
             return Answer(200)
         if method == "GET" and key:
             if key not in self.objects:
-                return _error(404, "NoSuchKey")
+                return error(404, "NoSuchKey")
             return Answer(200, self.objects[key])
         if method == "DELETE" and key:
             self.objects.pop(key, None)
             self._change()
             return Answer(204)
-        return _error(400, "InvalidRequest")
+        return error(400, "InvalidRequest")
 
     def _page(self, prefix: str, after: str, max_keys: int) -> tuple[list[str], bool]:
         keys = [k for k in sorted(self.objects) if k.startswith(prefix) and k > after]

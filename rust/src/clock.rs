@@ -232,6 +232,17 @@ impl Clock {
         }
     }
 
+    /// Monotonic seconds, for the durations an observer is told.
+    pub(crate) fn seconds(&self) -> f64 {
+        #[cfg(any(test, feature = "testing"))]
+        if !matches!(self, Clock::Real) {
+            return self.elapsed() as f64 / 1000.0;
+        }
+        static START: OnceLock<std::time::Instant> = OnceLock::new();
+        let start = START.get_or_init(std::time::Instant::now);
+        start.elapsed().as_secs_f64()
+    }
+
     /// Returns once one of `signals` is ready, or once `at` has come.
     pub(crate) async fn wait(&self, signals: &[Arc<dyn Ready>], at: Option<Time>) {
         #[cfg(feature = "testing")]

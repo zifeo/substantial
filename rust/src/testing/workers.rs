@@ -224,9 +224,10 @@ pub(crate) struct EnvWorker {
     replaced: AtomicU32,
     paused: Arc<AtomicBool>,
     crashed: AtomicBool,
+    /// The horizon of its drain, which a worker Chaos starts in its place is given too.
+    drain_until: Mutex<Option<i64>>,
     workflows: Workflows,
     pub(super) settings: Settings,
-    partitions: u32,
     current: Mutex<Option<Arc<Current>>>,
 }
 
@@ -243,9 +244,9 @@ impl EnvWorker {
             replaced: AtomicU32::new(0),
             paused: Arc::default(),
             crashed: AtomicBool::new(false),
+            drain_until: Mutex::new(None),
             workflows,
             settings,
-            partitions: world.partitions,
             current: Mutex::new(None),
         });
         *lock(&worker.current) = Some(worker.launch()?);
@@ -268,15 +269,16 @@ impl EnvWorker {
             scan: Mutex::default(),
         });
         let died = world.clone();
+        let store = Arc::new(FaultStore::new(world.clone(), Some(inc.clone())));
         let running = Launch {
-            store: Arc::new(FaultStore::new(world.clone(), Some(inc.clone()))),
+            store: world.metering.wrap(store),
             workflows: &self.workflows,
-            partitions: self.partitions,
             settings: &self.settings,
-            died: Arc::new(move |e: &Error| died.died(e)),
+            died: Arc::new(move |e: &Error| died.died(&id, e)),
             clock: Clock::Virtual(inc.clone()),
-            id,
+            id: inc.id.clone(),
             seed: world.core_seed.to_vec(),
+            metering: world.metering.clone(),
         }
         .start()?;
         let agent = lock(&inc.tasks)
@@ -284,6 +286,10 @@ impl EnvWorker {
             .map(|(id, _)| *id)
             .expect("the agent loop is its first task");
         let _ = inc.agent.set((agent, running.agent.clone()));
+        // A worker Chaos replaces drains in its place.
+        if let Some(until) = *lock(&self.drain_until) {
+            running.agent.drain(until);
+        }
         Ok(Arc::new(Current { inc, running }))
     }
 
@@ -309,7 +315,7 @@ impl EnvWorker {
         // Launched before the crash, so that a settle on another thread never sees neither.
         match self.launch() {
             Ok(launched) => *current = Some(launched),
-            Err(e) => self.world.died(&e),
+            Err(e) => self.world.died(&inc.id, &e),
         }
         inc.crash();
     }
@@ -347,6 +353,31 @@ impl EnvWorker {
         self.world.time.kick();
     }
 
+    /// As a worker's `drain`, on the virtual clock: moves it from deadline to deadline until the
+    /// worker stopped, then its error if it died, which the next settle does not return again.
+    /// `Stuck` if it is paused, or if nothing it waits on can come.
+    pub(crate) async fn drain(&self, within: Duration) -> Result<()> {
+        let crashed = |what: &str| panic!("worker {} crashed{what}", self.current().inc.id);
+        if self.crashed.load(Ordering::SeqCst) {
+            crashed("");
+        }
+        let until = self.current().running.drain(within);
+        *lock(&self.drain_until) = Some(until);
+        let what = format!("the drain of worker {}", self.current().inc.id);
+        let paused = || self.paused.load(Ordering::SeqCst);
+        let done =
+            || self.crashed.load(Ordering::SeqCst) || self.current().running.task.is_finished();
+        self.world.until_done(paused, done, &what).await?;
+        if self.crashed.load(Ordering::SeqCst) {
+            crashed(" while it drained");
+        }
+        let current = self.current();
+        current
+            .running
+            .ended()
+            .inspect_err(|_| self.world.forget_died(&current.inc.id))
+    }
+
     /// Settles, then leaves as a SIGTERM does with no grace: steps that returned are recorded,
     /// held ones abandoned, and the runs it leaves have their claims deleted, for another worker.
     pub(crate) async fn shutdown(&self) -> Result<()> {
@@ -373,5 +404,9 @@ impl EnvWorker {
 impl Wakes for EnvWorker {
     fn wake(&self) {
         self.current().running.agent.wake();
+    }
+
+    fn wake_workflow(&self, workflow: &str) {
+        self.current().running.agent.wake_workflow(workflow);
     }
 }

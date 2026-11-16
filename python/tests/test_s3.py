@@ -2,16 +2,20 @@
 run only when `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`)."""
 
 import asyncio
+import base64
 import contextlib
+import hashlib
 import os
+import ssl
 import sys
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from botocore.httpsession import get_cert_path
 from conftest import LONG, require_s3, script
-from fake_h3 import CREDENTIALS, FakeH3
+from fake_h3 import BUCKET, CREDENTIALS, Answer, FakeH3, error
 
 from substantial import (
     ConfigError,
@@ -67,11 +71,13 @@ def test_urls_need_every_part() -> None:
 
 
 def test_s3_urls_without_the_extra_name_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delitem(sys.modules, "substantial.stores.s3_store", raising=False)
-    for name in [*(n for n in sys.modules if n.startswith("aiobotocore.")), "aiobotocore"]:
-        monkeypatch.setitem(sys.modules, name, None)
-    with pytest.raises(ConfigError, match=r'pip install "substantial\[s3\]"'):
-        open_store("h3+http://127.0.0.1:1/b/ns?region=r", Credentials("id", "s"))
+    for package in ("aiohttp", "botocore"):
+        monkeypatch.delitem(sys.modules, "substantial.stores.s3_store", raising=False)
+        for name in [*(n for n in sys.modules if n.startswith(f"{package}.")), package]:
+            monkeypatch.setitem(sys.modules, name, None)
+        with pytest.raises(ConfigError, match=r'pip install "substantial\[s3\]"'):
+            open_store("h3+http://127.0.0.1:1/b/ns?region=r", Credentials("id", "s"))
+        monkeypatch.undo()
     open_store("memory://no-extra", None)
 
 
@@ -88,6 +94,189 @@ async def test_each_operation_is_one_request() -> None:
         await store.close()
         methods = [method for method, _ in h3.requests]
         assert methods == ["PUT", "PUT", "GET", "GET", "GET", "GET", "DELETE"], h3.requests
+
+
+# What each S3 answer means for each operation, as `(status, code)` injected for the first request
+# of the operation: then the outcome and the methods of every request sent.
+CREATE_ANSWERS = [
+    ((412, "PreconditionFailed"), "exists", ["PUT"]),
+    # A concurrent conditional write of the key was in flight: retried.
+    ((409, "ConditionalRequestConflict"), "created", ["PUT", "PUT"]),
+    ((429, "SlowDown"), "created", ["PUT", "PUT"]),
+    # Ambiguous: a get finds the key missing, and the create is sent again.
+    ((500, "InternalError"), "created", ["PUT", "GET", "PUT"]),
+    ((503, "SlowDown"), "created", ["PUT", "GET", "PUT"]),
+    ((408, "RequestTimeout"), "created", ["PUT", "GET", "PUT"]),
+    ((403, "AccessDenied"), StoreFailure, ["PUT"]),
+    ((400, "InvalidRequest"), StoreFailure, ["PUT"]),
+    ((301, "PermanentRedirect"), StoreFailure, ["PUT"]),
+]
+# For a get, a delete and a listing alike.
+READ_ANSWERS = [
+    ((404, "NoSuchKey"), "missing", 1),
+    ((404, "NoSuchBucket"), StoreFailure, 1),
+    ((500, "InternalError"), "retried", 2),
+    ((503, "SlowDown"), "retried", 2),
+    ((408, "RequestTimeout"), "retried", 2),
+    ((409, "OperationAborted"), "retried", 2),
+    ((429, "SlowDown"), "retried", 2),
+    ((403, "AccessDenied"), StoreFailure, 1),
+    ((400, "InvalidArgument"), StoreFailure, 1),
+    ((301, "PermanentRedirect"), StoreFailure, 1),
+]
+
+
+@pytest.mark.parametrize(("answer", "outcome", "methods"), CREATE_ANSWERS, ids=lambda c: str(c))
+async def test_create_answers(answer: tuple[int, str], outcome: object, methods: list[str]) -> None:
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ns"), CREDENTIALS)
+        h3.inject["PUT"] = [error(*answer)]
+        if outcome is StoreFailure:
+            with pytest.raises(StoreFailure, match=rf"create q/a: HTTP {answer[0]} {answer[1]}$"):
+                await store.create("q/a", b"a")
+        else:
+            assert await store.create("q/a", b"a") == outcome
+        assert [m for m, _ in h3.requests] == methods
+        await store.close()
+
+
+async def test_an_ambiguous_create_that_landed_is_created() -> None:
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ns"), CREDENTIALS)
+        h3.inject["PUT"] = [error(500, "InternalError", applied=True)]
+        assert await store.create("q/a", b"a") == "created"
+        h3.inject["PUT"] = [error(503, "SlowDown", applied=True)]
+        assert await store.create("q/b", b"b") == "created"
+        assert await store.create("q/b", b"c") == "exists"
+        assert [m for m, _ in h3.requests] == ["PUT", "GET", "PUT", "GET", "PUT"]
+        await store.close()
+
+
+@pytest.mark.parametrize(("answer", "outcome", "sent"), READ_ANSWERS, ids=lambda c: str(c))
+@pytest.mark.parametrize("operation", ["get", "delete", "list"])
+async def test_get_delete_and_list_answers(
+    operation: str, answer: tuple[int, str], outcome: object, sent: int
+) -> None:
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ns"), CREDENTIALS)
+        await store.create("q/a", b"a")
+        method = {"get": "GET", "delete": "DELETE", "list": "GET"}[operation]
+        h3.inject[method] = [error(*answer)]
+        before = len(h3.requests)
+
+        async def call() -> object:
+            if operation == "get":
+                return await store.get("q/a")
+            if operation == "delete":
+                return await store.delete("q/a")
+            return (await store.list("q/", start_after=None, max_keys=10, wait=None)).keys
+
+        missing = outcome == "missing" and operation != "list"
+        if outcome is StoreFailure or (outcome == "missing" and operation == "list"):
+            with pytest.raises(StoreFailure, match=rf"HTTP {answer[0]} {answer[1]}$"):
+                await call()
+        elif missing:
+            assert await call() is None
+        else:
+            assert await call() == {"get": b"a", "delete": None, "list": ["q/a"]}[operation]
+        assert len(h3.requests) - before == sent
+        await store.close()
+
+
+async def test_an_error_answer_without_an_s3_error_is_named_by_its_status() -> None:
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ns"), CREDENTIALS)
+        h3.inject["GET"] = [Answer(403, b"<html>no</html")]
+        with pytest.raises(StoreFailure, match=r"get q/a: HTTP 403 403: Forbidden$"):
+            await store.get("q/a")
+        await store.close()
+
+
+async def test_requests_sign_their_body_and_carry_no_checksum() -> None:
+    async with FakeH3() as h3:
+        store = open_store(h3.url("ns"), CREDENTIALS)
+        await store.create("q/a", b"abc")
+        await store.get("q/a")
+        put, get = h3.headers
+        assert put["x-amz-content-sha256"] == hashlib.sha256(b"abc").hexdigest()
+        assert get["x-amz-content-sha256"] == hashlib.sha256(b"").hexdigest()
+        for headers in (put, get):
+            checksums = [n for n in headers if n.startswith("x-amz-checksum") or "md5" in n]
+            assert not checksums
+            assert "x-amz-sdk-checksum-algorithm" not in headers
+            assert "expect" not in headers
+            assert headers["accept-encoding"] == "identity"
+        signed = put["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+        assert signed == ["host", "if-none-match", "x-amz-content-sha256", "x-amz-date"]
+        await store.close()
+
+
+def test_tls_is_verified_against_the_authorities_of_botocore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "AWS_CA_BUNDLE"):
+        monkeypatch.setenv(name, str(tmp_path / "none.pem"))
+    store = open_store("s3://s3.us-east-1.amazonaws.com/b/ns?region=us-east-1", CREDENTIALS)
+    bundle = ssl.create_default_context(cafile=get_cert_path(True)).get_ca_certs()
+    tls = store._tls  # type: ignore[attr-defined]
+    assert bundle
+    assert tls.get_ca_certs() == bundle
+    assert tls.verify_mode == ssl.CERT_REQUIRED
+    assert tls.check_hostname
+
+
+async def test_a_session_token_is_signed() -> None:
+    async with FakeH3() as h3:
+        keys = Credentials("fake", "fake-secret", session_token="token")
+        store = open_store(h3.url("ns"), keys)
+        await store.get("q/a")
+        (headers,) = h3.headers
+        assert headers["x-amz-security-token"] == "token"
+        assert "x-amz-security-token" in headers["authorization"]
+        await store.close()
+
+
+PROXY_VARIABLES = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"]
+
+
+async def test_the_endpoint_is_reached_through_the_proxy_the_environment_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+    async with FakeH3() as proxy:
+        port = proxy.url("ns").split(":")[2].split("/")[0]
+        monkeypatch.setenv("HTTP_PROXY", f"http://user:p%40ss@127.0.0.1:{port}")
+        store = open_store(f"s3+http://substantial.invalid:9/{BUCKET}/ns?region=r", CREDENTIALS)
+        assert await store.create("q/a", b"a") == "created"
+        await store.close()
+        assert proxy.requests == [("PUT", f"http://substantial.invalid:9/{BUCKET}/ns/q/a")]
+        (headers,) = proxy.headers
+        assert headers["proxy-authorization"] == "Basic " + base64.b64encode(b"user:p@ss").decode()
+        assert headers["host"] == "substantial.invalid:9"
+        # A proxy that no one answers, bypassed for the endpoint.
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+        direct = open_store(proxy.url("ns"), CREDENTIALS)
+        assert await direct.get("q/a") == b"a"
+        await direct.close()
+
+
+async def test_keys_with_reserved_characters_round_trip() -> None:
+    store = open_store(require_s3(), "env")
+    keys = sorted(["q/a b", "q/a+b", "q/a%2Bb", "q/a&b=c?d", "q/é~:@,;", "q/a#b"])
+    for key in keys:
+        assert await store.create(key, key.encode()) == "created"
+        assert await store.get(key) == key.encode()
+    listed = await store.list("q/", start_after=None, max_keys=10, wait=None)
+    assert listed.keys == sorted(keys, key=str.encode)
+    after = await store.list("q/", start_after=listed.keys[0], max_keys=10, wait=None)
+    assert after.keys == listed.keys[1:]
+    for key in keys:
+        await store.delete(key)
+        assert await store.get(key) is None
+    await store.close()
 
 
 @contextlib.asynccontextmanager
@@ -165,10 +354,8 @@ async def test_create_and_open_run_the_probe() -> None:
     url = require_s3()
     with pytest.raises(LayoutError):
         await Substantial.open(url, credentials="env")
-    created = await Substantial.create(url, partitions=2, credentials="env")
-    assert created.partitions == 2
+    created = await Substantial.create(url, credentials="env")
     opened = await Substantial.open(url, credentials="env")
-    assert opened.partitions == 2
     await created.close()
     await opened.close()
     store = open_store(url, "env")
@@ -181,7 +368,7 @@ async def test_wrong_credentials_are_a_store_error() -> None:
     url = require_s3()
     wrong = Credentials(os.environ["AWS_ACCESS_KEY_ID"], "not-the-secret")
     with pytest.raises(StoreError, match=r"HTTP 403 SignatureDoesNotMatch: [^<]*$"):
-        await Substantial.create(url, partitions=1, credentials=wrong)
+        await Substantial.create(url, credentials=wrong)
 
 
 async def test_a_missing_bucket_is_a_store_error_not_a_missing_key() -> None:
@@ -296,7 +483,7 @@ async def test_a_provider_is_asked_once_for_keys_far_from_expiry(
         calls.append(1)
         return env_keys(expires_in)
 
-    sub = await Substantial.create(url, partitions=1, credentials=provider)
+    sub = await Substantial.create(url, credentials=provider)
 
     @workflow
     async def answer(c: Context) -> int:

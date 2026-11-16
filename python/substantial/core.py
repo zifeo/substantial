@@ -106,6 +106,7 @@ class Core:
         self._free = export("sub_free", wasmtime.Func)
         self._new = export("sub_new", wasmtime.Func)
         self._call = export("sub_call", wasmtime.Func)
+        self._refused = export("sub_refused", wasmtime.Func)
         self._drop = export("sub_drop", wasmtime.Func)
 
     @staticmethod
@@ -156,6 +157,14 @@ class Core:
             raise ProtocolError("request too large")
         ptr, length = self._write(request)
         packed = self._guard(self._call, _i32(machine), _i32(ptr), _i32(length)) & _U64
+        return self._take(packed >> 32, packed & _U32)
+
+    def refused(self, machine: int) -> bytes | None:
+        """The response holding the error `sub_new` refused the machine's input with, `None` for
+        a machine made."""
+        packed = self._guard(self._refused, _i32(machine)) & _U64
+        if packed == 0:
+            return None
         return self._take(packed >> 32, packed & _U32)
 
     def drop_machine(self, machine: int) -> None:

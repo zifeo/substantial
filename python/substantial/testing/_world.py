@@ -3,12 +3,15 @@ holds, the seed and what Chaos injected."""
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from substantial._proto import layout
 from substantial.clock import Clock
+from substantial.errors import InvalidArgument
+from substantial.observe import Metering
 from substantial.plan import Ulids
 from substantial.stores.memory import _NAMESPACES, MemoryStore
 from substantial.testing._store import Chaos, Faults, FaultStore, derive, unit
@@ -16,8 +19,6 @@ from substantial.testing._time import Time
 from substantial.testing._workers import EnvWorker, Hold, WorkerClock
 
 if TYPE_CHECKING:
-    import asyncio
-
     from substantial.testing._env import Env
 
 
@@ -31,6 +32,30 @@ class ClientClock(Clock):
         return layout.Time(ms=self._time.ms)
 
 
+_U64 = (1 << 64) - 1
+
+
+def idle_phase(seed: bytes, max_idle: int) -> int:
+    """The phase the core draws from its seed, a worker's first idle wait, `max_idle` the others:
+    SplitMix64 of the seed's first 8 bytes, big-endian, modulo `max_idle`."""
+    z = (int.from_bytes(seed[:8], "big") + 0x9E3779B97F4A7C15) & _U64
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _U64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _U64
+    return (z ^ (z >> 31)) % max_idle
+
+
+def _loop(loop: asyncio.AbstractEventLoop) -> str:
+    return f"{type(loop).__name__} at {id(loop):#x}"
+
+
+class Due(NamedTuple):
+    """The earliest due entries of a workflow: of any kind, and of those that wake a run, a
+    timer or a message; a collection entry sets no worker's timer, the next scan serves it."""
+
+    any: int
+    wake: int | None
+
+
 def due_ms(entry: str) -> int:
     """The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<run>~<tag>`."""
     t = entry.partition("~")[0]
@@ -41,8 +66,12 @@ def due_ms(entry: str) -> int:
 
 
 class World:
-    def __init__(self, ns: str, ms: int, chaos: Chaos | None) -> None:
+    def __init__(self, ns: str, ms: int, chaos: Chaos | None, metering: Metering) -> None:
         self.ns = ns
+        # Every task of the environment runs on the loop that opened it: its futures belong there.
+        self.loop = asyncio.get_running_loop()
+        # The prices and the observer of the environment and its clients, which its workers take.
+        self.metering = metering
         self.memory = MemoryStore(ns)
         self.time = Time(ms)
         self.time.skip = self.skip_scans
@@ -54,7 +83,6 @@ class World:
         self.counts = Faults()
         self.writes = 0
         self.outage_until = ms
-        self.partitions = 1
         self.workers: list[EnvWorker] = []
         self.holds: list[Hold] = []
         self.cancelled: set[asyncio.Task[object]] = set()
@@ -64,10 +92,22 @@ class World:
         # Each run that ended failed, its chain and its failure, from the write of its result.
         self.failed: dict[str, tuple[str, str]] = {}
         self.env: Env
-        self._due: tuple[int, dict[str, int]] = (-1, {})
+        self._due: tuple[int, dict[str, Due]] = (-1, {})
         # Off only in the test that compares a scenario with and without skipping.
         self.skipping = True
         self.skipped = 0
+
+    def check_loop(self) -> None:
+        """Refuses a call from another event loop than the environment's, which would wait on
+        futures no loop runs, as an app run by a thread-portal test client does."""
+        current = asyncio.get_running_loop()
+        if current is not self.loop:
+            raise InvalidArgument(
+                f"the test environment was opened on the event loop {_loop(self.loop)} and is "
+                f"called from the event loop {_loop(current)}: run the code under test on the "
+                "test's own loop (for an ASGI app, its lifespan and httpx.ASGITransport, not a "
+                "test client that runs the app in a thread)"
+            )
 
     def store(self, clock: WorkerClock | None) -> FaultStore:
         return FaultStore(self, self.memory, clock)
@@ -126,13 +166,20 @@ class World:
     def keys(self, prefix: str) -> list[str]:
         return sorted(k for k in self.memory._objects if k.startswith(prefix))
 
-    def earliest_due(self) -> dict[str, int]:
-        """The earliest due entry of each workflow, as of the last write."""
+    def earliest_due(self) -> dict[str, Due]:
+        """The earliest due entries of each workflow, as of the last write."""
         if self._due[0] != self.writes:
-            due: dict[str, int] = {}
+            due: dict[str, Due] = {}
             for key in self.keys("queues/"):
-                workflow, entry = key.split("/")[1], key.rpartition("/")[2]
-                due[workflow] = min(due.get(workflow, due_ms(entry)), due_ms(entry))
+                _, workflow, kind, entry = key.split("/")
+                # A rest marker is no due entry: no scan lists it.
+                if kind != "due":
+                    continue
+                at = due_ms(entry)
+                wakes = not entry.endswith(("~c", "~g"))
+                was = due.get(workflow, Due(at, None))
+                wake = was.wake if not wakes else at if was.wake is None else min(was.wake, at)
+                due[workflow] = Due(min(was.any, at), wake)
             self._due = (self.writes, due)
         return self._due[1]
 
@@ -141,9 +188,9 @@ class World:
         of anything else, keeping the instants of the scans left.
 
         A worker's scan is skipped when the worker is idle, its deadline is the one its last scan
-        set (`max_idle` after it), nothing was written since that scan, and no due entry it lists
-        is due by then: the listing would return the keys it returned, none of them due, and set
-        the deadline that skipping sets.
+        set (`max_idle` after it, or the worker's phase after its first), nothing was written
+        since that scan, and no due entry it lists is due by then: the listing would return the
+        keys it returned, none of them due, and set the deadline that skipping sets.
 
         Under Chaos, a scan is skipped only when the draw of each of its listings succeeds, and
         the skip counts their tries as the scan would: a scan whose draw fails runs, and may back
@@ -151,7 +198,7 @@ class World:
         if not self.skipping or self.time.ms < self.outage_until:
             return
         time, due = self.time, self.earliest_due()
-        idle: list[tuple[WorkerClock, int, int | None]] = []
+        idle: list[tuple[WorkerClock, int, Due | None]] = []
         bound = target
         for task, w in time.parked.items():
             if w.at is None or w.owner.paused:
@@ -160,31 +207,36 @@ class World:
             if isinstance(clock, WorkerClock) and task is clock.agent:
                 mi = clock.worker._settings.max_idle // timedelta(milliseconds=1)
                 served = [due[n] for n, _, _ in clock.worker._workflows.served() if n in due]
-                first = min(served, default=None)
+                wakes = [d.wake for d in served if d.wake is not None]
+                first = (
+                    Due(min(d.any for d in served), min(wakes, default=None)) if served else None
+                )
                 if (
                     clock.scanned_at is not None
-                    and w.at == clock.scanned_at + mi
+                    and w.at - clock.scanned_at in (mi, idle_phase(self.core_seed, mi))
                     and clock.seen == self.writes
                     and clock.worker._events.empty()
                     and all(t is task or t.done() for t in clock.tasks)
-                    and (first is None or first > w.at)
+                    and (first is None or first.any > w.at)
                 ):
                     idle.append((clock, mi, first))
-                    if first is not None:
-                        bound = min(bound, first)
+                    if first is not None and first.wake is not None:
+                        bound = min(bound, first.wake)
                     continue
             bound = min(bound, w.at)
         for clock, mi, first in idle:
             w = time.parked[clock.agent]  # type: ignore[index]
-            limit = bound if first is None else min(bound, first - 1)
-            if limit < w.at:  # type: ignore[operator]
+            assert w.at is not None
+            limit = bound if first is None else min(bound, first.any - 1)
+            if limit < w.at:
                 continue
-            scans = self._succeeding(clock, (limit - w.at) // mi + 1)  # type: ignore[operator]
+            scans = self._succeeding(clock, (limit - w.at) // mi + 1)
             if scans == 0:
                 continue
             for key in clock.scan_keys:
                 clock.tries[("list", key)] += scans
             self.skipped += scans
-            last = w.at + (scans - 1) * mi  # type: ignore[operator]
+            last = w.at + (scans - 1) * mi
             clock.scanned_at = last
-            w.at = last + mi if first is None else min(last + mi, first)
+            after = last + mi
+            w.at = after if first is None or first.wake is None else min(after, first.wake)

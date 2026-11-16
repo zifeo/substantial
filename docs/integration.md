@@ -1,6 +1,6 @@
 # Substantial in a web service
 
-The worker runs inside the web service's own process, started and stopped by the app's lifespan: no worker container, no broker. Several pods share one namespace on S3, and every pod's worker takes the runs that are due. This page builds such a service, a Starlette app that applies provider webhooks once per event id, debounces CRM changes, serializes the operations of each account through an actor, and runs a nightly job.
+The worker runs inside the web service's own process, started and stopped by the app's lifespan: no worker container, no broker. Several pods share one namespace on S3, and every pod's worker takes the runs that are due. This page builds such a service, a Starlette app that applies provider webhooks once per event id, debounces CRM changes, serializes the operations of each account through an actor, polls a CRM export, and runs a nightly job.
 
 The whole service is [`python/examples/webhooks.py`](../python/examples/webhooks.py), and [`python/tests/test_integration_guide.py`](../python/tests/test_integration_guide.py) runs every snippet below on the [test environment](testing.md). The snippets are Python; TypeScript and Rust are noted where they differ. `I-n` points to [the reference](interfaces.md).
 
@@ -9,7 +9,9 @@ The whole service is [`python/examples/webhooks.py`](../python/examples/webhooks
 - [Webhooks applied once](#webhooks-applied-once)
 - [A durable debounce](#a-durable-debounce)
 - [Several pods](#several-pods)
+- [Polling a provider without push](#polling-a-provider-without-push)
 - [Scheduling](#scheduling)
+- [A worker run by a Kubernetes CronJob](#a-worker-run-by-a-kubernetes-cronjob)
 - [Testing the app](#testing-the-app)
 
 ## The worker in the lifespan
@@ -24,7 +26,7 @@ def create_app(
             open_engine() as sub,
             sub.worker(WORKFLOWS, preset="service", concurrency=concurrency) as worker,
         ):
-            await sub.start(nightly, id="nightly")
+            await sub.schedule(nightly, "nightly", NIGHTLY, revision=1)
             app.state.sub, app.state.worker = sub, worker
             yield
 
@@ -47,7 +49,6 @@ def create_app(
 @dataclass(frozen=True)
 class Config:
     url: str
-    partitions: int
     concurrency: int
 
     @classmethod
@@ -55,14 +56,13 @@ class Config:
         e = os.environ
         return cls(
             e["SUBSTANTIAL_URL"],
-            int(e["SUBSTANTIAL_PARTITIONS"]),
             int(e["SUBSTANTIAL_CONCURRENCY"]),
         )
 
     def open(self) -> Any:
         s3 = self.url.split(":", 1)[0] in {"s3", "h3", "s3+http", "h3+http"}
         credentials = "env" if s3 else None
-        return s.Substantial.create(self.url, partitions=self.partitions, credentials=credentials)
+        return s.Substantial.create(self.url, credentials=credentials)
 
 
 def app() -> Starlette:
@@ -72,14 +72,14 @@ def app() -> Starlette:
 
 ```sh
 SUBSTANTIAL_URL='s3://s3.eu-central-1.amazonaws.com/acme/webhooks?region=eu-central-1' \
-SUBSTANTIAL_PARTITIONS=4 SUBSTANTIAL_CONCURRENCY=16 \
+SUBSTANTIAL_CONCURRENCY=16 \
 uvicorn webhooks:app --factory --timeout-graceful-shutdown 10
 ```
 
-- **The store.** `create` makes the namespace at the first pod's start and opens it at every other; a pod configured with other partitions fails at start with `LayoutError`, and one that cannot reach the store with `StoreError`, so it never becomes ready (I-16). On S3 the namespace is a prefix of a bucket, and the pods need no disk: a worker keeps the histories it read in memory, up to 16 MiB ([architecture](architecture.md#how-it-works)). Every setting comes from the environment, and a missing one stops the app at start.
+- **The store.** `create` makes the namespace at the first pod's start and opens it at every other; a pod that cannot reach the store fails at start with `StoreError`, and one pointed at a namespace of an older layout with `LayoutError`, so it never becomes ready (I-16). On S3 the namespace is a prefix of a bucket, and the pods need no disk: a worker keeps the histories it read in memory, up to 16 MiB ([architecture](architecture.md#how-it-works)). Every setting comes from the environment, and a missing one stops the app at start.
 - **The worker.** `async with sub.worker(...)` starts it with the app and stops it with the app, in the server's process. Use it rather than `serve()`, which installs SIGTERM and SIGINT handlers of its own where the server owns them. The worker runs on the server's event loop: a blocking call in an `async` step stalls the HTTP requests too, so write blocking code as a plain `def` step, which runs in a thread (I-6).
 - **Concurrency.** `concurrency` is how many runs one worker replays at once, 16 in the `service` preset (I-18). It bounds replays, not steps: a run that gathers four steps runs four at once. Across pods it adds up, 3 pods at 16 replaying up to 48 runs. Nothing bounds the calls to one API across pods: route them through an actor ([Several pods](#several-pods)) or give the API client a budget of its own.
-- **The nightly run.** Every pod starts it at startup under one id: the first creates it, the others get the same run (I-17).
+- **The nightly run.** Every pod configures its schedule at startup under one id: the first starts the run and sends the config, the others find it applied and do nothing (I-31).
 - **Health.** `worker.alive` is whether the worker's loop runs, `worker.error` the error that killed it, else `None` (I-18). A worker that died stays dead: liveness fails on its error so that Kubernetes restarts the pod, and readiness fails whenever the worker does not run.
 
 ### Shutdown and Kubernetes
@@ -116,7 +116,7 @@ When `await sub.start(workflow, input, id=...)` returns:
 
 - **Durable.** The run's `start` key and its wakeup, a due entry, are created in the store ([architecture](architecture.md#clients)). On S3 these are two conditional `PutObject`s that S3 acknowledged, and the store contract requires an acknowledged create to survive a crash of the store and to be in every later listing (I-26): every pod finds the run, whatever happens to this one.
 - **Seen.** This pod's worker lists at once, and takes the run unless it is full or another pod claimed it first. The other pods find it at their next scan, within `max_idle`: 30 s in `service` on `s3://`, at once on `h3://`, whose listings wait (I-18).
-- **Deduplicated.** A `start` with the same id, workflow, version and input returns that run, and completes a start that stopped halfway; another workflow, version or input raises `RunExists` (I-17). The input is compared as canonical JSON (RFC 8785), whichever host started it. A run is kept for its `retention` after its chain ends, 30 days by default, then its id raises `RunExists` for 7 days, then starts a new run: a redelivery later than the retention plus 7 days runs again, so give the workflow a `retention` past the provider's retry window, or `s.FOREVER`. A failed run is final until it is collected: starting it again returns the failed run (I-16, I-17).
+- **Deduplicated.** A `start` with the same id, workflow, version and input returns that run, and completes a start that stopped halfway; another workflow, version or input raises `RunExists` (I-17). The input is compared as canonical JSON (RFC 8785), whichever host started it. A run is kept for its `retention` after its chain ends, 30 days by default, then its id raises `RunExists` for 7 days, then starts a new run: a redelivery later than the retention plus 7 days runs again, so give the workflow a `retention` past the provider's retry window. Starting a failed run again returns the failed run; `run.retry()` runs it again from its failed step, its recorded steps kept (I-17).
 
 When `await run.send(name, value, id=...)` returns:
 
@@ -303,7 +303,7 @@ What holds for one run, whichever pods replay it:
 - **Takeover.** The runs of a pod that leaves are resumed at the other pods' next scan, as it deletes its claims; those of a pod that dies, 35 s after its last renewal (I-18). Pod clocks must agree within `claim_skew`, 5 s.
 - **A paused pod.** A pod frozen past its claim, by a long garbage collection or a network partition, has its runs taken over while its steps go on: their effects happen, then its commits lose. Two pods may then run one step at the same time, and only the API's idempotency key keeps the effect once.
 
-What does not hold across runs: two runs are independent, on one pod or several. Nothing locks an entity and nothing orders two runs: two webhooks about one account start two runs that may call the ledger at the same time, in either order. `concurrency` and partitions bound the load, not the access to one entity.
+What does not hold across runs: two runs are independent, on one pod or several. Nothing locks an entity and nothing orders two runs: two webhooks about one account start two runs that may call the ledger at the same time, in either order. `concurrency` bounds the load, not the access to one entity.
 
 For operations on one entity that must not overlap, one long-lived run per entity id, an actor, receives them as messages and applies them one at a time:
 
@@ -387,7 +387,7 @@ async def pay_order(c: s.Context, order: str, account: str, amount: int) -> bool
 - **One queue.** Whichever pod receives an operation starts the account's run, idempotently, and sends it the operation; the run applies the operations in the order it consumed them, one step at a time, whichever pod replays it. Its balance and its queue are the loop's state, and `ops` is drained into it last, as in the debounce.
 - **Order.** Operations are consumed in the order of the sender's clock, then the message id (I-9): from two pods, in the order of their clocks.
 - **An answer over HTTP.** The run publishes each outcome under the operation's key, and a client reads it with `run.read` (I-14): the route answers 202 until it exists. A published key follows the id rules, so an operation id has at most 97 characters here.
-- **An answer to a workflow.** A run passes `c.chain` as `reply_to` and waits on `c.receive("reply")`. The actor logs a requester that ended rather than failing on its `RunEnded`.
+- **An answer to a workflow.** A run passes `c.chain` as `reply_to` and waits on `c.receive("reply")`. The actor logs a requester that ended rather than failing on its `RunEnded`. The reply suits an actor, which never ends; to wait for a run that ends, its value included, a workflow uses `c.result(chain)` (I-11).
 - **A closed account.** Closing is an operation, `{"kind": "close"}`: the actor publishes `closed` and goes on, answering every later operation `{"ok": false, "closed": true}`, and the route answers 410 once it reads `closed`. The run never ends, so its id is never collected: an actor that ended, cancelled for one, would be collected after its retention, its id would raise `RunExists` for 7 days, then start a new actor with a zero balance, and the account would reopen empty. Its compressions keep its history bounded (I-19): the runs it continued from are collected after their retention. Close an account with the operation, never by cancelling its actor.
 - **Throughput.** An actor applies one operation at a time, and each costs its store round trips ([architecture](architecture.md#workflow-verbs)): keep actors for entities whose operations must not overlap.
 
@@ -417,45 +417,62 @@ async def test_an_actor_applies_its_ops_in_order_through_a_crash(ledger: Any) ->
 
 Two workers stand for two pods. `send_ops` sends a credit of 50, debits of 20 and 40, and a credit of 5; `OUTCOMES` are their outcomes, the debit of 40 refused. The ledger posted the first credit, then its pod crashed before recording it: the other pod takes the run over just past 35 s later, posts it again under the same key, and the ledger keeps it once. `test_a_pod_that_leaves_hands_its_runs_over_at_the_next_scan` does the same with `shutdown()`, and the other pod resumes within 30 s.
 
-## Scheduling
+## Polling a provider without push
 
-A job at a given time is a workflow that begins with `await c.sleep_until(at)`: start it under an id, and `run.cancel(reason)` drops it, raising `Cancelled` at the sleep (I-8, I-13). A recurring job is a loop of them:
+A provider that offers no webhook for the end of a job is polled from the run, which is suspended between two tries and costs no process:
 
 ```python
+@s.workflow
+async def crm_export(c: s.Context, export: str) -> str | None:
+    return await c.poll(
+        "export_url", crm.export_url, export, every=s.minutes(1), timeout=s.hours(1)
+    )
+```
+
+- `crm.export_url` answers `None` until the export is ready: the run sleeps a minute and tries again, and returns the URL, or `None` after an hour (I-30). Each try is a step, recorded: a crash between two tries never runs a recorded one again, and a try that raises retries as its `retry` says.
+- Each try is a wakeup and a segment of history. A minute for an hour is 60 segments; for a poll of days, poll from a child or space the tries out.
+
+```python
+async def test_an_export_is_polled_until_it_is_ready(crm: Any) -> None:
+    async with pod() as p:
+        run = await p.env.start(web.crm_export, {"export": "x1"}, id="export-x1")
+        await p.env.advance(s.minutes(3))
+        assert await run.status() == "suspended"
+        crm.exports["x1"] = "https://crm.example/x1.csv"
+        await p.env.advance(s.minutes(1))
+        assert await run.result() == "https://crm.example/x1.csv"
+```
+
+## Scheduling
+
+A job at a given time is a workflow that begins with `await c.sleep_until(at)`: start it under an id, and `run.cancel(reason)` drops it, raising `Cancelled` at the sleep (I-8, I-13). A recurring job is a schedule (I-31):
+
+```python
+NIGHTLY = s.Cron("0 3 * * *", "Europe/Zurich")
 ZURICH = ZoneInfo("Europe/Zurich")
 
 
-def next_night(now: datetime) -> datetime:
-    local = now.astimezone(ZURICH)
-    night = local.replace(hour=3, minute=0, second=0, microsecond=0)
-    if night <= local:
-        night += timedelta(days=1)
-    return night.astimezone(UTC)
-
-
-@dataclass
-class Nights:
-    done: int = 0
+@s.step(retry=RETRY)
+async def report(day: str) -> None:
+    await ledger.report(day)
 
 
 @s.workflow
 async def nightly(c: s.Context) -> None:
-    async for n in c.iterate(Nights()):
-        night = next_night(await c.now())
-        await c.sleep_until(night)
-        await report(night.astimezone(ZURICH).date().isoformat())
-        n.done += 1
+    async for at in c.schedule():
+        await report(at.astimezone(ZURICH).date().isoformat())
 ```
 
-- The lifespan starts it under the id `nightly` on every pod: one run exists.
-- A sleep's end is fixed when it first runs, and its firing is recorded (I-8), so the run sees it once, whichever pods try. It fires at its time on a pod whose scan saw it, the pod that suspended the run among them, and at the latest at a pod's next scan after it ([architecture](architecture.md#scans)). With every pod down at 03:00, it fires once one comes back.
-- **Ids reused on a schedule.** An id reused sooner than its run's `retention` plus 7 days after the run ended meets its own tombstone: the run is collected after its retention, no sooner than 2 hours after it ended, and its id then raises `RunExists` for 7 days (I-17). A weekly child named `report-fri` with a retention of 1 hour is collected about 2 hours after it ends, and next week's start fails. Put the date or the period in such ids: `report-2026-11-06`.
-- `iterate` keeps the history short over the years (I-12); `next_night` reads the time from `c.now()`, recorded, and 03:00 is an hour every day has once in Zurich.
+- The lifespan configures it on every pod with `sub.schedule(nightly, "nightly", NIGHTLY, revision=1)`: one run exists, and the config the highest revision gives applies. To change the time, change the cron and raise the revision in the same deploy: pods of the old deploy, still starting during a rollout, then find a higher revision applied and fail at startup with `ConfigError` rather than set the old time back.
+- A fire is due at its time and runs at a pod's scan that saw it, the pod that suspended the run among them, at once at the latest at a pod's next scan after it ([architecture](architecture.md#scans)). With every pod down at 03:00, it fires once one comes back, its `at` still 03:00 of that night; with pods down for three nights, the three fire in order when one comes back, up to `backfill` of them, 5 unless given.
+- 03:00 is an hour Zurich has once every day; a cron at 02:30 would fire at 03:00 on the night of the spring change and once on the night of the autumn one (I-31).
+- **Ids reused on a schedule.** An id reused sooner than its run's `retention` plus 7 days after the run ended meets its own tombstone: the run is collected after its retention, no sooner than 2 hours after it ended, and its id then raises `RunExists` for 7 days (I-17). A weekly child named `report-fri` with a retention of 1 hour is collected about 2 hours after it ends, and next week's start fails. Name a child from `at`: `report-2026-11-06`, the same on every replay and every backfill.
+- `run.read("schedule")` shows the config applied, the last fires, those skipped and the next one (I-31).
 
 ```python
 async with pod(now=datetime(2026, 10, 23, 12, 0, tzinfo=UTC)) as p:
     ...
-    await p.env.start(web.nightly, id="nightly")
+    await p.env.schedule(web.nightly, "nightly", web.NIGHTLY, revision=1)
     await p.env.advance(s.days(3))
     assert nights == [
         ("2026-10-24", datetime(2026, 10, 24, 1, 0, tzinfo=UTC)),
@@ -463,6 +480,63 @@ async with pod(now=datetime(2026, 10, 23, 12, 0, tzinfo=UTC)) as p:
         ("2026-10-26", datetime(2026, 10, 26, 2, 0, tzinfo=UTC)),
     ]
 ```
+
+## A worker run by a Kubernetes CronJob
+
+A service whose runs are all on a schedule, or that tolerates minutes of delay, can do without a worker running all the time: a CronJob starts a pod every few minutes, whose worker drains what is due and exits.
+
+```python
+async def drain(sub: s.Substantial) -> None:
+    worker = sub.worker(WORKFLOWS, preset="script")
+    draining = asyncio.ensure_future(worker.drain(within=s.minutes(2)))
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, draining.cancel)
+    try:
+        await draining
+    except asyncio.CancelledError:
+        pass  # a SIGTERM: the worker shut down within its grace
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+
+
+async def job() -> None:
+    async with Config.from_env().open() as sub:
+        await drain(sub)
+```
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: webhooks-worker
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 15
+          containers:
+            - name: worker
+              image: registry.example/webhooks:2026-11-15
+              command: ["python", "-m", "webhooks", "job"]
+              env:
+                - name: SUBSTANTIAL_URL
+                  value: s3://s3.eu-central-1.amazonaws.com/acme/webhooks?region=eu-central-1
+                - name: SUBSTANTIAL_CONCURRENCY
+                  value: "16"
+```
+
+- **`drain(within=)`** serves every run due now or within `within`, the sleeps and backoffs that end by then, the children and messages its runs create, and the runs of a pod that died whose claim expires by then, then stops as a shutdown does (I-18). Work due later waits for the next job: with a job every 10 minutes, a timer fires up to 10 minutes late, a start from the web up to 10 minutes after it.
+- **Between two jobs the namespace costs nothing**: no worker lists it. A job costs what its work costs and its scans, about 2 LIST when nothing is due ([architecture](architecture.md#a-worker-run-on-a-schedule)).
+- **Lifetimes.** `activeDeadlineSeconds` bounds the job: set it above `within` plus the time the work due takes plus `shutdown_grace` (5 s in `script`), with a margin, here 300 s for 2 minutes of horizon. `terminationGracePeriodSeconds` above `shutdown_grace`, so that a job stopped at its deadline gets SIGTERM, lets its steps end within the grace, and deletes its claims for the next job. `concurrencyPolicy: Forbid` keeps two jobs from draining together, which is harmless but costs double.
+- **Step timeouts.** A step still running when the job ends is abandoned and runs again in the next job; one that runs longer than a job lives never ends. The worker cannot know the job's lifetime: keep every step timeout, the steps' own, the workflows' `step_timeout` and the worker's, below `within` plus `shutdown_grace`.
+- **Schedules.** A schedule whose cron fires more often than the jobs run misses fires between two jobs: give it `backfill` at least the job's period divided by the cron's, 10 for a job every 10 minutes and a cron every minute, or every missed fire beyond `backfill` is skipped (I-31).
+- **Signals.** `drain` installs no signal handler, and a SIGTERM's default ends the process at once. `drain` above cancels the drain on SIGTERM, which shuts the worker down as `shutdown()` does: steps in flight end within `shutdown_grace`, and the runs left keep their wakeups. In TypeScript, call `worker.shutdown()` from a SIGTERM listener; in Rust, `tokio::select!` the drain against `tokio::signal::unix::signal(SignalKind::terminate())` and call `worker.shutdown()` when the signal comes first.
 
 ## Testing the app
 
@@ -493,4 +567,4 @@ async with s.testing.Env.open(now=T0) as env:
     await env.check()
 ```
 
-`serving` runs the app's lifespan as an ASGI server does, and `call` sends it one request, in a few lines of the test, with no server and no HTTP client. Nothing runs between two requests: the first GET answers 202, and `settle()` lets the worker apply the operation. During the outage the route answers 503, and the provider's retry, the same operation under the same id, is applied once.
+`serving` runs the app's lifespan as an ASGI server does, and `call` sends it one request, in a few lines of the test, with no server and no HTTP client. With `httpx`, the same is its `ASGITransport` around the lifespan the test enters; a thread-portal client such as Starlette's `TestClient` runs the app on another event loop, which the environment refuses ([testing](testing.md#testing-an-asgi-app)). Nothing runs between two requests: the first GET answers 202, and `settle()` lets the worker apply the operation. During the outage the route answers 503, and the provider's retry, the same operation under the same id, is applied once.

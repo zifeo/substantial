@@ -32,7 +32,7 @@ eachAdapter("a cancelled run may roll back and still ends cancelled", async (sto
       await c.rollback("cancelled");
     }
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [careful]);
   const run = await sub.start(careful);
   await eventually("the run suspended", async () => (await run.status()) === "suspended");
@@ -54,7 +54,7 @@ eachAdapter(
         await c.receive("never");
       });
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [holder]);
     const run = await sub.start(holder);
     await eventually("the run suspended", async () => (await run.status()) === "suspended");
@@ -76,7 +76,7 @@ eachAdapter("a wait already satisfied replays from the history", async (store) =
     const late = await c.waitUntil(() => false, { timeout: milliseconds(100) });
     return [first, late];
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [twice]);
   const run = await sub.start(twice);
   await run.send("finish");
@@ -95,7 +95,7 @@ eachAdapter("messages not consumed yet cross a compression", async (store) => {
     }
     return s.seen;
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = await sub.start(looping);
   for (const note of ["a", "b", "c"]) await run.send("note", note);
   await using _ = script(sub, [looping], { continueAsNewAfter: 0 });
@@ -113,7 +113,7 @@ eachAdapter(
       }
       return "swallowed";
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [quitting]);
     const failed = await (await sub.start(quitting)).result({ timeout: LONG }).catch((e) => e);
     assert.ok(failed instanceof RunFailed && failed.status === "cancelled", String(failed));

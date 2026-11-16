@@ -82,6 +82,10 @@ test("an environment opens at now and drops its namespace when left", async () =
   }
   assert.equal(objectsOf(ns), undefined);
   await assert.rejects(s.testing.Env.open({ now: new Date("not a date") }), s.InvalidArgument);
+  await assert.rejects(
+    s.testing.Env.open({ now: new Date("1969-12-31T00:00:00Z") }),
+    (e) => e instanceof s.InvalidArgument && /starts after 1970/.test(e.message),
+  );
 });
 
 test("an environment's clock counts whole milliseconds", async () => {
@@ -146,12 +150,13 @@ test(
       assert.ok(client instanceof s.Substantial);
       await env.advance(s.seconds(10));
       const run = await client.start(napping, { days: 0 }, { id: "from-a-client" });
-      // No worker of the client: the environment's finds the run at its next scan, at 30 s.
-      await env.advance(s.seconds(19));
+      // No worker of the client: the environment's finds the run at its next scan, within
+      // `maxIdle`, 30 s.
       assert.equal(await run.status(), "pending");
-      await env.advance(s.seconds(1));
-      const result = await env.run(napping, "from-a-client").result();
-      assert.equal(result, iso(30_000));
+      await env.advance(s.seconds(30));
+      const result = Date.parse(await env.run(napping, "from-a-client").result());
+      const after = result - T0.getTime();
+      assert.ok(after > 10_000 && after <= 40_000, String(after));
       assert.equal(await run.status(), "completed");
     }
     const other = await env.client();
@@ -247,3 +252,16 @@ test("ids and randoms are drawn from the seed and what they name", async () => {
     assert.notDeepEqual(a, seeded[i]);
   });
 });
+
+test(
+  "result takes max interval and checks it",
+  withEnv(async (env) => {
+    await using _worker = env.worker([napping], service);
+    const run = await env.start(napping, { days: 0 });
+    assert.equal(await run.result({ maxInterval: s.seconds(1) }), T0.toISOString());
+    await assert.rejects(
+      run.result({ maxInterval: s.seconds(0) }),
+      (e) => e instanceof s.InvalidArgument && /maxInterval/.test(e.message),
+    );
+  }),
+);

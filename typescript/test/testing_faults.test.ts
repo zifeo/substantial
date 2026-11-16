@@ -5,6 +5,7 @@ import * as s from "../src/mod.ts";
 import { worldOf } from "../src/testing/env.ts";
 import { limits } from "../src/testing/time.ts";
 import type { WorkerClock } from "../src/testing/workers.ts";
+import { idlePhase } from "../src/testing/world.ts";
 import { T0 } from "./testing_helpers.ts";
 
 const pushes: [Date, number[]][] = [];
@@ -272,18 +273,26 @@ test("runs waking each other without the clock moving are stuck", async () => {
 
 const stamp = s.workflow("stamp", async (c) => (await c.now()).toISOString());
 
-test("an outage moves the scans after it", async () => {
+/** When a run another pod starts at 62 s is found, in ms after T0, after an outage from 5 to
+ * 45 s or none. */
+async function foundAfter(outage: boolean): Promise<number> {
   await using env = await s.testing.Env.open({ now: T0 });
   await using _worker = env.worker([stamp], service);
   await using otherPod = await env.client();
   await env.advance(s.seconds(5));
-  env.outage(s.seconds(40));
+  if (outage) env.outage(s.seconds(40));
   await env.advance(s.seconds(57));
   const run = await otherPod.start(stamp, {}, { id: "late" });
   await env.advance(s.minutes(1));
-  // The scan due at 30 s failed and was retried once the store was back, which moved the scans
-  // after it: the run is found at 69 s, not at 90 s.
-  assert.equal(await run.result(), at(s.seconds(69).ms).toISOString());
+  return Date.parse(await run.result()) - T0.getTime();
+}
+
+test("an outage moves the scans after it", async () => {
+  // The scans due during the outage failed and the first was retried once the store was back,
+  // which moved the scans after it: the run is found at another instant, within `maxIdle`.
+  const [moved, kept] = [await foundAfter(true), await foundAfter(false)];
+  assert.notEqual(moved, kept);
+  for (const found of [moved, kept]) assert.ok(found > 62_000 && found <= 92_000, String(found));
 });
 
 test("chaos faults the scans of an idle worker", async () => {
@@ -386,10 +395,10 @@ test("chaos counts a create that found its key as failed", async () => {
 });
 
 test("the same seed replays the same faults and ids", async () => {
-  const first = await chaotic(11, 0.2, 2);
+  const first = await chaotic(17, 0.2, 2);
   const faults = first[0] as s.testing.Faults;
   assert.ok(faults.failed && faults.ambiguous && faults.crashed, JSON.stringify(faults));
-  assert.deepEqual(await chaotic(11, 0.2, 2), first);
+  assert.deepEqual(await chaotic(17, 0.2, 2), first);
   assert.notDeepEqual((await chaotic(12, 0.2, 2)).slice(0, 2), first.slice(0, 2));
 });
 
@@ -478,12 +487,20 @@ for (const preset of ["service", "script"] as const) {
     await env.advance(s.days(31));
     assert.ok(performance.now() - started < 500);
     assert.equal(await run.status(), "completed");
-    // The scans skipped kept their instants: one started 10 s after a scan is found at the next.
+    // The scans skipped kept their instants: a run started by another pod is found at the next,
+    // within `maxIdle`.
     await env.advance(s.seconds(10));
     const late = await otherPod.start(napping, {}, { id: "late" });
-    await env.advance(s.seconds(preset === "service" ? 19 : 0));
     assert.equal(await late.status(), "pending");
-    await env.advance(s.seconds(1));
+    await env.advance(s.seconds(preset === "service" ? 30 : 1));
     assert.equal(await late.status(), "suspended");
   });
 }
+
+test("the idle phase is the core's", () => {
+  // The core's own vectors: skipping computes the phase the core draws.
+  const seq = Uint8Array.from({ length: 32 }, (_, i) => i);
+  assert.equal(idlePhase(new Uint8Array(32).fill(7), 30_000), 23_034);
+  assert.equal(idlePhase(new Uint8Array(32), 1_000), 535);
+  assert.equal(idlePhase(seq, 300_000), 14_550);
+});

@@ -45,7 +45,7 @@ async def example(c: s.Context) -> float:
 
 async def main(directory: str) -> None:
     async with (
-        s.Substantial.create(f"file:{directory}", partitions=1) as sub,
+        s.Substantial.create(f"file:{directory}") as sub,
         sub.worker([example], preset="script"),
     ):
         # The id makes the start idempotent: running the script again finds the same run. A send

@@ -15,6 +15,7 @@ import pytest
 import substantial as s
 from substantial.stores.retry import Ambiguous, Transient
 from substantial.testing import _time
+from substantial.testing._world import idle_phase
 
 T0 = datetime(2030, 1, 7, 9, 0, tzinfo=UTC)
 pushes: list[tuple[datetime, list[int]]] = []
@@ -384,20 +385,29 @@ async def stamp(c: s.Context) -> str:
     return (await c.now()).isoformat()
 
 
-async def test_an_outage_moves_the_scans_after_it() -> None:
+async def found_after(outage: bool) -> datetime:
+    """When a run another pod starts at 62 s is found, after an outage from 5 to 45 s or none."""
     async with (
         s.testing.Env.open(now=T0) as env,
         env.worker([stamp], preset="service"),
         env.client() as other_pod,
     ):
         await env.advance(s.seconds(5))
-        env.outage(s.seconds(40))
+        if outage:
+            env.outage(s.seconds(40))
         await env.advance(s.seconds(57))
         run = await other_pod.start(stamp, id="late")
         await env.advance(s.minutes(1))
-        # The scan due at 30 s failed and was retried once the store was back, which moved the
-        # scans after it: the run is found at 69 s, not at 90 s.
-        assert await run.result() == (T0 + s.seconds(69)).isoformat()
+        return datetime.fromisoformat(await run.result())
+
+
+async def test_an_outage_moves_the_scans_after_it() -> None:
+    # The scans due during the outage failed and the first was retried once the store was back,
+    # which moved the scans after it: the run is found at another instant, within `max_idle`.
+    moved, kept = await found_after(True), await found_after(False)
+    assert moved != kept
+    for found in (moved, kept):
+        assert T0 + s.seconds(62) < found <= T0 + s.seconds(92), found
 
 
 async def test_chaos_faults_the_scans_of_an_idle_worker() -> None:
@@ -473,10 +483,17 @@ async def test_a_month_of_virtual_time_is_cheap(preset: str) -> None:
         await env.advance(s.days(31))
         assert time.perf_counter() - started < 0.5
         assert await run.status() == "completed"
-        # The scans skipped kept their instants: one started 10 s after a scan is found at the next.
+        # The scans skipped kept their instants: a run started by another pod is found at the
+        # next, within `max_idle`.
         await env.advance(s.seconds(10))
         late = await other_pod.start(napping, id="late")
-        await env.advance(s.seconds(19 if preset == "service" else 0))
         assert await late.status() == "pending"
-        await env.advance(s.seconds(1))
+        await env.advance(s.seconds(30 if preset == "service" else 1))
         assert await late.status() == "suspended"
+
+
+def test_the_idle_phase_is_the_cores() -> None:
+    """The core's own vectors: skipping computes the phase the core draws."""
+    assert idle_phase(bytes([7] * 32), 30_000) == 23_034
+    assert idle_phase(bytes(32), 1_000) == 535
+    assert idle_phase(bytes(range(32)), 300_000) == 14_550

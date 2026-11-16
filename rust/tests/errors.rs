@@ -20,27 +20,22 @@ fn config_error(r: Result<Substantial, Error>) -> String {
 
 #[tokio::test]
 async fn create_states_what_is_missing_or_unknown() {
-    let missing = config_error(Substantial::create("memory://errors").await);
-    assert_eq!(missing, "create needs partitions, a positive whole number");
     for url in ["file//tmp/x", "/tmp/x", "ftp://host/x"] {
-        let m = config_error(Substantial::create(url).partitions(1).await);
+        let m = config_error(Substantial::create(url).await);
         assert!(m.starts_with("unknown scheme"), "{m}");
         assert!(m.contains("memory://, file:, s3://"), "{m}");
     }
     for url in ["sqlite:x.db", "postgres://u@h/db"] {
-        let m = config_error(Substantial::create(url).partitions(1).await);
+        let m = config_error(Substantial::create(url).await);
         assert!(m.contains("not available in this host yet"), "{m}");
     }
-    let home = config_error(Substantial::create("file:~/x").partitions(1).await);
+    let home = config_error(Substantial::create("file:~/x").await);
     assert!(home.contains("give an absolute or relative path"), "{home}");
 }
 
 #[tokio::test]
 async fn names_outside_the_rules_state_the_rule() {
-    let sub = Substantial::create("memory://errors-names")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://errors-names").await.unwrap();
     let w = Workflow::without_input("named", |_c| async { Ok(1) });
     let started = sub.start(&w, ()).id("Bad Id").await.unwrap_err();
     assert_eq!(
@@ -62,10 +57,7 @@ async fn names_outside_the_rules_state_the_rule() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn messages_carry_no_doubled_prefix() {
-    let sub = Substantial::create("memory://errors-prefix")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://errors-prefix").await.unwrap();
     let bad = sub
         .worker(Workflow::without_input("w", |_c| async { Ok(1) }))
         .preset(Preset::Script)
@@ -105,7 +97,6 @@ async fn messages_carry_no_doubled_prefix() {
 #[tokio::test]
 async fn a_worker_refuses_the_settings_it_does_not_take() {
     let sub = Substantial::create("memory://errors-settings")
-        .partitions(1)
         .await
         .unwrap();
     let w = Workflow::without_input("w", |_c| async { Ok(1) });
@@ -146,7 +137,7 @@ async fn values_over_64_mib_are_refused() {
         Arc::new(MemoryStore::open("errors-large").unwrap()),
         Duration::ZERO,
     );
-    let sub = internal::create(store.clone()).partitions(1).await.unwrap();
+    let sub = internal::create(store.clone()).await.unwrap();
     let attempts = Arc::new(AtomicU32::new(0));
     let counted = attempts.clone();
     let large = Workflow::new("large", move |c, input: serde_json::Value| {
@@ -241,7 +232,6 @@ async fn sleeper(c: &Context, sleep: Duration, own: Option<Duration>) -> Result<
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_step_timeout_is_its_own_else_its_workflows_else_the_workers() {
     let sub = Substantial::create("memory://errors-timeouts")
-        .partitions(1)
         .await
         .unwrap();
     let (short, slow, long) = (
@@ -290,9 +280,50 @@ fn a_zero_workflow_step_timeout_is_refused_at_its_declaration() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_step_refuses_an_invalid_retry() {
+    let sub = Substantial::create("memory://errors-retry").await.unwrap();
+    let w = Workflow::without_input("retried", |c| async move {
+        let second = Duration::from_secs(1);
+        let mut refused = Vec::new();
+        for (max_attempts, initial, multiplier) in
+            [(0, second, 2.0), (3, 2 * second, 2.0), (3, second, 0.5)]
+        {
+            let retry = Retry {
+                max_attempts,
+                initial,
+                max: second,
+                multiplier,
+            };
+            match c.step("s", || async { anyhow::Ok(1) }).retry(retry).await {
+                Err(Error::InvalidArgument(m)) => refused.push(m),
+                other => return Err(Error::failed("Unexpected", format!("{other:?}"))),
+            }
+        }
+        Ok(refused)
+    });
+    let worker = script(&sub, &w).start().unwrap();
+    let refused = sub
+        .start(&w, ())
+        .await
+        .unwrap()
+        .result()
+        .timeout(LONG)
+        .await
+        .unwrap();
+    assert_eq!(
+        refused,
+        [
+            "max_attempts must be a positive integer: 0",
+            "invalid backoff from 2s to 1s",
+            "multiplier must be at least 1: 0.5",
+        ]
+    );
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_permanent_error_is_the_cause_of_its_step_failure() {
     let sub = Substantial::create("memory://errors-permanent")
-        .partitions(1)
         .await
         .unwrap();
     let w = Workflow::without_input("permanent", |c| async move {
@@ -315,10 +346,7 @@ async fn a_permanent_error_is_the_cause_of_its_step_failure() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_run_holds_the_cause_of_the_step_that_failed_it() {
-    let sub = Substantial::create("memory://errors-causes")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://errors-causes").await.unwrap();
     let paying = Workflow::without_input("paying", |c| async move {
         c.step("charge", || async {
             Err::<(), _>(Permanent::new(std::io::Error::other("card declined")))
@@ -361,6 +389,7 @@ async fn a_failed_run_holds_the_cause_of_the_step_that_failed_it() {
         kind: "Error".into(),
         message: "card declined".into(),
         retryable: false,
+        details: None,
     };
     assert_eq!(cause, Some(Box::new(declined)));
     let refused = sub
@@ -394,10 +423,7 @@ async fn a_failed_run_holds_the_cause_of_the_step_that_failed_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_timed_out_async_step_is_interrupted() {
-    let sub = Substantial::create("memory://errors-hang")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://errors-hang").await.unwrap();
     let reached: Arc<std::sync::Mutex<Vec<&str>>> = Arc::default();
     let r = reached.clone();
     let hanging = Workflow::without_input("hanging", move |c| {
@@ -435,10 +461,7 @@ async fn a_timed_out_async_step_is_interrupted() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_uninterruptible_step_runs_to_its_end_with_its_outcome_dropped() {
-    let sub = Substantial::create("memory://errors-block")
-        .partitions(1)
-        .await
-        .unwrap();
+    let sub = Substantial::create("memory://errors-block").await.unwrap();
     let finished = Arc::new(AtomicU32::new(0));
     let f = finished.clone();
     let blocking = Workflow::without_input("blocking", move |c| {

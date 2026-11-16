@@ -8,6 +8,8 @@
 //                                        or PlanInput
 //   sub_call(machine, ptr, len) -> u64   the request is the machine's RunRequest, AgentRequest or
 //                                        PlanRequest; the answer its response, as ptr << 32 | len
+//   sub_refused(machine) -> u64          the error sub_new refused the machine's input with, a
+//                                        response as ptr << 32 | len, or 0 for a machine made
 //   sub_drop(machine)                    frees a machine
 //
 // Ownership: sub_new and sub_call take the request buffer and free it, whatever the outcome. A
@@ -15,7 +17,9 @@
 //
 // Errors: every response has CoreError error = 1, so an error decodes the same whatever the kind.
 // sub_new never returns 0: given an unknown kind or an input that does not decode or is invalid, it
-// returns a machine that answers every call with that error, and must still be dropped. A request
+// returns a machine that answers every call with that error, and must still be dropped. A host
+// asks sub_refused right after sub_new, so an invalid input (an AgentConfig refused, such as prices
+// in a currency outside ISO 4217) fails where it is given rather than at the first call. A request
 // that does not decode is answered with an error and leaves the machine as it was; so does a call
 // on a machine that does not exist. A trap is a bug of the core: the host drops the instance.
 syntax = "proto3";
@@ -93,4 +97,7 @@ message OpResult {
     Empty deleted = 6;
     StoreFailure failed = 7;
   }
+  // The requests the adapter sent for the operation, its retries and read-backs included: at least
+  // 1 on every result fed to an agent or a run machine, which count them; plans ignore it.
+  uint32 attempts = 8;
 }

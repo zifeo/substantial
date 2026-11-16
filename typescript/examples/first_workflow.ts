@@ -46,7 +46,7 @@ if (directory === undefined) {
   process.exit(2);
 }
 
-await using sub = await s.Substantial.create(`file:${directory}`, { partitions: 1 });
+await using sub = await s.Substantial.create(`file:${directory}`);
 await using _worker = sub.worker([example], { preset: "script" });
 // The id makes the start idempotent: running the script again finds the same run. A send to a
 // run that ended throws RunEnded, so the messages go only to a run still going.

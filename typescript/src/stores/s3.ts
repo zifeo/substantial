@@ -1,6 +1,7 @@
 import type { S3Client, S3ClientConfig, S3ServiceException } from "@aws-sdk/client-s3";
 import { ConfigError, messageOf } from "../errors.ts";
 import type { StoreRetry } from "../settings.ts";
+import { sent } from "./attempts.ts";
 import { type CredentialsArg, Keys } from "./credentials.ts";
 import * as retry from "./retry.ts";
 import { Ambiguous, Fault, Refused, Transient } from "./retry.ts";
@@ -180,7 +181,7 @@ export class S3Store implements Store {
         connectionTimeout: CONNECT_MS,
         requestTimeout: ATTEMPT_MS,
         // No cap, as in every host: a waiting listing holds its socket up to 20 s, one per
-        // workflow and partition served and per `result` waiter, and the SDK's cap of 50 would
+        // workflow served and per `result` waiter, and the SDK's cap of 50 would
         // queue every other request behind them.
         httpAgent: { maxSockets: Number.POSITIVE_INFINITY },
         httpsAgent: { maxSockets: Number.POSITIVE_INFINITY },
@@ -314,7 +315,11 @@ export class S3Store implements Store {
         }
         keys.push(full.slice(this.#prefix.length));
       }
-      if (wait !== undefined || !(page.IsTruncated && keys.length > 0)) break;
+      if (wait !== undefined || !(page.IsTruncated && keys.length > 0) || keys.length >= maxKeys) {
+        break;
+      }
+      // The retry layer counted the first page's request.
+      sent();
       after = this.#full(keys[keys.length - 1] as string);
     }
     if (wait !== undefined && !etag) {

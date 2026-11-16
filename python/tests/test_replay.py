@@ -22,11 +22,14 @@ from substantial import (
     step_key,
     workflow,
 )
-from substantial._proto import agent, boundary, json_value, layout, run
+from substantial._proto import agent, json_value, layout, run
 from substantial.clock import Clock
 from substantial.core import Core
+from substantial.observe import Metering
 from substantial.replay import Channel, Replay, replay
 from substantial.stores.memory import MemoryStore
+
+NO_METERING = Metering(None, None)
 
 
 class Replayed:
@@ -91,7 +94,7 @@ class Harness:
             continue_as_new_after_segments=1000,
             continue_as_new_after_bytes=8 << 20,
             dedup_window_ms=86_400_000,
-            retention=run.Retention(forever=boundary.Empty()),
+            retention=run.Retention(ms=30 * 86_400_000),
         )
         return run.RunInput(
             run="run-1",
@@ -101,17 +104,18 @@ class Harness:
             inbox=self.inbox,
             now=layout.Time(ms=self.now),
             seed=bytes(32),
-            partitions=1,
             worker="test",
             settings=settings,
+            cost=layout.Cost(),
         )
 
     async def replay(self, now: int, won: bool = True) -> Replayed:
         self.now = now
         events: asyncio.Queue[tuple[Any, ...]] = asyncio.Queue()
         channel = Channel()
-        r = Replay(self.core, self.store, _Fixed(self.now), events.put_nowait, self.step_timeout)
-        task = asyncio.create_task(replay(r, self.workflow, self.run_input(), channel))
+        clock = _Fixed(self.now)
+        r = Replay(self.core, self.store, clock, events.put_nowait, self.step_timeout, NO_METERING)
+        task = asyncio.create_task(replay(r, self.workflow, self.run_input(), None, channel))
         commits = []
         while True:
             event = await events.get()
@@ -119,7 +123,11 @@ class Harness:
                 await task
                 return Replayed(commits, event[2])
             commit = event[2]
-            channel.committed.put_nowait(agent.AgentCommand.Committed(n=commit.segment.n, won=won))
+            # As the agent does: the chain's cost after a progress commit won.
+            progress = won and commit.kind == run.COMMIT_KIND_PROGRESS
+            cost = commit.segment.cost if progress else None
+            acked = agent.AgentCommand.Committed(n=commit.segment.n, won=won, cost=cost)
+            channel.committed.put_nowait(acked)
             if won:
                 self.history.extend(commit.segment.events)
                 self.next_n = commit.segment.n + 1

@@ -32,11 +32,6 @@ async def kept(c: s.Context) -> int:
     return 2
 
 
-@s.workflow(retention=s.FOREVER)
-async def forever(c: s.Context) -> int:
-    return 3
-
-
 @s.workflow
 async def counter(c: s.Context, left: int, done: int) -> int:
     """Continues as new every hour, `left` times, then ends with the count."""
@@ -133,17 +128,6 @@ async def test_a_workflow_retention_overrides_the_workers(env: s.testing.Env) ->
         assert e.value.collected
 
 
-async def test_forever_keeps_a_run(env: s.testing.Env) -> None:
-    async with env.worker([quick, forever], preset="script", retention=s.FOREVER):
-        q = await env.start(quick, id="q")
-        f = await env.start(forever, id="f")
-        assert await q.result() == 1
-        assert await f.result() == 3
-        await env.advance(s.days(400))
-        assert await q.status() == "completed"
-        assert await f.result() == 3
-
-
 async def test_a_long_lived_chain_keeps_a_bounded_number_of_runs(env: s.testing.Env) -> None:
     async with env.worker([counter], preset="script", retention=s.hours(1)):
         run = await env.start(counter, {"left": 48, "done": 0}, id="c")
@@ -194,7 +178,7 @@ async def test_a_retention_under_an_hour_is_a_config_error(env: s.testing.Env) -
 
 
 async def test_a_retention_over_100_years_is_a_config_error(env: s.testing.Env) -> None:
-    with pytest.raises(s.ConfigError, match="at most 3153600000000 ms or forever"):
+    with pytest.raises(s.ConfigError, match="at most 3153600000000 ms, "):
         env.worker([quick], preset="script", retention=s.days(36_501))
 
     @s.workflow(retention=s.days(36_501))
@@ -229,7 +213,7 @@ async def test_a_send_to_a_collected_chain_raises_run_not_found(env: s.testing.E
 
 
 async def test_a_result_wait_follows_its_chain_again_and_sees_it_collected() -> None:
-    sub = await s.Substantial.create("memory://retention-refollow", partitions=1)
+    sub = await s.Substantial.create("memory://retention-refollow")
     run = await sub.start(quick, id="q")
     run._refollow = 0.05
     wait = asyncio.create_task(run.result(timeout=timedelta(seconds=10)))

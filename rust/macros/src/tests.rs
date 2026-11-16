@@ -80,6 +80,17 @@ fn a_step_is_an_async_fn_of_values_or_shared_references() {
     );
     refused(
         step::expand(
+            quote!(name = "schedule.next"),
+            quote!(
+                async fn f() -> R {
+                    x
+                }
+            ),
+        ),
+        "the step name \"schedule.next\" is reserved for c.schedule()",
+    );
+    refused(
+        step::expand(
             quote!(retries = 3),
             quote!(
                 async fn f() -> R {

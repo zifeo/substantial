@@ -39,7 +39,7 @@ const example = workflow("example", async (c: Context) => {
 });
 
 eachAdapter("a first workflow", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [example]);
   const run = await sub.start(example);
   await run.send("by", 2);
@@ -57,7 +57,7 @@ const waiting = workflow("waiting", async (c: Context) => {
 });
 
 eachAdapter("status moves from pending to the end", async (store) => {
-  const sub = await createOn(store, { partitions: 2 });
+  const sub = await createOn(store);
   const run = await sub.start(waiting, {}, { id: "status-1" });
   assert.equal(await run.status(), "pending");
   await using _ = script(sub, [waiting]);
@@ -66,11 +66,14 @@ eachAdapter("status moves from pending to the end", async (store) => {
   await run.send("note", "hi", { id: "note-1" });
   assert.equal(await run.result({ timeout: LONG }), "hi");
   assert.equal(await run.status(), "completed");
-  await assert.rejects(run.send("note", "again"), RunEnded);
+  await assert.rejects(
+    run.send("note", "again"),
+    (e) => e instanceof RunEnded && e.message.endsWith("has ended, completed"),
+  );
 });
 
 eachAdapter("a waiting run is cancelled", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [waiting]);
   const run = await sub.start(waiting);
   await eventually("a suspended run", async () => (await run.status()) === "suspended");
@@ -92,7 +95,7 @@ eachAdapter("a cancel reaches a run looping on steps", async (store) => {
       });
     }
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [looping]);
   const run = await sub.start(looping);
   await eventually("a few steps", async () => ticks > 2);
@@ -103,7 +106,7 @@ eachAdapter("a cancel reaches a run looping on steps", async (store) => {
 });
 
 eachAdapter("unknown chains are not found", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = sub.run(waiting, "nobody");
   const calls = [
     () => run.send("by", 1),
@@ -122,7 +125,7 @@ eachAdapter("starts are idempotent by id", async (store) => {
     await count();
     return input;
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const once = await sub.start(counted, { x: 1 }, { id: "once" });
   const again = await sub.start(counted, { x: 1 }, { id: "once" });
   assert.equal(once.chain, again.chain);
@@ -140,7 +143,7 @@ eachAdapter("starts are idempotent by id", async (store) => {
 
 eachAdapter("inputs are compared as canonical JSON", async (store) => {
   const echo = workflow("echo", async (_c: Context, input: Record<string, unknown>) => input);
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const first = await sub.start(echo, { b: [1, { d: 2, c: "é" }], a: 0.5 }, { id: "same" });
   const again = await sub.start(echo, { a: 0.5, b: [1, { c: "é", d: 2 }] }, { id: "same" });
   assert.equal(first.chain, again.chain);
@@ -161,7 +164,7 @@ eachAdapter("inputs are compared as canonical JSON", async (store) => {
 });
 
 eachAdapter("names outside the rules are invalid arguments", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const long = "a".repeat(101);
   const keyRule = (what: string) => (e: unknown) =>
     e instanceof InvalidArgument &&
@@ -189,7 +192,7 @@ eachAdapter("names outside the rules are invalid arguments", async (store) => {
 eachAdapter(
   "ids of a hundred bytes work end to end",
   async (store) => {
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [waiting]);
     const run = await sub.start(waiting, {}, { id: "r".repeat(100) });
     await run.send("note", "hi", { id: "m".repeat(100) });
@@ -200,7 +203,7 @@ eachAdapter(
 
 eachAdapter("a step name outside the rules fails the run", async (store) => {
   const bad = workflow("bad-step", async (c: Context) => await c.step("a step", () => 1));
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [bad]);
   const run = await sub.start(bad);
   const failed = await run.result({ timeout: LONG }).catch((e) => e);
@@ -219,7 +222,7 @@ eachAdapter("a message its decode refuses fails the run", async (store) => {
     const b = await c.receive("n", { decode: asNumber });
     return a + b;
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [typed]);
   const run = await sub.start(typed);
   await run.send("n", 1);

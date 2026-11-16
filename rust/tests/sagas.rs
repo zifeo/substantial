@@ -34,7 +34,7 @@ async fn rolled_back(sub: &Substantial, w: &Workflow<()>) -> Failure {
             status: RunStatus::Failed,
             error,
             ..
-        }) => error,
+        }) => *error,
         other => panic!("{other:?}"),
     }
 }
@@ -56,7 +56,7 @@ async fn a_rollback_undoes_every_step_most_recent_first() {
     });
     for ns in namespaces() {
         log.lock().unwrap().clear();
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(
             (error.kind.as_str(), error.message.as_str()),
@@ -95,7 +95,7 @@ async fn a_saga_undoes_its_own_steps_then_raises_again() {
     });
     for ns in namespaces() {
         log.lock().unwrap().clear();
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}", ns.name);
         assert_eq!(*log.lock().unwrap(), ["c", "b", "a"], "{}", ns.name);
@@ -111,7 +111,7 @@ async fn an_undo_without_attempts_left_fails_the_run() {
         Err::<(), _>(c.rollback("fraud").await)
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "UndoFailed", "{}: {error}", ns.name);
         assert!(
@@ -142,7 +142,7 @@ async fn a_saga_that_succeeds_leaves_its_steps_to_a_rollback() {
     });
     for ns in namespaces() {
         log.lock().unwrap().clear();
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}: {error}", ns.name);
         assert_eq!(*log.lock().unwrap(), ["b", "a"], "{}", ns.name);
@@ -173,7 +173,7 @@ async fn an_undo_has_the_step_key_of_its_occurrence() {
     });
     for ns in namespaces() {
         keys.lock().unwrap().clear();
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &w).start().unwrap();
         let run = sub.start(&w, ()).id("undone").await.unwrap();
         assert!(run.result().timeout(LONG).await.is_err());
@@ -215,7 +215,7 @@ async fn an_inner_saga_ended_hands_its_steps_to_the_outer_one() {
     });
     for ns in namespaces() {
         log.lock().unwrap().clear();
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}", ns.name);
         assert_eq!(*log.lock().unwrap(), ["c", "b", "a", "z"], "{}", ns.name);

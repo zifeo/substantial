@@ -8,6 +8,7 @@ import pytest
 
 from substantial.stores import StoreFailure
 from substantial.stores import retry as r
+from substantial.stores.attempts import measured
 from substantial.stores.retry import Ambiguous, Permanent, StoreRetry, Transient
 
 POLICY = StoreRetry(attempts=3, initial=timedelta(milliseconds=1), max=timedelta(milliseconds=5))
@@ -57,3 +58,20 @@ async def test_ambiguous_creates_are_resolved_with_a_get() -> None:
         await resolve([lost(), lost()], [None, Transient("x")])
     assert await resolve(["exists"], []) == "exists", "no ambiguity, no get"
     assert await resolve([Transient("409"), "created"], []) == "created"
+
+
+async def test_every_request_is_counted_the_read_back_too() -> None:
+    with measured() as sent:
+        assert await r.with_retry(POLICY, script([Transient("a"), 7])) == 7
+    assert sent.n == 2
+    with measured() as sent:
+        assert await resolve([Ambiguous("timeout")], [b"mine"]) == "created"
+    assert sent.n == 2
+    with pytest.raises(StoreFailure), measured() as sent:
+        await r.with_retry(POLICY, script([Transient("down")] * 3))
+    assert sent.n == 3, "a failed operation counts its requests too"
+    with measured() as outer:
+        with measured() as inner:
+            pass
+        assert inner.n == 1, "an adapter without retries sends one request"
+    assert outer.n == 1, "an operation measured inside another counts in both"

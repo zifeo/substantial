@@ -24,7 +24,7 @@ fn unversioned() -> Workflow<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runs_are_replayed_by_the_code_of_their_version() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let old = script(&sub, vec![unversioned(), versioned(1)])
             .start()
             .unwrap();
@@ -54,7 +54,7 @@ async fn runs_are_replayed_by_the_code_of_their_version() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_worker_with_versions_only_leaves_unversioned_runs_alone() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let only_one = script(&sub, versioned(1)).start().unwrap();
         let none = sub.start(&unversioned(), ()).await.unwrap();
         let one = sub.start(&versioned(1), ()).await.unwrap();
@@ -115,7 +115,7 @@ fn target_unversioned() -> Workflow<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_continuation_names_the_version_of_its_workflow() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let all = vec![
             hop(),
             hop_unversioned(),
@@ -134,15 +134,16 @@ async fn a_continuation_names_the_version_of_its_workflow() {
     }
 }
 
-/// Version 1 steps then sleeps, version 2 sleeps then steps: the same name, no version.
+/// Version 1 steps then waits for `go`, version 2 waits for `go` then steps: the same name, no
+/// version. Waiting on a message keeps the run suspended until the test sends it.
 fn changed(first: bool) -> Workflow<i64> {
     Workflow::without_input("changed", move |c| async move {
         let one = || c.step("one", || async { Ok::<_, Error>(1) });
         if first {
             one().await?;
-            c.sleep(Duration::from_millis(300)).await?;
+            let _: String = c.receive("go").await?;
         } else {
-            c.sleep(Duration::from_millis(300)).await?;
+            let _: String = c.receive("go").await?;
             one().await?;
         }
         Ok(1)
@@ -152,15 +153,16 @@ fn changed(first: bool) -> Workflow<i64> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_incompatible_change_fails_the_run_with_non_determinism() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let old = script(&sub, changed(true)).start().unwrap();
         let run = sub.start(&changed(true), ()).await.unwrap();
-        common::eventually("the sleep", async || {
+        common::eventually("the wait", async || {
             run.status().await.unwrap() == RunStatus::Suspended
         })
         .await;
         old.shutdown().await.unwrap();
         let new = script(&sub, changed(false)).start().unwrap();
+        run.send("go", "now").await.unwrap();
         let failed = run.result().timeout(LONG).await;
         let message = failed.as_ref().err().map(ToString::to_string);
         let Err(Error::RunFailed { status, error, .. }) = failed else {

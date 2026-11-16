@@ -1,8 +1,15 @@
 // Short names for the code generated from proto/substantial, and the JSON values of the code.
 import { create } from "@bufbuild/protobuf";
 import canonicalize from "canonicalize";
-import { InvalidArgument, ProtocolError, ValueTooLarge } from "./errors.ts";
 import {
+  type Failure,
+  InvalidArgument,
+  makeFailure,
+  ProtocolError,
+  ValueTooLarge,
+} from "./errors.ts";
+import {
+  type Failure as LayoutFailure,
   type Time,
   TimeSchema,
   type Value,
@@ -101,5 +108,15 @@ export function decodeValue(value: Value | undefined): unknown {
       `values other than inline JSON are not supported yet: ${value.kind.case}`,
     );
   }
-  return JSON.parse(decoder.decode(value.kind.value));
+  return parseJson(value.kind.value);
+}
+
+/** A failure of the core, its details decoded. */
+export function failureFrom(f: LayoutFailure): Failure {
+  return makeFailure(f.type, f.message, f.retryable, decodeValue(f.details));
+}
+
+/** The value of JSON bytes in UTF-8. */
+export function parseJson(json: Uint8Array): unknown {
+  return JSON.parse(decoder.decode(json));
 }

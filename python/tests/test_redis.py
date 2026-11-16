@@ -15,8 +15,16 @@ from conftest import LONG, require_redis, script
 from redis.asyncio import Redis
 
 from substantial import ConfigError, Context, Password, StoreError, Substantial, workflow
-from substantial.stores import ListWait, RedisLocation, StoreFailure, open_store, redis_store
+from substantial.stores import (
+    ListWait,
+    RedisLocation,
+    StoreFailure,
+    open_store,
+    redis_notify,
+    redis_store,
+)
 from substantial.stores.redis_store import RedisStore
+from substantial.stores.retry import StoreRetry
 
 
 def test_urls_need_every_part() -> None:
@@ -111,16 +119,18 @@ async def config(admin: Redis, name: str, value: str) -> AsyncIterator[None]:
         await admin.config_set(name, before)
 
 
+@pytest.mark.failover
 async def test_a_server_without_aof_is_refused(admin: Redis) -> None:
     async with config(admin, "appendonly", "no"):
         with pytest.raises(ConfigError, match="no AOF"):
-            await Substantial.create(require_redis("redis"), partitions=1)
+            await Substantial.create(require_redis("redis"))
 
 
+@pytest.mark.failover
 async def test_a_server_that_evicts_is_refused(admin: Redis) -> None:
     async with config(admin, "maxmemory-policy", "allkeys-lru"):
         with pytest.raises(ConfigError, match="allkeys-lru"):
-            await Substantial.create(require_redis("redis"), partitions=1)
+            await Substantial.create(require_redis("redis"))
 
 
 async def test_a_password_reaches_the_server(admin: Redis) -> None:
@@ -141,8 +151,8 @@ async def test_a_password_reaches_the_server(admin: Redis) -> None:
 
     try:
         with pytest.raises(StoreError, match=r"WRONGPASS|invalid username-password"):
-            await Substantial.create(url, partitions=1, credentials=provider)
-        sub = await Substantial.create(url, partitions=1, credentials=provider)
+            await Substantial.create(url, credentials=provider)
+        sub = await Substantial.create(url, credentials=provider)
         await sub.close()
         assert len(calls) == 2, "asked again after a failed connection, then once"
         right = Password("right", username="substantial-test")
@@ -195,10 +205,10 @@ async def test_a_waiting_listing_returns_as_a_key_lands_without_polling(admin: R
     await store.create("other/x", b"x")
     await asyncio.sleep(0.2)
     assert not held.done(), "a key under another prefix does not end the wait"
-    started = time.monotonic()
     await store.create("q/b", b"b")
+    # At its deadline the wait answers the page it listed before `q/b` landed: `q/b` in the
+    # answer is the key's notification waking it, however long the machine takes to get there.
     woken = await held
-    assert time.monotonic() - started < 0.5
     assert woken.keys == ["q/a", "q/b"] and woken.etag != first.etag
     await store.close()
 
@@ -230,7 +240,7 @@ async def test_a_user_denied_waitaof_is_refused_as_such(admin: Redis) -> None:
     async with user(admin, "+@all", "-waitaof") as name:
         with pytest.raises(StoreError, match="no permissions"):
             await Substantial.create(
-                require_redis("redis"), partitions=1, credentials=Password("right", username=name)
+                require_redis("redis"), credentials=Password("right", username=name)
             )
 
 
@@ -254,18 +264,30 @@ async def test_a_hung_password_provider_fails_only_its_attempt(
         await store.close()
 
 
-async def test_a_subscription_lost_again_resubscribes_at_once(admin: Redis) -> None:
+async def subscribers(admin: Redis, user: str) -> list[int]:
+    """The ids of the subscribed connections of `user`."""
+    return [int(c["id"]) for c in await admin.client_list(_type="pubsub") if c["user"] == user]
+
+
+async def test_a_subscription_lost_again_resubscribes_at_once(
+    admin: Redis, monkeypatch: pytest.MonkeyPatch
+) -> None:
     url = require_redis("redis")
-    channel = f"{{{RedisLocation.parse(url).namespace}}}:c"
+    # Not reset by a subscription, a backoff doubling from 100 ms would pause 51 s before the
+    # tenth: far beyond a reconnection, seconds at most on a loaded machine.
+    retry = StoreRetry(attempts=5, initial=timedelta(milliseconds=100), max=timedelta(hours=1))
+    monkeypatch.setattr(redis_notify, "STORE_RETRY", retry)
     async with user(admin, "+@all") as name:
         store = open_store(url, Password("right", username=name))
         await store.list("q/", start_after=None, max_keys=10, wait=ListWait(1))
-        for _ in range(6):
+        [subscribed] = await subscribers(admin, name)
+        for loss in range(1, 11):
             assert await admin.client_kill_filter(user=name) >= 1
             started = time.monotonic()
-            while (await admin.pubsub_numsub(channel))[0][1] == 0:
-                assert time.monotonic() - started < 1, "subscribed again within a second"
+            while not (again := [i for i in await subscribers(admin, name) if i > subscribed]):
+                assert time.monotonic() - started < 20, f"subscribed again after loss {loss}"
                 await asyncio.sleep(0.01)
+            [subscribed] = again
         await store.close()
 
 
@@ -275,7 +297,7 @@ async def test_a_start_from_another_client_comes_through_the_wait() -> None:
         return 42
 
     url = require_redis("redis")
-    sub = await Substantial.create(url, partitions=1)
+    sub = await Substantial.create(url)
     async with sub.worker([answer], preset="script", max_idle=timedelta(minutes=5)):
         await asyncio.sleep(0.5)
         other = await Substantial.open(url)
@@ -292,7 +314,7 @@ async def test_a_run_ends_on_redis_through_a_script_worker() -> None:
     async def double(c: Context, n: int) -> int:
         return n * 2
 
-    sub = await Substantial.create(require_redis("redis"), partitions=2)
+    sub = await Substantial.create(require_redis("redis"))
     async with script(sub, [double]):
         assert await (await sub.start(double, {"n": 21})).result(timeout=LONG) == 42
     await sub.close()

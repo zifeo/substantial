@@ -17,12 +17,16 @@ message PlanInput {
     StatusPlan status = 6;
     CancelPlan cancel = 7;
     ReadPlan read = 8;
+    RunsPlan runs = 9;
+    HistoryPlan history = 10;
+    RetryPlan retry = 11;
   }
 }
 
 message SendPlan {
+  reserved 2;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
   string chain = 3;
   string name = 4;
   layout.v1.Value value = 5;
@@ -35,11 +39,11 @@ message SendPlan {
   string ord = 8;
 }
 
-// The probe, then creates the namespace, or opens it if its marker holds the same partitions.
+// The probe, then creates the namespace, or opens it if its marker holds the same layout.
 message CreatePlan {
-  reserved 3;
+  reserved 2, 3;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
 }
 
 // Opens the namespace whose marker exists; then the probe.
@@ -49,8 +53,9 @@ message OpenPlan {
 }
 
 message StartPlan {
+  reserved 2;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
   string workflow = 3;
   optional uint32 version = 4;
   // A JSON object.
@@ -58,12 +63,15 @@ message StartPlan {
   // The caller's id, or a ULID from the host.
   string id = 6;
   layout.v1.Time now = 7;
+  // The run's limits, part of its identity; absent, none.
+  layout.v1.Budget budget = 8;
 }
 
 // The outcome of a chain's last run, through its continuations.
 message ResultPlan {
+  reserved 2;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
   string chain = 3;
   // The run the last poll answered not_ended with, absent for the first poll: the plan then gets
   // that run's result alone, following its continuations, instead of the chain.
@@ -71,8 +79,9 @@ message ResultPlan {
 }
 
 message StatusPlan {
+  reserved 2;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
   string chain = 3;
   // Tells a live claim from an expired one.
   layout.v1.Time now = 4;
@@ -80,8 +89,9 @@ message StatusPlan {
 
 // A send of substantial.cancel holding the reason; answered with Sent.
 message CancelPlan {
+  reserved 2;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
   string chain = 3;
   string reason = 4;
   // As SendPlan.id and SendPlan.ord.
@@ -92,10 +102,36 @@ message CancelPlan {
 
 // The last value published under key by any run of the chain.
 message ReadPlan {
+  reserved 2;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
   string chain = 3;
   string key = 4;
+}
+
+// The live runs of a workflow, all versions, read from its queue: its due entries, then its rest
+// markers. Answered in pages: each next that answers a page goes on, so each page comes once, then
+// end.
+message RunsPlan {
+  string prefix = 1;
+  string workflow = 2;
+}
+
+// The events the chain's last run replays: of its latest snapshot and the segments after it, and,
+// for a retry without a snapshot yet, of the failed run it resumes first.
+message HistoryPlan {
+  string prefix = 1;
+  string chain = 2;
+}
+
+// A retry of the chain's last run, which failed: a run with a derived id resuming it.
+message RetryPlan {
+  string prefix = 1;
+  string chain = 2;
+  // The retry's created_at, the time of its due entry.
+  layout.v1.Time now = 3;
+  // The retry's limits; absent, the failed run's.
+  layout.v1.Budget budget = 4;
 }
 
 message PlanRequest {
@@ -119,13 +155,19 @@ message RunExists {
 }
 
 message Sent {
+  // The message is in the inbox of run, with its due entry under the queue of workflow, which a
+  // worker of this process serving it is woken on.
+  message Accepted {
+    string run = 1;
+    string workflow = 2;
+  }
   message Refused {
     string run = 1;
     layout.v1.Status status = 2;
   }
+  reserved 1;
   oneof sent {
-    // The message is in the inbox of this run, with its due entry.
-    string accepted = 1;
+    Accepted accepted = 5;
     // The chain's last run ended other than by continuing.
     Refused refused = 2;
     NoChain no_chain = 3;
@@ -135,10 +177,11 @@ message Sent {
 }
 
 message Opened {
+  reserved 1;
   oneof opened {
-    // The namespace is open, with these partitions, and the store passed the probe.
-    uint32 partitions = 1;
-    // No namespace, other partitions, an unknown layout, or a store that failed the probe.
+    // The namespace is open and the store passed the probe.
+    Empty open = 4;
+    // No namespace, a namespace of another layout, or a store that failed the probe.
     string layout_error = 2;
     StoreFailure failed = 3;
   }
@@ -219,6 +262,93 @@ message ReadValue {
   }
 }
 
+// What a live run waits on.
+enum Waiting {
+  WAITING_UNSPECIFIED = 0;
+  // Started, never replayed yet.
+  WAITING_START = 1;
+  // A timer, or a step's retry backoff.
+  WAITING_TIME = 2;
+  // A message reached it and is due, consumed at its next wakeup.
+  WAITING_INBOX = 3;
+  // Idle until a message comes, with no timer.
+  WAITING_MESSAGE = 4;
+}
+
+message RunInfo {
+  string chain = 1;
+  string run = 2;
+  optional uint32 version = 3;
+  // Its earliest due entry's time; absent when it waits on messages alone.
+  layout.v1.Time due_at = 4;
+  Waiting waiting = 5;
+}
+
+message Runs {
+  message Page {
+    repeated RunInfo runs = 1;
+  }
+  oneof runs {
+    // Runs not given in an earlier page.
+    Page page = 1;
+    // Every run was given: the plan is done.
+    Empty end = 2;
+    StoreFailure failed = 3;
+  }
+}
+
+// An event of a history, with the segment that recorded it.
+message HistoryEvent {
+  // The run of the segment: the chain's last run, or a failed run it resumes.
+  string run = 1;
+  uint64 segment = 2;
+  // When the segment was committed.
+  layout.v1.Time at = 3;
+  // step, step_retry, step_failed, timer, fired, message, child, sent, published, completed,
+  // failed, cancelled, continued.
+  string kind = 4;
+  // A JSON object, the event's fields: times in RFC 3339, failures as {"type", "message",
+  // "retryable", "details"}, values as the code gave them, a value of raw bytes as
+  // {"$bytes": <base64>}.
+  bytes data = 5;
+}
+
+message History {
+  message Events {
+    // The chain's last run.
+    string run = 1;
+    repeated HistoryEvent events = 2;
+  }
+  oneof history {
+    Events events = 1;
+    NoChain no_chain = 2;
+    StoreFailure failed = 3;
+  }
+}
+
+message Retried {
+  // The retry, whose due entry is under the queue of workflow, which a worker of this process
+  // serving it is woken on.
+  message Retry {
+    string run = 1;
+    string workflow = 2;
+  }
+  message NotRetryable {
+    string run = 1;
+    // Why: the run has not ended, ended otherwise than failed, or was rolled back.
+    string message = 2;
+  }
+  oneof retried {
+    Retry created = 1;
+    // Created by a retry that raced this one, or that stopped halfway: completed.
+    Retry existing = 2;
+    NotRetryable not_retryable = 3;
+    NoChain no_chain = 4;
+    // Retrying again creates the retry once.
+    StoreFailure failed = 5;
+  }
+}
+
 message PlanStep {
   oneof step {
     StoreOp store = 1;
@@ -230,6 +360,9 @@ message PlanStep {
     RunResult result = 5;
     RunState status = 6;
     ReadValue read = 7;
+    Runs runs = 8;
+    History history = 9;
+    Retried retried = 10;
   }
 }
 

@@ -22,3 +22,16 @@ export function checkName(what: string, value: unknown): string {
   if (typeof value === "string" && /^[A-Za-z0-9._-]{1,128}$/.test(value)) return value;
   throw new InvalidArgument(`${what} ${JSON.stringify(value)} must match [A-Za-z0-9._-]{1,128}`);
 }
+
+/** The inline step `c.schedule()` records its fires in. */
+export const RESERVED_STEP = "schedule.next";
+
+/** A step name of the code: `schedule.next` is `c.schedule()`'s. */
+export function checkStepName(value: unknown): string {
+  if (value === RESERVED_STEP) {
+    throw new InvalidArgument(
+      `the step name ${JSON.stringify(RESERVED_STEP)} is reserved for c.schedule()`,
+    );
+  }
+  return checkName("step name", value);
+}

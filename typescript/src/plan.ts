@@ -2,17 +2,31 @@
 import type { Core } from "./core.ts";
 import { CoreError, InvalidArgument, ProtocolError } from "./errors.ts";
 import { PlanMachine } from "./machines.ts";
+import { ObserverRaised } from "./observe.ts";
 import type { plan } from "./proto.ts";
 import { perform } from "./stores/open.ts";
 import type { Store } from "./stores/store.ts";
 
 type Outcome = Exclude<plan.PlanStep["step"], { case: "store" } | { case: undefined }>;
 
-/** Runs a plan to its outcome, the first step that is not a store operation. An `INVALID` answer
- * is the caller's argument, its names and ids, not a bug of the host. */
+/** Runs a plan to its outcome, the first step that is not a store operation. */
 export async function runPlan(core: Core, store: Store, input: plan.PlanInput): Promise<Outcome> {
-  const machine = new PlanMachine(core, input);
+  for await (const outcome of planOutcomes(core, store, input)) return outcome;
+  throw new ProtocolError("a plan without outcome");
+}
+
+/** The outcomes of a plan, the store steps between them performed, for a plan answered in pages.
+ * The machine goes on only when the next outcome is asked for, and is dropped once the caller
+ * stops. An `INVALID` answer, or input refused, is the caller's argument, its names, ids and
+ * budget, not a bug of the host. An observer that raises fails the plan with its error. */
+export async function* planOutcomes(
+  core: Core,
+  store: Store,
+  input: plan.PlanInput,
+): AsyncGenerator<Outcome, void, undefined> {
+  let machine: PlanMachine | undefined;
   try {
+    machine = new PlanMachine(core, input);
     for (;;) {
       const step = machine.next().step;
       if (step.case === "store") {
@@ -20,13 +34,14 @@ export async function runPlan(core: Core, store: Store, input: plan.PlanInput): 
         continue;
       }
       if (step.case === undefined) throw new ProtocolError("empty plan step");
-      return step;
+      yield step;
     }
   } catch (e) {
     if (e instanceof CoreError && e.kind === "INVALID") throw new InvalidArgument(e.detail);
+    if (e instanceof ObserverRaised) throw e.error;
     throw e;
   } finally {
-    machine.close();
+    machine?.close();
   }
 }
 

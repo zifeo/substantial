@@ -48,8 +48,10 @@ impl Attached {
     }
 
     pub(super) async fn open(self, plan: Plan) -> Result<Substantial> {
+        self.world.check_runtime()?;
         let store = Arc::new(FaultStore::new(self.world.clone(), None));
-        attached(store, plan, Some(self)).await
+        let metering = self.world.metering.clone();
+        attached(store, plan, metering, Some(self)).await
     }
 
     pub(crate) fn now(&self) -> Time {
@@ -63,6 +65,7 @@ impl Attached {
     }
 
     pub(crate) fn worker(&self, workflows: Vec<Untyped>, settings: Settings) -> Result<Worker> {
+        self.world.check_runtime()?;
         settings.validate()?;
         let worker = EnvWorker::start(
             &self.world,
@@ -74,6 +77,10 @@ impl Attached {
 
     pub(crate) async fn settle(&self) -> Result<()> {
         self.world.settle().await
+    }
+
+    pub(crate) fn check_runtime(&self) -> Result<()> {
+        self.world.check_runtime()
     }
 
     /// Marks the failure of `chain` read when the environment itself read it.
@@ -118,7 +125,7 @@ fn waits_on(world: &World, run: &str) -> Result<String> {
         let held = lock(&hold.held).iter().filter(|h| h.run == run).count();
         what.extend((0..held).map(|_| format!("step {}, held", hold.step)));
     }
-    for key in world.keys(&format!("queues/{}/", begun.workflow)) {
+    for key in world.keys(&format!("queues/{}/due/", begun.workflow)) {
         let entry = key.rsplit('/').next().unwrap_or_default();
         if entry.split('~').nth(1) == Some(run) {
             let at = DateTime::from_timestamp_millis(due_ms(entry)).expect("a time in range");

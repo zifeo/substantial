@@ -30,6 +30,9 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
     env:
       AWS_ACCESS_KEY_ID: substantial
       AWS_SECRET_ACCESS_KEY: substantial-secret
@@ -39,7 +42,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
       - run: docker compose -f dev/redis.compose.yaml up -d --wait
       - run: uv sync --locked
@@ -52,6 +55,27 @@ jobs:
           uv venv "$RUNNER_TEMP/wheel"
           uv pip install --python "$RUNNER_TEMP/wheel/bin/python" dist/*.whl
           "$RUNNER_TEMP/wheel/bin/python" -I python/examples/first_workflow.py "$RUNNER_TEMP/store"
+
+  # Every direct dependency at the floor pyproject.toml declares, so a floor cannot silently
+  # become wrong.
+  python-floors:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    env:
+      AWS_ACCESS_KEY_ID: substantial
+      AWS_SECRET_ACCESS_KEY: substantial-secret
+      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python }}
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: docker compose -f dev/redis.compose.yaml up -d --wait
+      - run: uv run --resolution lowest-direct pytest
 
   typescript:
     runs-on: ubuntu-latest
@@ -83,3 +107,34 @@ jobs:
           npm install "$RUNNER_TEMP"/substantial-*.tgz
           node first_workflow.ts "$RUNNER_TEMP/store"
       - run: npx jsr publish --dry-run
+
+  # The dependencies and peer dependencies at the floors package.json declares, so a floor cannot
+  # silently become wrong.
+  typescript-floors:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: substantial
+      AWS_SECRET_ACCESS_KEY: substantial-secret
+      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
+      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
+      - run: docker compose -f dev/redis.compose.yaml up -d --wait
+      - run: npm ci
+      - name: Install every dependency at its floor
+        run: >-
+          npm install --no-save $(node -p "const p = require('./package.json');
+          Object.entries({ ...p.dependencies, ...p.peerDependencies })
+          .map(([name, range]) => name + '@' + range.match(/[0-9]+[.][0-9]+[.][0-9]+/)[0]).join(' ')")
+      - name: Show the versions installed
+        run: >-
+          node -p "['@aws-sdk/client-s3', '@redis/client', '@bufbuild/protobuf', 'canonicalize']
+          .map((name) => name + '@' + JSON.parse(require('node:fs')
+          .readFileSync('node_modules/' + name + '/package.json', 'utf8')).version).join(' ')"
+      - run: npx tsc --noEmit
+      - run: npm test

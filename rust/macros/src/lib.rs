@@ -9,8 +9,9 @@ use proc_macro::TokenStream;
 
 /// Declares a workflow: `async fn name(c: Context[, input: I]) -> Result<O>` becomes a value
 /// named like the function, passed where a workflow is (`sub.worker(name)`, `sub.start(name, ..)`,
-/// `c.start(&name, ..)`). Options: `name = ".."`, the function's name unless given, and
-/// `version = n`.
+/// `c.start(&name, ..)`). Options: `name = ".."`, the function's name unless given,
+/// `version = n`, `step_timeout = duration`, `retention = duration` and `budget = b`, anything
+/// `Into<Budget>` (`[("requests", 1000)]`).
 #[proc_macro_attribute]
 pub fn workflow(args: TokenStream, item: TokenStream) -> TokenStream {
     workflow::expand(args.into(), item.into())

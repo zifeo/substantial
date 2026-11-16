@@ -46,7 +46,7 @@ class Probe {
 eachAdapter("concurrency bounds the replays at once", async (store, adapter) => {
   const concurrency = adapter === "memory" ? 1 : 2;
   using probe = new Probe(() => 100);
-  const sub = await createOn(store, { partitions: 2 });
+  const sub = await createOn(store);
   const runs = [];
   for (let i = 0; i < 4; i++) runs.push(await sub.start(probe.workflow));
   {
@@ -59,7 +59,7 @@ eachAdapter("concurrency bounds the replays at once", async (store, adapter) => 
 
 eachAdapter("shutdown lets a step end within the grace", async (store) => {
   using probe = new Probe(() => 300);
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   let run: Awaited<ReturnType<typeof sub.start<Record<string, never>, number>>>;
   {
     await using _ = script(sub, [probe.workflow]);
@@ -76,7 +76,7 @@ eachAdapter("shutdown lets a step end within the grace", async (store) => {
 
 eachAdapter("shutdown past the grace loses the step in flight", async (store) => {
   using probe = new Probe((attempt) => (attempt === 1 ? 30_000 : 10));
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const settings = { shutdownGrace: milliseconds(100), ...FAST };
   const worker = script(sub, [probe.workflow], settings);
   const run = await sub.start(probe.workflow);
@@ -101,7 +101,7 @@ eachAdapter("a shutdown past its grace interrupts", async (store) => {
     reached.push("after the await");
   });
   const slowly = workflow("slowly", async () => await slow());
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const worker = script(sub, [slowly], { shutdownGrace: milliseconds(100) });
   await sub.start(slowly);
   await eventually("the step", () => reached.length === 1);
@@ -122,7 +122,7 @@ eachAdapter("a timer fires while a step is in flight", async (store) => {
     await Promise.all([slow(), wait()]);
     return true;
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [racing]);
   const run = await sub.start(racing);
   assert.equal(await run.result({ timeout: LONG }), true);
@@ -137,16 +137,22 @@ eachAdapter("two workers racing for a commit", async (store) => {
     return ++attempts;
   });
   const raced = workflow("raced", async () => await work());
+  // The first worker's commit frozen until the second one's landed, its claim long expired.
+  const thawed = Promise.withResolvers<void>();
   const slow = new Recording(store);
-  slow.freezeOnSegment = 1500;
-  const subA = await createOn(slow, { partitions: 1 });
+  slow.freezeOnSegment = thawed.promise;
+  const subA = await createOn(slow);
   const subB = await openOn(store);
   await using _a = script(subA, [raced], FAST);
   const run = await subA.start(raced);
   await started.promise;
   await using _b = script(subB, [raced], FAST);
-  const value = await subB.run(raced, run.chain).result({ timeout: LONG });
-  assert.equal(value, 2, "the second worker's attempt won");
+  try {
+    const value = await subB.run(raced, run.chain).result({ timeout: LONG });
+    assert.equal(value, 2, "the second worker's attempt won");
+  } finally {
+    thawed.resolve();
+  }
   await eventually("the frozen commit", () =>
     slow.created.some(([k, c]) => k.includes("/log/") && c === "exists"),
   );
@@ -166,7 +172,7 @@ eachAdapter(
       await where();
       seen.push(current.getStore() !== undefined);
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [located]);
     await (await sub.start(located)).result({ timeout: LONG });
     assert.deepEqual(seen, [true, false, true]);

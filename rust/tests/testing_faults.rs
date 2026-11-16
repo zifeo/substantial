@@ -372,24 +372,36 @@ fn stamp() -> Workflow<String> {
     Workflow::without_input("stamp", |c| async move { Ok(c.now().await?.to_rfc3339()) })
 }
 
-#[tokio::test]
-async fn an_outage_moves_the_scans_after_it() {
+/// When a run another pod starts at 62 s is found, after an outage from 5 to 45 s or none.
+async fn found_after(outage: bool) -> DateTime<Utc> {
     let env = Env::open(t0()).await.unwrap();
     let worker = env.worker(stamp()).preset(Preset::Service).start().unwrap();
     let other_pod = env.client().await.unwrap();
     env.advance(seconds(5)).await.unwrap();
-    env.outage(seconds(40));
+    if outage {
+        env.outage(seconds(40));
+    }
     env.advance(seconds(57)).await.unwrap();
     let run = other_pod.start(stamp(), ()).id("late").await.unwrap();
     env.advance(minutes(1)).await.unwrap();
-    // The scan due at 30 s failed and was retried once the store was back, which moved the scans
-    // after it: the run is found at 69 s, not at 90 s.
-    assert_eq!(
-        run.result().await.unwrap(),
-        (t0() + seconds(69)).to_rfc3339()
-    );
+    let found = DateTime::parse_from_rfc3339(&run.result().await.unwrap()).unwrap();
     worker.shutdown().await.unwrap();
     env.close().await;
+    found.to_utc()
+}
+
+#[tokio::test]
+async fn an_outage_moves_the_scans_after_it() {
+    // The scans due during the outage failed and the first was retried once the store was back,
+    // which moved the scans after it: the run is found at another instant, within `max_idle`.
+    let (moved, kept) = (found_after(true).await, found_after(false).await);
+    assert_ne!(moved, kept);
+    for found in [moved, kept] {
+        assert!(
+            found > t0() + seconds(62) && found <= t0() + seconds(92),
+            "{found}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -584,13 +596,13 @@ async fn a_month_of_virtual_time_is_cheap(preset: Preset) {
     let took = started.elapsed();
     assert!(took < Duration::from_millis(500), "{took:?}");
     assert_eq!(run.status().await.unwrap(), RunStatus::Completed);
-    // The scans skipped kept their instants: one started 10 s after a scan is found at the next.
+    // The scans skipped kept their instants: a run started by another pod is found at the next,
+    // within `max_idle`.
     env.advance(seconds(10)).await.unwrap();
     let late = other_pod.start(napping(), ()).id("late").await.unwrap();
-    let before = if preset == Preset::Service { 19 } else { 0 };
-    env.advance(seconds(before)).await.unwrap();
     assert_eq!(late.status().await.unwrap(), RunStatus::Pending);
-    env.advance(seconds(1)).await.unwrap();
+    let max_idle = if preset == Preset::Service { 30 } else { 1 };
+    env.advance(seconds(max_idle)).await.unwrap();
     assert_eq!(late.status().await.unwrap(), RunStatus::Suspended);
     worker.shutdown().await.unwrap();
     env.close().await;

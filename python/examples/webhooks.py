@@ -1,21 +1,29 @@
 """The service of docs/integration.md: a Starlette app whose lifespan runs the worker, receiving
 provider webhooks (deduplicated by event id), CRM changes (debounced) and account operations (an
-actor per account), with a nightly job.
+actor per account), a polled CRM export and a nightly job.
 
-    SUBSTANTIAL_URL=file:/tmp/webhooks SUBSTANTIAL_PARTITIONS=1 SUBSTANTIAL_CONCURRENCY=16 \\
+    SUBSTANTIAL_URL=file:/tmp/webhooks SUBSTANTIAL_CONCURRENCY=16 \\
     uv run --with uvicorn uvicorn --app-dir python/examples webhooks:app --factory
+
+Or, as a job a CronJob starts, which drains what is due and exits:
+
+    SUBSTANTIAL_URL=file:/tmp/webhooks SUBSTANTIAL_CONCURRENCY=16 \\
+    uv run python python/examples/webhooks.py job
 
 The third-party APIs are stand-ins that keep what they were asked, once per idempotency key.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
+import signal
+import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -33,6 +41,11 @@ class Crm:
     def __init__(self) -> None:
         self.events: dict[str, dict] = {}
         self.pushed: list[tuple[str, int]] = []
+        self.exports: dict[str, str] = {}
+
+    async def export_url(self, export: str) -> str | None:
+        """The URL of an export once the CRM prepared it, which it tells no one."""
+        return self.exports.get(export)
 
     async def apply(self, key: str, kind: str, data: dict) -> None:
         self.events.setdefault(key, {"kind": kind, **data})
@@ -184,23 +197,21 @@ async def pay_order(c: s.Context, order: str, account: str, amount: int) -> bool
     return reply["ok"]
 
 
-# A nightly job at 03:00 in Zurich, an hour that every day has once: 02:00 is skipped in March
-# and repeated in October.
+# An export the CRM prepares without a webhook: polled every minute, for at most an hour.
 
+
+@s.workflow
+async def crm_export(c: s.Context, export: str) -> str | None:
+    return await c.poll(
+        "export_url", crm.export_url, export, every=s.minutes(1), timeout=s.hours(1)
+    )
+
+
+# A nightly job at 03:00 in Zurich: its schedule fires it once a night, the nights of the clock
+# changes included, and backfills the nights every pod was down.
+
+NIGHTLY = s.Cron("0 3 * * *", "Europe/Zurich")
 ZURICH = ZoneInfo("Europe/Zurich")
-
-
-def next_night(now: datetime) -> datetime:
-    local = now.astimezone(ZURICH)
-    night = local.replace(hour=3, minute=0, second=0, microsecond=0)
-    if night <= local:
-        night += timedelta(days=1)
-    return night.astimezone(UTC)
-
-
-@dataclass
-class Nights:
-    done: int = 0
 
 
 @s.step(retry=RETRY)
@@ -210,14 +221,11 @@ async def report(day: str) -> None:
 
 @s.workflow
 async def nightly(c: s.Context) -> None:
-    async for n in c.iterate(Nights()):
-        night = next_night(await c.now())
-        await c.sleep_until(night)
-        await report(night.astimezone(ZURICH).date().isoformat())
-        n.done += 1
+    async for at in c.schedule():
+        await report(at.astimezone(ZURICH).date().isoformat())
 
 
-WORKFLOWS = [provider_event, contact_sync, account_actor, pay_order, nightly]
+WORKFLOWS = [provider_event, contact_sync, account_actor, pay_order, crm_export, nightly]
 
 
 # The app.
@@ -232,7 +240,7 @@ def create_app(
             open_engine() as sub,
             sub.worker(WORKFLOWS, preset="service", concurrency=concurrency) as worker,
         ):
-            await sub.start(nightly, id="nightly")
+            await sub.schedule(nightly, "nightly", NIGHTLY, revision=1)
             app.state.sub, app.state.worker = sub, worker
             yield
 
@@ -316,7 +324,6 @@ def create_app(
 @dataclass(frozen=True)
 class Config:
     url: str
-    partitions: int
     concurrency: int
 
     @classmethod
@@ -324,16 +331,40 @@ class Config:
         e = os.environ
         return cls(
             e["SUBSTANTIAL_URL"],
-            int(e["SUBSTANTIAL_PARTITIONS"]),
             int(e["SUBSTANTIAL_CONCURRENCY"]),
         )
 
     def open(self) -> Any:
         s3 = self.url.split(":", 1)[0] in {"s3", "h3", "s3+http", "h3+http"}
         credentials = "env" if s3 else None
-        return s.Substantial.create(self.url, partitions=self.partitions, credentials=credentials)
+        return s.Substantial.create(self.url, credentials=credentials)
 
 
 def app() -> Starlette:
     config = Config.from_env()
     return create_app(config.open, config.concurrency)
+
+
+# The job of a Kubernetes CronJob: the worker drains what is due within 2 minutes, then exits.
+
+
+async def drain(sub: s.Substantial) -> None:
+    worker = sub.worker(WORKFLOWS, preset="script")
+    draining = asyncio.ensure_future(worker.drain(within=s.minutes(2)))
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, draining.cancel)
+    try:
+        await draining
+    except asyncio.CancelledError:
+        pass  # a SIGTERM: the worker shut down within its grace
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+
+
+async def job() -> None:
+    async with Config.from_env().open() as sub:
+        await drain(sub)
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["job"]:
+    asyncio.run(job())

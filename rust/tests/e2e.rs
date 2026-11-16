@@ -44,7 +44,7 @@ fn example() -> Workflow<f64> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_first_workflow() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, example()).start().unwrap();
         let run = sub.start(&example(), ()).await.unwrap();
         run.send("by", 2).await.unwrap();
@@ -68,7 +68,7 @@ fn waiting() -> Workflow<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_moves_from_pending_to_the_end() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(2).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let run = sub.start(&waiting(), ()).id("status-1").await.unwrap();
         assert_eq!(
             run.status().await.unwrap(),
@@ -103,7 +103,7 @@ async fn status_moves_from_pending_to_the_end() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_waiting_run_is_cancelled() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, waiting()).start().unwrap();
         let run = sub.start(&waiting(), ()).await.unwrap();
         eventually("a suspended run", async || {
@@ -129,7 +129,7 @@ async fn a_waiting_run_is_cancelled() {
 #[tokio::test]
 async fn unknown_chains_are_not_found() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let run = sub.run(waiting(), "nobody");
         let not_found = |r: &Result<_>| matches!(r, Err(Error::RunNotFound { chain, collected: false, .. }) if chain == "nobody");
         assert!(not_found(&run.send("by", 1).await), "{}", ns.name);
@@ -155,7 +155,7 @@ async fn inputs_are_compared_as_canonical_json() {
         Ok(input)
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let reordered = Reordered {
             b: (1.0, Inner { d: 2.0, c: "é" }),
             a: 0.5,
@@ -207,7 +207,7 @@ async fn starts_are_idempotent_by_id() {
     });
     for ns in namespaces() {
         runs.store(0, Ordering::SeqCst);
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let input = serde_json::json!({"x": 1});
         let first = sub.start(&counted, &input).id("once").await.unwrap();
         let again = sub.start(&counted, &input).id("once").await.unwrap();
@@ -242,7 +242,7 @@ async fn a_message_no_handler_can_decode_fails_the_run() {
         Ok(())
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &typed).start().unwrap();
         let run = sub.start(&typed, ()).await.unwrap();
         run.send("n", 1).await.unwrap();
@@ -268,7 +268,7 @@ fn invalid<T: std::fmt::Debug>(r: Result<T>) -> bool {
 #[tokio::test]
 async fn names_outside_the_rules_are_invalid_arguments() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let long = "a".repeat(101);
         for id in ["Upper", ".", "..", "a/b", long.as_str()] {
             assert!(
@@ -316,7 +316,7 @@ async fn names_outside_the_rules_are_invalid_arguments() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ids_of_a_hundred_bytes_work_end_to_end() {
     for ns in namespaces().into_iter().filter(|ns| ns.name != "memory") {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, waiting()).start().unwrap();
         let run = sub.start(waiting(), ()).id(&"r".repeat(100)).await.unwrap();
         run.send("note", "hi").id(&"m".repeat(100)).await.unwrap();
@@ -332,7 +332,7 @@ async fn a_step_name_outside_the_rules_fails_the_run() {
         c.step("a step", || async { Ok::<_, Error>(1) }).await
     });
     let ns = namespaces().remove(0);
-    let sub = internal::create(ns.store).partitions(1).await.unwrap();
+    let sub = internal::create(ns.store).await.unwrap();
     let worker = script(&sub, &bad).start().unwrap();
     let run = sub.start(&bad, ()).await.unwrap();
     match run.result().timeout(LONG).await {
@@ -372,7 +372,7 @@ async fn a_cancel_reaches_a_run_looping_on_steps() {
     });
     for ns in namespaces() {
         ticks.store(0, Ordering::Relaxed);
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, w.clone()).start().unwrap();
         let run = sub.start(&w, ()).await.unwrap();
         eventually("a few steps", async || ticks.load(Ordering::Relaxed) > 2).await;

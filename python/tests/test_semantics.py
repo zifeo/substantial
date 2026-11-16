@@ -32,7 +32,7 @@ async def test_now_sleep_until_and_step_keys(store: Store) -> None:
         keys = [await c.step("keyed", step_key) for _ in range(2)]
         return (end - start).total_seconds(), keys
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [timed]):
         run = await sub.start(timed, id="timed-1")
         slept, keys = await run.result(timeout=LONG)
@@ -66,7 +66,7 @@ async def waiting(c: Context) -> str:
 
 
 async def test_a_handler_sees_past_messages_and_a_workflow_sends(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     target = await sub.start(waiting, id="target")
     run = await sub.start(approver, {"target": "target"})
     for name in ["alice", "alice", "bob"]:
@@ -92,7 +92,7 @@ async def refused(c: Context, ended: str) -> list[list[str]]:
 async def test_a_workflow_send_raises_and_every_replay_gives_the_same_outcome(
     store: Store,
 ) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [refused, waiting]):
         ended = await sub.start(waiting, id="ended")
         await ended.send("note", "hi")
@@ -119,7 +119,7 @@ async def test_a_gather_returning_exceptions_lets_a_suspension_through(store: St
         gathered.append(got)
         return got
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [both]):
         run = await sub.start(both)
         await run.send("a", 1)
@@ -142,7 +142,7 @@ async def test_handlers_see_every_message_and_receive_takes_the_next(store: Stor
         await c.wait_until(lambda: len(seen) >= 3)
         return {"first": first, "seen": seen, "second": await c.receive("note")}
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     run = await sub.start(notes)
     for note in ["a", "b", "c"]:
         await run.send("note", note)
@@ -169,7 +169,7 @@ async def test_handlers_bound_together_see_past_messages_in_arrival_order(store:
         c.handle("add", adds.append)
         return {"seen": seen, "adds": adds}
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     run = await sub.start(ordered)
     for name, n in [("add", 1), ("remove", 1), ("add", 2), ("remove", 2)]:
         await run.send(name, n)
@@ -186,13 +186,18 @@ async def test_a_wait_returns_false_when_its_timeout_passes(store: Store) -> Non
     async def impatient(c: Context) -> list[bool]:
         names = approvals(c)
         late = await c.wait_until(lambda: len(names) >= 1, timeout=timedelta(milliseconds=200))
+        c.publish("late", late)
         on_time = await c.wait_until(lambda: len(names) >= 1, timeout=timedelta(seconds=30))
         return [late, on_time]
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [impatient]):
         run = await sub.start(impatient)
-        await asyncio.sleep(0.6)
+
+        async def late() -> bool:
+            return await run.read("late") is False
+
+        await eventually("the first wait's end", late)
         await run.send("approve", "alice")
         assert await run.result(timeout=LONG) == [False, True]
 
@@ -209,7 +214,7 @@ async def test_reserved_and_invalid_names_are_refused_in_a_workflow(store: Store
                     refused.append(bad)
         return refused
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [names]):
         run = await sub.start(names)
         refused = await run.result(timeout=LONG)
@@ -222,7 +227,7 @@ async def test_a_run_cancels_itself(store: Store) -> None:
         await c.step("first", lambda: None)
         await c.cancel("enough")
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [quitter]):
         run = await sub.start(quitter)
         with pytest.raises(RunFailed) as failed:
@@ -244,7 +249,7 @@ async def test_published_values_are_read_by_clients(store: Store) -> None:
             return True
         return False
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     run = await sub.start(publisher, id="pub-1")
     assert await run.read("progress") is None
     async with script(sub, [publisher]):
@@ -272,7 +277,7 @@ def versioned(version: int | None):
 async def test_runs_are_replayed_by_the_code_of_their_version(store: Store) -> None:
     from substantial import ConfigError
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     with pytest.raises(ConfigError):
         script(sub, [versioned(None), versioned(2), versioned(2)])
     none = await sub.start(versioned(None))
@@ -291,7 +296,8 @@ async def test_runs_are_replayed_by_the_code_of_their_version(store: Store) -> N
 
 
 def changed(first: bool):
-    """Version 1 steps then sleeps, version 2 sleeps then steps: the same name, no version."""
+    """Version 1 steps then waits for `go`, version 2 waits for `go` then steps: the same name, no
+    version. Waiting on a message keeps the run suspended until the test sends it."""
 
     async def one() -> int:
         return 1
@@ -300,9 +306,9 @@ def changed(first: bool):
     async def code(c: Context) -> int:
         if first:
             await c.step("one", one)
-            await c.sleep(timedelta(milliseconds=300))
+            await c.receive("go")
         else:
-            await c.sleep(timedelta(milliseconds=300))
+            await c.receive("go")
             await c.step("one", one)
         return 1
 
@@ -310,15 +316,16 @@ def changed(first: bool):
 
 
 async def test_an_incompatible_change_fails_the_run_with_non_determinism(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [changed(True)]):
         run = await sub.start(changed(True))
 
         async def suspended() -> bool:
             return await run.status() == RunStatus.SUSPENDED
 
-        await eventually("the sleep", suspended)
+        await eventually("the wait", suspended)
     async with script(sub, [changed(False)]):
+        await run.send("go", "now")
         with pytest.raises(RunFailed) as failed:
             await run.result(timeout=LONG)
     assert failed.value.status == "failed"

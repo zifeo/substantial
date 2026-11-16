@@ -23,7 +23,7 @@ async fn now_sleep_until_and_step_keys() {
         Ok(((end - start).num_milliseconds(), keys))
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &timed).start().unwrap();
         let run = sub.start(&timed, ()).id("timed-1").await.unwrap();
         let (slept, keys): (i64, Vec<String>) = run.result().timeout(LONG).await.unwrap();
@@ -80,7 +80,7 @@ fn waiting() -> Workflow<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_handler_sees_past_messages_first_and_a_workflow_sends() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let target = sub.start(&waiting(), ()).id("target").await.unwrap();
         let input = serde_json::json!({"target": "target"});
         let run = sub.start(&approver(), input).await.unwrap();
@@ -123,7 +123,7 @@ async fn handle_all_sees_past_messages_in_arrival_order() {
         Ok((all, adds))
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let run = sub.start(&ordered, ()).await.unwrap();
         for (name, n) in [("add", 1), ("remove", 1), ("add", 2), ("remove", 2)] {
             run.send(name, n).await.unwrap();
@@ -149,7 +149,7 @@ async fn a_run_cancels_itself() {
         Err::<(), _>(c.cancel("enough").await)
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &quitter).start().unwrap();
         let run = sub.start(&quitter, ()).await.unwrap();
         match run.result().timeout(LONG).await {
@@ -185,7 +185,7 @@ async fn clients_read_what_the_chain_published() {
         Err(c.continue_as_new(Round { round: 1 }).await)
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &publisher).start().unwrap();
         let run = sub.start(&publisher, Round { round: 0 }).await.unwrap();
         let refused: bool = run.result().timeout(LONG).await.unwrap();
@@ -222,7 +222,7 @@ async fn a_workflow_fails_with_its_own_error() {
         Ok(())
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let workflows = vec![own.untyped(), parsing.untyped(), wrapped.untyped()];
         let worker = script(&sub, workflows).start().unwrap();
         let failure = |r| match r {
@@ -270,7 +270,7 @@ async fn a_workflow_send_to_a_missing_or_ended_run_raises_the_same_on_replay() {
         })
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (quick.clone(), sender.clone()))
             .start()
             .unwrap();

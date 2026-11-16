@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 
 from substantial._proto import layout, run
 from substantial.clock import Attempt, Clock, Inbox
+from substantial.durations import millis
+from substantial.errors import InvalidArgument
 from substantial.settings import Settings
 from substantial.step import THREADED
 from substantial.testing._time import Stuck
@@ -60,6 +62,9 @@ class WorkerClock(Clock):
 
     def elapsed(self) -> int:
         return self.world.time.ms
+
+    def seconds(self) -> float:
+        return self.world.time.ms / 1000
 
     async def wait(self, futures: Any, at: layout.Time | None) -> None:
         await self.world.time.wait(self, futures, None if at is None else at.ms)
@@ -159,19 +164,23 @@ class EnvWorker(Worker):
         self._replaced = 0
         self._paused = False
         self._crashed = False
+        self._drain_until: int | None = None
         world.workers.append(self)
-        super().__init__(world.store(None), workflows, world.partitions, settings, world.died)
+        super().__init__(world.store(None), workflows, settings, world.died, world.metering)
 
     def _start(self) -> asyncio.Task:
         world = self._world
+        world.check_loop()
         self._id = world.worker_id(self._place, self._replaced)
         self._seed = world.core_seed
         self._clock = clock = WorkerClock(world, self)
-        self._store = world.store(clock)
+        self._store = world.metering.wrap(world.store(clock))
         self._events = Inbox()
         self._wake_pending = False
         task = super()._start()
         clock.agent = task
+        if self._drain_until is not None:
+            self._events.put_nowait(("drain", self._drain_until))
         return task
 
     def _replace(self) -> None:
@@ -211,6 +220,35 @@ class EnvWorker(Worker):
             return
         await self.shutdown()
 
+    async def drain(self, *, within: timedelta) -> None:
+        """As a worker's `drain`, on the virtual clock: moves it from deadline to deadline until
+        the worker stopped, then raises its error if it died."""
+        if not isinstance(within, timedelta) or within < timedelta(0):
+            raise InvalidArgument(f"within is a timedelta, not negative, not {within!r}")
+        world = self._world
+        world.check_loop()
+        if self._crashed:
+            raise RuntimeError(f"worker {self._id} crashed")
+        if self._task is None:
+            self._start()
+        self._drain_until = world.time.ms + millis(within)
+        self._events.put_nowait(("drain", self._drain_until))
+        # A worker Chaos replaces drains in its place: `_start` tells the new one.
+        await world.time.until_done(
+            lambda: self._paused,
+            lambda: self._crashed or (self._task is not None and self._task.done()),
+            f"the drain of worker {self._id}",
+        )
+        if self._crashed:
+            raise RuntimeError(f"worker {self._id} crashed while it drained")
+        try:
+            await self._task  # type: ignore[misc]
+        except BaseException as e:
+            # Raised here, not again by the next settle.
+            if e in world.errors:
+                world.errors.remove(e)
+            raise
+
     async def shutdown(self) -> None:
         """Settles, then leaves as a SIGTERM does: steps that returned are recorded, held ones
         abandoned, and the runs it leaves have their claims deleted, for another worker."""
@@ -218,6 +256,7 @@ class EnvWorker(Worker):
             raise RuntimeError(f"worker {self._id} was never started")
         if self._crashed:
             return
+        self._world.check_loop()
         await self._world.env.settle()
         if self._task.done():
             await self._task

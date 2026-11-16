@@ -1,8 +1,10 @@
 // Opening the adapter a URL names (I-16), and performing the core's store operations.
 import { create } from "@bufbuild/protobuf";
 import { ConfigError, messageOf } from "../errors.ts";
+import { ObserverRaised } from "../observe.ts";
 import { boundary } from "../proto.ts";
 import { STORE_RETRY } from "../settings.ts";
+import { measured, Sent } from "./attempts.ts";
 import { type CredentialsArg, refuse } from "./credentials.ts";
 import { FsStore } from "./fs.ts";
 import { MemoryStore } from "./memory.ts";
@@ -117,12 +119,21 @@ async function performOp(store: Store, op: boundary.StoreOp): Promise<boundary.O
   }
 }
 
-/** Performs one `StoreOp` of the core and answers with its `OpResult`, a failure included. */
+/** Performs one `StoreOp` of the core and answers with its `OpResult`, a failure included, with
+ * the requests the adapter sent. An observer that raised throws `ObserverRaised`. */
 export async function perform(store: Store, op: boundary.StoreOp): Promise<boundary.OpResult> {
+  const sent = new Sent();
+  const result = await measured(sent, () => performOnce(store, op));
+  result.attempts = sent.n;
+  return result;
+}
+
+async function performOnce(store: Store, op: boundary.StoreOp): Promise<boundary.OpResult> {
   let message: string;
   try {
     return await performOp(store, op);
   } catch (e) {
+    if (e instanceof ObserverRaised) throw e;
     if (!(e instanceof StoreFailure)) {
       // An adapter's bug must not leave the core waiting for an answer that never comes.
       console.error(`substantial: store adapter failed on ${op.op.case}:`, e);

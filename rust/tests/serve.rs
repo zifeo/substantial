@@ -13,7 +13,7 @@ use substantial::{Preset, Workflow};
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_runs_until_sigterm() {
     let store = Recording::new(Arc::new(MemoryStore::open("serve").unwrap()));
-    let sub = internal::create(store.clone()).partitions(1).await.unwrap();
+    let sub = internal::create(store.clone()).await.unwrap();
     let workflow = Workflow::without_input("served", |_c| async { Ok(1) });
     let served = tokio::spawn(
         sub.worker(workflow)

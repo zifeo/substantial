@@ -32,6 +32,17 @@ def check_name(what: str, value: object) -> str:
     raise InvalidArgument(f"{what} {value!r} must match [A-Za-z0-9._-]{{1,128}}")
 
 
+# The inline step `c.schedule()` records its fires in.
+RESERVED_STEP = "schedule.next"
+
+
+def check_step_name(value: object) -> str:
+    """A step name of the code: `schedule.next` is `c.schedule()`'s."""
+    if value == RESERVED_STEP:
+        raise InvalidArgument(f"the step name {RESERVED_STEP!r} is reserved for c.schedule()")
+    return check_name("step name", value)
+
+
 def check_str(what: str, value: object) -> str:
     """A free text, such as a reason."""
     if isinstance(value, str):

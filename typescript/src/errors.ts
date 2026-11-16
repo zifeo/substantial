@@ -1,8 +1,24 @@
-/** A failure as recorded in a history: a type name, a message, whether a retry may help. */
+/** A failure as recorded in a history: a type name, a message, whether a retry may help, and the
+ * JSON object of details the core records with the failures it makes, else `undefined`. */
 export interface Failure {
   readonly type: string;
   readonly message: string;
   readonly retryable: boolean;
+  readonly details?: Record<string, unknown>;
+}
+
+/** A failure with `details` as JSON gives them: an object, or null or `undefined` for none. */
+export function makeFailure(
+  type: string,
+  message: string,
+  retryable: boolean,
+  details: unknown,
+): Failure {
+  if (details === undefined || details === null) return { type, message, retryable };
+  if (typeof details !== "object" || Array.isArray(details)) {
+    throw new ProtocolError(`${type} with details ${JSON.stringify(details)}, not an object`);
+  }
+  return { type, message, retryable, details: details as Record<string, unknown> };
 }
 
 /** The base of every error Substantial raises, control flow excepted. */
@@ -105,10 +121,10 @@ export class ValueTooLarge extends SubstantialError {}
 
 export type EndedStatus = "failed" | "cancelled";
 
-/** The run ended failed or cancelled. */
 /** The hint a divergence from the history carries; the core records the failure without it. */
 export const NEW_VERSION = "an incompatible change needs a new version (version=)";
 
+/** The run ended failed or cancelled. */
 export class RunFailed extends SubstantialError {
   readonly run: string;
   readonly status: EndedStatus;
@@ -125,16 +141,31 @@ export class RunFailed extends SubstantialError {
   }
 }
 
+/** The run passed the `limit` of its budget on `meter`, having `used` that much: thrown at every
+ * call it was blocked on then and at every later step, start and send. The run ends failed with
+ * it whatever the code does. */
+export class BudgetExceeded extends SubstantialError {
+  readonly meter: string;
+  readonly limit: bigint;
+  readonly used: bigint;
+  constructor(meter: string, limit: bigint, used: bigint) {
+    super(`budget exceeded: ${meter} used ${used}, over the limit of ${limit}`);
+    this.meter = meter;
+    this.limit = limit;
+    this.used = used;
+  }
+}
+
 /** The failure a `StepFailed`'s details wrap, `{ error: {...} }`; `undefined` if they hold none. */
-export function wrappedFailure(details: unknown): Failure | undefined {
-  const error = (details as Record<string, unknown> | undefined)?.error as
+export function wrappedFailure(stepDetails: unknown): Failure | undefined {
+  const error = (stepDetails as Record<string, unknown> | undefined)?.error as
     | Record<string, unknown>
     | undefined;
-  const { type, message, retryable } = error ?? {};
+  const { type, message, retryable, details } = error ?? {};
   if (typeof type !== "string" || typeof message !== "string" || typeof retryable !== "boolean") {
     return undefined;
   }
-  return { type, message, retryable };
+  return makeFailure(type, message, retryable, details);
 }
 
 /** The cause of a run failed with `type`: a `StepFailed`'s wraps it in its details. */

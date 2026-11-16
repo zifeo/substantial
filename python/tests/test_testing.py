@@ -3,6 +3,7 @@ and Rust hosts port these tests under the same names."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
@@ -154,11 +155,12 @@ async def test_a_client_shares_the_namespace_and_the_clock(env: s.testing.Env) -
         assert isinstance(client, s.Substantial)
         await env.advance(s.seconds(10))
         run = await client.start(napping, {"days": 0}, id="from-a-client")
-        # No worker of the client: the environment's finds the run at its next scan, at 30 s.
-        await env.advance(s.seconds(19))
+        # No worker of the client: the environment's finds the run at its next scan, within
+        # `max_idle`, 30 s.
         assert await run.status() == "pending"
-        await env.advance(s.seconds(1))
-        assert await env.run(napping, "from-a-client").result() == (T0 + s.seconds(30)).isoformat()
+        await env.advance(s.seconds(30))
+        ended = datetime.fromisoformat(await env.run(napping, "from-a-client").result())
+        assert T0 + s.seconds(10) < ended <= T0 + s.seconds(40)
         assert await run.status() == "completed"
     other = await env.client()
     assert await other.run(napping, "from-a-client").status() == "completed"
@@ -239,3 +241,27 @@ async def test_ids_and_randoms_are_drawn_from_the_seed_and_what_they_name() -> N
     assert plain == await ids(s.testing.Chaos(seed=0, rate=0), takeover=True)
     seeded = await ids(s.testing.Chaos(seed=7, rate=0), takeover=False)
     assert all(a != b for a, b in zip(plain, seeded, strict=True))
+
+
+async def test_a_call_from_another_event_loop_names_both_loops(env: s.testing.Env) -> None:
+    def from_another_loop() -> None:
+        asyncio.run(env.start(napping, {"days": 1}))
+
+    with pytest.raises(s.InvalidArgument, match=r"opened on the event loop .* called from"):
+        await asyncio.to_thread(from_another_loop)
+
+    def settle_from_another_loop() -> None:
+        asyncio.run(env.settle())
+
+    with pytest.raises(s.InvalidArgument, match=r"httpx\.ASGITransport"):
+        await asyncio.to_thread(settle_from_another_loop)
+
+
+async def test_result_takes_max_interval_and_checks_it(env: s.testing.Env) -> None:
+    async with env.worker([napping], preset="service"):
+        run = await env.start(napping, {"days": 0})
+        assert await run.result(max_interval=s.seconds(1)) == T0.isoformat()
+        with pytest.raises(s.InvalidArgument, match="max_interval"):
+            await run.result(max_interval=s.seconds(0))
+        with pytest.raises(s.InvalidArgument, match="timeout is not negative"):
+            await run.result(timeout=-s.seconds(1))

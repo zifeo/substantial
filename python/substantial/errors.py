@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -13,18 +13,37 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Failure:
-    """A failure as recorded in a history: a type name, a message, whether a retry may help."""
+    """A failure as recorded in a history: a type name, a message, whether a retry may help, and
+    the JSON object of details the core records with the failures it makes, else None."""
 
     type: str
     message: str
     retryable: bool = False
+    details: dict[str, Any] | None = field(default=None, hash=False)
 
     def __str__(self) -> str:
         return f"{self.type}: {self.message}"
 
     @classmethod
     def from_proto(cls, f: layout_pb2.Failure) -> Failure:
-        return cls(f.type, f.message, f.retryable)
+        kind = f.details.WhichOneof("kind")
+        if kind is None:
+            return cls(f.type, f.message, f.retryable)
+        if kind != "json":
+            raise ProtocolError(f"{f.type} with details {f.details}")
+        return cls(f.type, f.message, f.retryable, _object(f.type, json.loads(f.details.json)))
+
+    @classmethod
+    def from_json(cls, error: dict[str, Any]) -> Failure:
+        """A failure as the core writes it in JSON: type, message, retryable and details."""
+        details = _object(error["type"], error.get("details"))
+        return cls(error["type"], error["message"], error["retryable"], details)
+
+
+def _object(type_: str, details: Any) -> dict[str, Any] | None:
+    if details is None or isinstance(details, dict):
+        return details
+    raise ProtocolError(f"{type_} with details {details!r}, not an object")
 
 
 class SubstantialError(Exception):
@@ -39,6 +58,9 @@ class StepFailed(SubstantialError):
         super().__init__(failure.message)
         self.failure = failure
         self.cause = cause
+        # The core's details of the failure, which the run's end carries as they are: a retry
+        # reads the failed step from them.
+        self._details: layout_pb2.Value | None = None
 
 
 class Failed(SubstantialError):
@@ -118,6 +140,18 @@ class RunFailed(SubstantialError):
         self.status = status
         self.error = error
         self.cause = cause
+
+
+class BudgetExceeded(SubstantialError):
+    """The run passed the `limit` of its budget on `meter`, having `used` that much: raised at
+    every call it was blocked on then and at every later step, start and send. The run ends
+    failed with it whatever the code does."""
+
+    def __init__(self, meter: str, limit: int, used: int) -> None:
+        super().__init__(f"budget exceeded: {meter} used {used}, over the limit of {limit}")
+        self.meter = meter
+        self.limit = limit
+        self.used = used
 
 
 class NonDeterminism(SubstantialError):
@@ -209,14 +243,38 @@ def error_from_failure(f: layout_pb2.Failure) -> SubstantialError:
     """The error a call resolved with a failure raises in the code."""
     if f.type == "RunFailed":
         return _run_failed(f)
-    failure = Failure.from_proto(f)
+    try:
+        failure = Failure.from_proto(f)
+    except ProtocolError as e:
+        return e
     if failure.type == "StepFailed":
         return _step_failed(f, failure)
     if failure.type == "RunNotFound":
         return _run_not_found(f)
     if failure.type == "RunEnded":
         return RunEnded(failure.message)
+    if failure.type == "WaitTimeout":
+        return WaitTimeout(failure.message)
+    if failure.type == "BudgetExceeded":
+        return _budget_exceeded(f)
     return Failed(failure)
+
+
+def _budget_exceeded(f: layout_pb2.Failure) -> SubstantialError:
+    """Its details hold the limit and what was used as decimal strings."""
+    d = _details(f) or {}
+    meter, limit, used = d.get("meter"), d.get("limit"), d.get("used")
+    if (
+        isinstance(meter, str)
+        and isinstance(limit, str)
+        and limit.isascii()
+        and limit.isdigit()
+        and isinstance(used, str)
+        and used.isascii()
+        and used.isdigit()
+    ):
+        return BudgetExceeded(meter, int(limit), int(used))
+    return ProtocolError(f"BudgetExceeded with details {f.details}")
 
 
 def _details(f: layout_pb2.Failure) -> dict[str, Any] | None:
@@ -242,14 +300,19 @@ def _wrapped(details: Any) -> Failure | None:
     error = details.get("error") if isinstance(details, dict) else None
     if not isinstance(error, dict) or not {"type", "message", "retryable"} <= error.keys():
         return None
-    return Failure(error["type"], error["message"], error["retryable"])
+    return Failure.from_json(error)
 
 
 def _step_failed(f: layout_pb2.Failure, failure: Failure) -> SubstantialError:
-    cause = _wrapped(_details(f))
+    try:
+        cause = _wrapped(failure.details)
+    except ProtocolError as e:
+        return e
     if cause is None:
         return ProtocolError(f"StepFailed with details {f.details}")
-    return StepFailed(failure, cause)
+    e = StepFailed(failure, cause)
+    e._details = f.details
+    return e
 
 
 def run_failed_cause(type_: str, details: Any) -> Failure | None:
@@ -268,9 +331,9 @@ def _run_failed(f: layout_pb2.Failure) -> SubstantialError:
         return ProtocolError(f"RunFailed with details {f.details}")
     status, error, reason = d.get("status"), d.get("error"), d.get("reason")
     if status == "failed" and error is not None:
-        failure = Failure(error["type"], error["message"], error["retryable"])
         try:
-            cause = run_failed_cause(failure.type, error.get("details"))
+            failure = Failure.from_json(error)
+            cause = run_failed_cause(failure.type, failure.details)
         except ProtocolError as e:
             return e
         return RunFailed(d["run"], status, failure, cause)

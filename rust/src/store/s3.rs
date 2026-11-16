@@ -262,7 +262,13 @@ impl S3Store {
                 .map_err(|e| fault("list", prefix, &e))?;
             self.keep(&out, &mut keys)?;
             match keys.last() {
-                Some(last) if out.is_truncated() == Some(true) => after = Some(self.full(last)),
+                Some(last)
+                    if out.is_truncated() == Some(true) && (keys.len() as u32) < max_keys =>
+                {
+                    // The retry layer counted the first page's request.
+                    super::attempts::sent();
+                    after = Some(self.full(last));
+                }
                 _ => break,
             }
         }

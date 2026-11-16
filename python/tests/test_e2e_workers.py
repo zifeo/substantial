@@ -46,7 +46,7 @@ class Probe:
 async def test_concurrency_bounds_the_replays_at_once(adapter: str, store: Store) -> None:
     concurrency = 1 if adapter == "memory" else 2
     probe = Probe(lambda _: 100)
-    sub = await Substantial._create(store, partitions=2)
+    sub = await Substantial._create(store)
     runs = [await sub.start(probe.workflow) for _ in range(4)]
     async with script(sub, [probe.workflow], concurrency=concurrency):
         for run in runs:
@@ -57,7 +57,7 @@ async def test_concurrency_bounds_the_replays_at_once(adapter: str, store: Store
 
 async def test_shutdown_lets_a_step_end_within_the_grace(store: Store) -> None:
     probe = Probe(lambda _: 300)
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [probe.workflow]):
         run = await sub.start(probe.workflow)
 
@@ -73,7 +73,7 @@ async def test_shutdown_lets_a_step_end_within_the_grace(store: Store) -> None:
 
 async def test_shutdown_past_the_grace_loses_the_step_in_flight(store: Store) -> None:
     probe = Probe(lambda attempt: 30_000 if attempt == 1 else 10)
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     settings = {"shutdown_grace": timedelta(milliseconds=100), **FAST}
     worker = script(sub, [probe.workflow], **settings)
     async with worker:
@@ -106,7 +106,7 @@ async def test_a_shutdown_past_its_grace_interrupts(store: Store) -> None:
     async def slowly(c: Context) -> None:
         await slow()
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [slowly], shutdown_grace=timedelta(milliseconds=100)):
         await sub.start(slowly)
 
@@ -136,7 +136,7 @@ async def test_a_timer_fires_while_a_step_is_in_flight(store: Store) -> None:
         await asyncio.gather(slow(), wait())
         return True
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [racing]):
         run = await sub.start(racing)
         assert await run.result(timeout=LONG) is True
@@ -157,16 +157,21 @@ async def test_two_workers_racing_for_a_commit(store: Store) -> None:
     async def raced(c: Context) -> int:
         return await work()
 
+    # The first worker's commit frozen until the second one's landed, its claim long expired.
+    thawed = asyncio.Event()
     slow = Recording(store)
-    slow.freeze_on_segment = 1.5
-    sub_a = await Substantial._create(slow, partitions=1)
+    slow.freeze_on_segment = thawed
+    sub_a = await Substantial._create(slow)
     sub_b = await Substantial._open(store)
     async with script(sub_a, [raced], **FAST):
         run = await sub_a.start(raced)
         await started.wait()
         async with script(sub_b, [raced], **FAST):
-            value = await sub_b.run(raced, run.chain).result(timeout=LONG)
-            assert value == 2, "the second worker's attempt won"
+            try:
+                value = await sub_b.run(raced, run.chain).result(timeout=LONG)
+                assert value == 2, "the second worker's attempt won"
+            finally:
+                thawed.set()
 
             async def lost() -> bool:
                 return any("/log/" in k and c == "exists" for k, c in slow.created)
@@ -188,7 +193,7 @@ async def test_a_step_runs_on_the_hosts_loop(store: Store) -> None:
         loops.append(asyncio.get_running_loop() is host)
         await where()
 
-    sub = await Substantial._create(store, partitions=1)
+    sub = await Substantial._create(store)
     async with script(sub, [located]):
         await (await sub.start(located)).result(timeout=LONG)
     assert loops[0] is False, "the code runs on a loop of its own"

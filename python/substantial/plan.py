@@ -4,23 +4,29 @@ from __future__ import annotations
 
 import secrets
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 from substantial._proto import plan
 from substantial.core import Core
 from substantial.errors import CoreError, InvalidArgument, ProtocolError
 from substantial.machines import PlanMachine
+from substantial.observe import ObserverRaised
 from substantial.stores import Store, perform
 
 
-async def run_plan(core: Core, store: Store, data: plan.PlanInput) -> tuple[str, object]:
-    """Runs a plan to its outcome, the first step that is not a store operation.
+async def plan_steps(
+    core: Core, store: Store, data: plan.PlanInput
+) -> AsyncGenerator[tuple[str, object]]:
+    """The outcomes of a plan, each step that is not a store operation; the plan goes on when
+    the next one is asked, and is dropped when the iteration ends.
 
-    An `INVALID` answer is the caller's argument, its names and ids, not a bug of the host.
+    An `INVALID` answer, or input refused, is the caller's argument, its names, ids and budget,
+    not a bug of the host. An observer that raises fails the plan with its error.
     """
-    machine = PlanMachine(core, data)
+    machine: PlanMachine | None = None
     try:
+        machine = PlanMachine(core, data)
         while True:
             step = machine.next()
             which = step.WhichOneof("step")
@@ -29,13 +35,25 @@ async def run_plan(core: Core, store: Store, data: plan.PlanInput) -> tuple[str,
                 continue
             if which is None:
                 raise ProtocolError("empty plan step")
-            return which, getattr(step, which)
+            yield which, getattr(step, which)
     except CoreError as e:
         if e.kind == "INVALID":
             raise InvalidArgument(e.message) from None
         raise
+    except ObserverRaised as e:
+        raise e.error from None
     finally:
-        machine.close()
+        if machine is not None:
+            machine.close()
+
+
+async def run_plan(core: Core, store: Store, data: plan.PlanInput) -> tuple[str, object]:
+    """Runs a plan to its outcome, the first step that is not a store operation."""
+    steps = plan_steps(core, store, data)
+    try:
+        return await anext(steps)
+    finally:
+        await steps.aclose()
 
 
 def unexpected(name: str, which: str, outcome: object) -> ProtocolError:

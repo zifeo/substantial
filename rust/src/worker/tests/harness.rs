@@ -95,7 +95,6 @@ impl Harness {
             now: Some(Time { ms: now }),
             seed: vec![42; 32],
             prefix: String::new(),
-            partitions: 1,
             worker: "test".into(),
             settings: Some(b::RunSettings {
                 commit_every_ms: 0,
@@ -103,9 +102,11 @@ impl Harness {
                 continue_as_new_after_bytes: 8 << 20,
                 dedup_window_ms: 86_400_000,
                 retention: Some(b::Retention {
-                    keep: Some(b::retention::Keep::Forever(b::Empty {})),
+                    ms: 30 * 86_400_000,
                 }),
+                prices: None,
             }),
+            cost: Some(layout::Cost::default()),
         }
     }
 
@@ -119,12 +120,14 @@ impl Harness {
             core: self.core.clone(),
             store: Arc::new(MemoryStore::open("harness").unwrap()),
             clock: Clock::Fixed(self.clock.clone()),
+            metering: Default::default(),
         };
         tokio::spawn(replay(
             host,
             self.workflow.clone(),
             crate::time::minutes(5),
             input,
+            None,
             events.clone(),
             tell.clone(),
         ));
@@ -135,16 +138,19 @@ impl Harness {
             match events.pop().unwrap() {
                 Event::Commit(_, commit) => {
                     let segment = commit.segment.clone().unwrap();
+                    // As the agent does: the chain's cost after a progress commit won.
+                    let progress = won && commit.kind() == b::CommitKind::Progress;
                     tell.push(ToReplay::Committed {
                         n: segment.n,
                         won,
                         inbox: Vec::new(),
+                        cost: progress.then(|| segment.cost.clone().unwrap_or_default()),
                     });
                     if won {
                         self.history.extend(segment.events);
                         self.next_n = segment.n + 1;
                         self.inbox.retain(|m| !commit.consumed.contains(&m.key));
-                        commits.push(commit);
+                        commits.push(*commit);
                     }
                 }
                 Event::Ended(_, end) => return Replayed { commits, end },

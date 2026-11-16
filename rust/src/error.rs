@@ -35,12 +35,14 @@ fn version_hint(error: &Failure) -> String {
     }
 }
 
-/// A failure as recorded in a history: a type name, a message, and whether a retry may help.
+/// A failure as recorded in a history: a type name, a message, whether a retry may help, and the
+/// JSON object of details the core records with the failures it makes, else `None`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
     pub kind: String,
     pub message: String,
     pub retryable: bool,
+    pub details: Option<serde_json::Value>,
 }
 
 impl std::fmt::Display for Failure {
@@ -49,13 +51,26 @@ impl std::fmt::Display for Failure {
     }
 }
 
-impl From<layout::Failure> for Failure {
-    fn from(f: layout::Failure) -> Self {
-        Self {
+impl TryFrom<layout::Failure> for Failure {
+    type Error = Error;
+
+    fn try_from(f: layout::Failure) -> Result<Self> {
+        let details = match f.details.as_ref().and_then(|v| v.kind.as_ref()) {
+            None => None,
+            Some(layout::value::Kind::Json(_)) => Some(serde_json::Value::Object(details(&f)?)),
+            Some(other) => {
+                return Err(Error::Protocol(format!(
+                    "{} with details {other:?}",
+                    f.r#type
+                )));
+            }
+        };
+        Ok(Self {
             kind: f.r#type,
             message: f.message,
             retryable: f.retryable,
-        }
+            details,
+        })
     }
 }
 
@@ -74,9 +89,10 @@ impl From<Failure> for layout::Failure {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A step had no attempt left, or failed with a permanent error: `error` names the step,
-    /// `cause` is its last attempt's failure, such as `StepTimeout` or `ValueTooLarge`.
+    /// `cause` is its last attempt's failure, such as `StepTimeout` or `ValueTooLarge`; boxed, so
+    /// that every `Result` stays small.
     #[error("{}", .error.message)]
-    StepFailed { error: Failure, cause: Failure },
+    StepFailed { error: Failure, cause: Box<Failure> },
     /// A call resolved with an error other than a step's, or a workflow's own failure:
     /// [`Error::failed`], or an `anyhow::Error` through `?`.
     #[error("{0}")]
@@ -117,15 +133,25 @@ pub enum Error {
         until: Option<chrono::DateTime<chrono::Utc>>,
     },
     /// The run ended failed or cancelled. `cause` is the `StepFailed` cause of the step that
-    /// failed it, else `None`; boxed, so that every `Result` stays small.
-    #[error("run {run} {status:?}: {error}{}", version_hint(.error))]
+    /// failed it, else `None`; both boxed, so that every `Result` stays small.
+    #[error("run {run} {status}: {error}{}", version_hint(.error))]
     RunFailed {
         run: String,
         status: crate::client::RunStatus,
-        error: Failure,
+        error: Box<Failure>,
         cause: Option<Box<Failure>>,
     },
-    #[error("the run did not end within the timeout")]
+    /// The run passed the `limit` of its budget on `meter`, having `used` that much: raised at
+    /// every call it was blocked on then and at every later step, start and send. The run ends
+    /// failed with it whatever the code does.
+    #[error("budget exceeded: {meter} used {used}, over the limit of {limit}")]
+    BudgetExceeded {
+        meter: String,
+        limit: u64,
+        used: u64,
+    },
+    /// A run's `result` or a workflow's `receive` passed its timeout first.
+    #[error("the timeout passed first")]
     WaitTimeout,
     /// In a test environment: a run waits on something the environment cannot bring, or a
     /// settle cannot end.
@@ -222,6 +248,11 @@ impl Error {
                 error: error.clone(),
                 cause: cause.clone(),
             },
+            Error::BudgetExceeded { meter, limit, used } => Error::BudgetExceeded {
+                meter: meter.clone(),
+                limit: *limit,
+                used: *used,
+            },
             Error::WaitTimeout => Error::WaitTimeout,
             Error::Stuck(m) => Error::Stuck(m.clone()),
             Error::Unchecked(m) => Error::Unchecked(m.clone()),
@@ -251,6 +282,7 @@ impl Error {
             kind: kind.into(),
             message: message.into(),
             retryable: false,
+            details: None,
         })
     }
 }
@@ -331,7 +363,22 @@ impl From<layout::Failure> for Error {
                 },
                 Err(e) => e,
             },
-            _ => Error::Failed(f.into()),
+            "WaitTimeout" => Error::WaitTimeout,
+            "BudgetExceeded" => match details::<BudgetDetails>(&f) {
+                Ok(d) => match (d.limit.parse(), d.used.parse()) {
+                    (Ok(limit), Ok(used)) => Error::BudgetExceeded {
+                        meter: d.meter,
+                        limit,
+                        used,
+                    },
+                    _ => Error::Protocol(format!("BudgetExceeded details {d:?}")),
+                },
+                Err(e) => e,
+            },
+            _ => match Failure::try_from(f) {
+                Ok(f) => Error::Failed(f),
+                Err(e) => e,
+            },
         }
     }
 }
@@ -355,6 +402,14 @@ struct RunDetails {
     until: Option<String>,
 }
 
+/// The details of a `BudgetExceeded`, its amounts as decimal strings.
+#[derive(Debug, serde::Deserialize)]
+struct BudgetDetails {
+    meter: String,
+    limit: String,
+    used: String,
+}
+
 #[derive(serde::Deserialize)]
 struct EndedDetails {
     run: String,
@@ -368,10 +423,14 @@ struct StepFailedDetails {
 }
 
 fn step_failed(f: layout::Failure) -> Error {
-    match details::<StepFailedDetails>(&f) {
-        Ok(d) => Error::StepFailed {
-            error: f.into(),
-            cause: d.error.into(),
+    let d = match details::<StepFailedDetails>(&f) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    match Failure::try_from(f) {
+        Ok(error) => Error::StepFailed {
+            error,
+            cause: Box::new(d.error.into()),
         },
         Err(e) => e,
     }
@@ -391,7 +450,7 @@ struct FailureDetails {
     r#type: String,
     message: String,
     retryable: bool,
-    details: Option<serde_json::Value>,
+    details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl From<FailureDetails> for Failure {
@@ -400,6 +459,7 @@ impl From<FailureDetails> for Failure {
             kind: d.r#type,
             message: d.message,
             retryable: d.retryable,
+            details: d.details.map(serde_json::Value::Object),
         }
     }
 }
@@ -410,16 +470,20 @@ fn run_failed(f: layout::Failure) -> Error {
         Err(e) => return e,
     };
     let (status, error, cause) = match (d.status.as_str(), d.error, d.reason) {
-        ("failed", Some(mut e), _) => match run_failed_cause(&e.r#type, e.details.take()) {
-            Ok(cause) => (crate::client::RunStatus::Failed, e.into(), cause),
-            Err(e) => return e,
-        },
+        ("failed", Some(e), _) => {
+            let e = Failure::from(e);
+            match run_failed_cause(&e.kind, e.details.clone()) {
+                Ok(cause) => (crate::client::RunStatus::Failed, e, cause),
+                Err(e) => return e,
+            }
+        }
         ("cancelled", _, Some(reason)) => (
             crate::client::RunStatus::Cancelled,
             Failure {
                 kind: "Cancelled".into(),
                 message: reason,
                 retryable: false,
+                details: None,
             },
             None,
         ),
@@ -428,7 +492,7 @@ fn run_failed(f: layout::Failure) -> Error {
     Error::RunFailed {
         run: d.run,
         status,
-        error,
+        error: Box::new(error),
         cause,
     }
 }

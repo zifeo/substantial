@@ -28,7 +28,7 @@ async function withConfig(name: string, value: string, fn: () => Promise<void>):
 test("a server without aof is refused", { skip }, () =>
   withConfig("appendonly", "no", async () => {
     await assert.rejects(
-      Substantial.create(redisUrl("redis"), { partitions: 1 }),
+      Substantial.create(redisUrl("redis")),
       (e) => e instanceof ConfigError && /no AOF/.test(e.message),
     );
   }),
@@ -37,7 +37,7 @@ test("a server without aof is refused", { skip }, () =>
 test("a server that evicts is refused", { skip }, () =>
   withConfig("maxmemory-policy", "allkeys-lru", async () => {
     await assert.rejects(
-      Substantial.create(redisUrl("redis"), { partitions: 1 }),
+      Substantial.create(redisUrl("redis")),
       (e) => e instanceof ConfigError && /allkeys-lru/.test(e.message),
     );
   }),

@@ -6,7 +6,7 @@ use crate::proto::boundary::v1::{
     self as b, agent_request, agent_response, plan_request, plan_response, run_request,
     run_response,
 };
-use crate::proto::layout::v1::Time;
+use crate::proto::layout::v1::{Amount, Cost, Time};
 
 /// A machine of the core, dropped with `sub_drop` when this handle goes.
 struct Handle {
@@ -15,12 +15,23 @@ struct Handle {
 }
 
 impl Handle {
+    /// A machine of `input`; an input the core refuses fails here, not at the first call.
     fn new(core: &Core, kind: Kind, input: &impl Message) -> Result<Self> {
         let id = core.new_machine(kind, &input.encode_to_vec())?;
-        Ok(Self {
+        let handle = Self {
             core: core.clone(),
             id,
-        })
+        };
+        if let Some(bytes) = core.refused(id)? {
+            // Every response has its CoreError as field 1: any of them decodes it.
+            let refused = b::AgentResponse::decode(bytes.as_slice())
+                .map_err(|e| Error::Protocol(format!("undecodable refusal: {e}")))?;
+            return match refused.response {
+                Some(agent_response::Response::Error(e)) => Err(e.into()),
+                other => Err(unexpected("a refusal", other)),
+            };
+        }
+        Ok(handle)
     }
 
     fn call<R: Message + Default>(&self, request: &impl Message) -> Result<R> {
@@ -82,6 +93,7 @@ impl RunMachine {
         call: u64,
         attempt: u32,
         outcome: b::outcome::Outcome,
+        charges: Vec<Amount>,
         now: Time,
     ) -> Result<()> {
         let outcome = Some(b::Outcome {
@@ -92,6 +104,7 @@ impl RunMachine {
             attempt,
             outcome,
             now: Some(now),
+            charges,
         }))
     }
 
@@ -99,17 +112,16 @@ impl RunMachine {
         self.done(run_request::Request::Satisfied(call))
     }
 
-    pub fn arrived(&self, messages: Vec<b::InboxMessage>) -> Result<()> {
+    pub fn arrived(&self, messages: Vec<b::InboxMessage>, cost: Cost) -> Result<()> {
         self.done(run_request::Request::Arrived(run_request::Arrived {
             messages,
+            cost: Some(cost),
         }))
     }
 
-    /// The answer to `Next::Store`, the read of a workflow's send.
-    pub fn stored(&self, result: b::op_result::Result) -> Result<()> {
-        self.done(run_request::Request::Stored(b::OpResult {
-            result: Some(result),
-        }))
+    /// The answer to `Next::Store`, an operation of a workflow's send or result.
+    pub fn stored(&self, result: b::OpResult) -> Result<()> {
+        self.done(run_request::Request::Stored(result))
     }
 
     pub fn next(&self, now: Time) -> Result<b::Next> {
@@ -153,13 +165,10 @@ impl AgentMachine {
         }
     }
 
-    pub fn feed(&self, id: u64, result: b::op_result::Result) -> Result<()> {
-        let result = Some(b::OpResult {
-            result: Some(result),
-        });
+    pub fn feed(&self, id: u64, result: b::OpResult) -> Result<()> {
         self.done(agent_request::Request::Feed(agent_request::Feed {
             id,
-            result,
+            result: Some(result),
         }))
     }
 
@@ -181,8 +190,16 @@ impl AgentMachine {
         self.done(agent_request::Request::Wake(b::Empty {}))
     }
 
+    pub fn wake_workflow(&self, workflow: String) -> Result<()> {
+        self.done(agent_request::Request::WakeWorkflow(workflow))
+    }
+
     pub fn shutdown(&self) -> Result<()> {
         self.done(agent_request::Request::Shutdown(b::Empty {}))
+    }
+
+    pub fn drain(&self, until: Time) -> Result<()> {
+        self.done(agent_request::Request::Drain(until))
     }
 }
 
@@ -212,10 +229,7 @@ impl PlanMachine {
         }
     }
 
-    pub fn feed(&self, result: b::op_result::Result) -> Result<()> {
-        let result = b::OpResult {
-            result: Some(result),
-        };
+    pub fn feed(&self, result: b::OpResult) -> Result<()> {
         match self.request(plan_request::Request::Feed(result))? {
             plan_response::Response::Done(_) => Ok(()),
             other => Err(unexpected("done", other)),

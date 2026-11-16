@@ -183,16 +183,34 @@ class Time:
         async with self._lock:
             target = self.ms + ms
             await self._settle()
-            while self.ms < target:
-                self.skip(target)
-                deadlines = [
-                    w.at for w in self.parked.values() if w.at is not None and not w.owner.paused
-                ]
-                nxt = min([target, *deadlines])
-                if nxt <= self.ms:
-                    raise RuntimeError(f"a deadline at {nxt} ms is not after now, {self.ms} ms")
-                self.ms = nxt
-                await self._settle()
+            await self._move(target)
+
+    async def until_done(
+        self, paused: Callable[[], bool], done: Callable[[], bool], what: str
+    ) -> None:
+        """Settles, then moves the clock from deadline to deadline until `done()`."""
+        _outside()
+        async with self._lock:
+            await self._settle()
+            while not done():
+                if paused():
+                    raise Stuck(f"{what} cannot end: its worker is paused")
+                deadlines = self._deadlines()
+                if not deadlines:
+                    raise Stuck(f"{what} cannot end: nothing it waits on can come")
+                await self._move(min(deadlines))
+
+    def _deadlines(self) -> list[int]:
+        return [w.at for w in self.parked.values() if w.at is not None and not w.owner.paused]
+
+    async def _move(self, target: int) -> None:
+        while self.ms < target:
+            self.skip(target)
+            nxt = min([target, *self._deadlines()])
+            if nxt <= self.ms:
+                raise RuntimeError(f"a deadline at {nxt} ms is not after now, {self.ms} ms")
+            self.ms = nxt
+            await self._settle()
 
     async def _settle(self) -> None:
         # Replays are counted per settle: the test's own calls between settles wake runs too.

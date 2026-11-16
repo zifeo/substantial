@@ -117,6 +117,7 @@ export class Core {
   readonly #free: Fn;
   readonly #new: Fn;
   readonly #call: Fn;
+  readonly #refused: Fn;
   readonly #drop: Fn;
   #trapped: string | undefined;
 
@@ -138,6 +139,7 @@ export class Core {
     this.#free = fn("sub_free");
     this.#new = fn("sub_new");
     this.#call = fn("sub_call");
+    this.#refused = fn("sub_refused");
     this.#drop = fn("sub_drop");
   }
 
@@ -182,6 +184,18 @@ export class Core {
       64,
       this.#guard(this.#call, machine, ptr, request.length) as bigint,
     );
+    return this.#take(packed);
+  }
+
+  /** The response holding the error `sub_new` refused the machine's input with, `undefined` for
+   * a machine made. */
+  refused(machine: number): Uint8Array | undefined {
+    const packed = BigInt.asUintN(64, this.#guard(this.#refused, machine) as bigint);
+    return packed === 0n ? undefined : this.#take(packed);
+  }
+
+  /** Copies out the response at `packed`, `ptr << 32 | len`, and frees it in the module. */
+  #take(packed: bigint): Uint8Array {
     const out = Number(packed >> 32n);
     const length = Number(packed & 0xffff_ffffn);
     const memory = new Uint8Array(this.#memory.buffer);

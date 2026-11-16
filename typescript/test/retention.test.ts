@@ -11,7 +11,6 @@ import { withEnv } from "./testing_helpers.ts";
 
 const quick = s.workflow("quick", async () => 1);
 const kept = s.workflow("kept", async () => 2, { retention: s.days(90) });
-const forever = s.workflow("forever", async () => 3, { retention: s.FOREVER });
 
 /** Continues as new every hour, `left` times, then ends with the count. */
 const counter = s.workflow("counter", async (c, input: { left: number; done: number }) => {
@@ -131,20 +130,6 @@ test(
 );
 
 test(
-  "forever keeps a run",
-  withEnv(async (env) => {
-    await using _ = env.worker([quick, forever], { ...script, retention: s.FOREVER });
-    const q = await env.start(quick, {}, { id: "q" });
-    const f = await env.start(forever, {}, { id: "f" });
-    assert.equal(await q.result(), 1);
-    assert.equal(await f.result(), 3);
-    await env.advance(s.days(400));
-    assert.equal(await q.status(), "completed");
-    assert.equal(await f.result(), 3);
-  }),
-);
-
-test(
   "a long lived chain keeps a bounded number of runs",
   withEnv(async (env) => {
     await using _ = env.worker([counter], { ...script, retention: s.hours(1) });
@@ -201,7 +186,7 @@ test(
   withEnv(async (env) => {
     assert.throws(
       () => env.worker([quick], { ...script, retention: s.days(36_501) }),
-      (e) => e instanceof s.ConfigError && /at most 3153600000000 ms or forever/.test(e.message),
+      (e) => e instanceof s.ConfigError && /at most 3153600000000 ms, /.test(e.message),
     );
     const long = s.workflow("long", async () => 1, { retention: s.days(36_501) });
     assert.throws(() => env.worker([long], script), s.ConfigError);
@@ -227,7 +212,7 @@ test(
 
 test("a result wait follows its chain again and sees it collected", async () => {
   const store = new MemoryStore("retention-refollow");
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = await sub.start(quick, {}, { id: "q" });
   refollow(run, 50);
   const wait = run.result({ timeout: s.seconds(10) });

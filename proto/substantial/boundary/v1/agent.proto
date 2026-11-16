@@ -19,8 +19,9 @@ message Served {
 
 // Creates an agent machine, one per worker.
 message AgentConfig {
+  reserved 2;
+  reserved "partitions";
   string prefix = 1;
-  uint32 partitions = 2;
   string worker = 3;
   repeated Served workflows = 4;
   uint32 concurrency = 5;
@@ -74,8 +75,15 @@ message AgentRequest {
     Feed feed = 2;
     RunCommit commit = 3;
     ReplayEnded replay_ended = 4;
+    // A full scan, of every workflow served.
     Empty wake = 5;
     Empty shutdown = 6;
+    // A start or send of this process created a due entry under this workflow: a scan of its due
+    // entries alone; a workflow the worker does not serve is ignored.
+    string wake_workflow = 7;
+    // Serve the entries due by this time, then stop as after shutdown: no idle scan, no waiting
+    // listing, no entry due after it taken or waited for (I-18, drain).
+    layout.v1.Time drain = 8;
   }
 }
 
@@ -87,6 +95,8 @@ message AgentCommand {
   message Replay {
     string run = 1;
     RunInput input = 2;
+    // The earliest due entry the replay serves, absent when it serves none.
+    layout.v1.Time due_at = 3;
   }
   message Committed {
     string run = 1;
@@ -95,6 +105,14 @@ message AgentCommand {
     // After a progress commit won, the messages that reached the run since its replay opened: the
     // host hands them to the run machine (RunRequest.arrived) before the replay goes on.
     repeated InboxMessage inbox = 4;
+    // After a progress commit won, the chain's cost as the agent now knows it, for
+    // RunRequest.arrived.
+    layout.v1.Cost cost = 5;
+  }
+  // A scan listed the due entries of a workflow: how many of those it listed were due.
+  message Scanned {
+    string workflow = 1;
+    uint32 due = 2;
   }
   oneof command {
     Store store = 1;
@@ -103,6 +121,7 @@ message AgentCommand {
     string stop_replay = 4;
     layout.v1.Time wait_until = 5;
     Empty stop = 6;
+    Scanned scanned = 7;
   }
 }
 

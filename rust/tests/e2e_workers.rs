@@ -58,7 +58,7 @@ async fn concurrency_bounds_the_replays_at_once() {
     for (ns, concurrency) in namespaces().into_iter().zip([1, 2, 2]) {
         let probe = Probe::default();
         let workflow = probe.workflow(|_| 100);
-        let sub = internal::create(ns.store).partitions(2).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let runs =
             futures::future::try_join_all((0..4).map(|_| sub.start(&workflow, ()).into_future()))
                 .await
@@ -86,7 +86,7 @@ async fn shutdown_lets_a_step_end_within_the_grace() {
     for ns in namespaces() {
         let probe = Probe::default();
         let workflow = probe.workflow(|_| 300);
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &workflow).start().unwrap();
         let run = sub.start(&workflow, ()).await.unwrap();
         eventually("the step", async || probe.attempts() == 1).await;
@@ -131,7 +131,7 @@ async fn a_shutdown_past_its_grace_interrupts() {
                 .await
             }
         });
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &slowly)
             .set("shutdown_grace", "100ms")
             .start()
@@ -154,7 +154,7 @@ async fn shutdown_past_the_grace_loses_the_step_in_flight() {
     for ns in namespaces() {
         let probe = Probe::default();
         let workflow = probe.workflow(|attempt| if attempt == 1 { 30_000 } else { 10 });
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = || {
             script(&sub, &workflow)
                 .set("shutdown_grace", "100ms")
@@ -203,7 +203,7 @@ async fn a_timer_fires_while_a_step_is_in_flight() {
     });
     for ns in namespaces() {
         *waited.lock().unwrap() = None;
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &workflow).start().unwrap();
         let run = sub.start(&workflow, ()).await.unwrap();
         assert!(!run.result().timeout(LONG).await.unwrap(), "{}", ns.name);
@@ -238,9 +238,12 @@ async fn two_workers_racing_for_a_commit() {
                 Ok(attempt)
             }
         });
+        // The first worker's commit frozen until the second one's landed, its claim long
+        // expired; dropped on a panic, the sender thaws it.
+        let (thaw, frozen) = tokio::sync::watch::channel(false);
         let slow = Recording::new(ns.store.clone());
-        *slow.freeze_on_segment.lock().unwrap() = Some(Duration::from_millis(1500));
-        let sub_a = internal::create(slow.clone()).partitions(1).await.unwrap();
+        *slow.freeze_on_segment.lock().unwrap() = Some(frozen);
+        let sub_a = internal::create(slow.clone()).await.unwrap();
         let sub_b = internal::open_store(ns.store).await.unwrap();
         let worker = |sub: &Substantial| {
             script(sub, &workflow)
@@ -260,6 +263,7 @@ async fn two_workers_racing_for_a_commit() {
             .await
             .unwrap();
         assert_eq!(value, 2, "{}: the second worker's attempt won", ns.name);
+        thaw.send(true).unwrap();
         eventually("the frozen commit", async || {
             slow.created()
                 .iter()

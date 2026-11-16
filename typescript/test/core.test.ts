@@ -55,7 +55,6 @@ test("invalid machines answer every call with their error", async () => {
 
 function config(): agent.AgentConfig {
   return create(agent.AgentConfigSchema, {
-    partitions: 1,
     worker: "w",
     workflows: [{ name: "w", unversioned: true }],
     concurrency: 1,
@@ -73,7 +72,7 @@ function config(): agent.AgentConfig {
     recheckMs: 86_400_000n,
     settings: {
       continueAsNewAfterSegments: 1000n,
-      retention: { keep: { case: "forever", value: {} } },
+      retention: { ms: 3_600_000n },
     },
   });
 }
@@ -91,16 +90,12 @@ test("undecodable requests and unknown machines are errors", async () => {
 });
 
 test("core errors map to host errors", async () => {
-  const machine = new AgentMachine(
-    (await CoreModule.shipped()).instantiate(),
-    create(agent.AgentConfigSchema),
-  );
+  // An input the core refuses fails where the machine is made, not at its first call.
+  const core = (await CoreModule.shipped()).instantiate();
   assert.throws(
-    () => machine.next(time(0)),
+    () => new AgentMachine(core, create(agent.AgentConfigSchema)),
     (e) => e instanceof CoreError && e.kind === "INVALID",
   );
-  machine.close();
-  machine.close();
   const kinds = [
     [boundary.ErrorKind.NON_DETERMINISM, NonDeterminism],
     [boundary.ErrorKind.LAYOUT, LayoutError],

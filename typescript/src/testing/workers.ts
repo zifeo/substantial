@@ -9,9 +9,21 @@ import {
   pastTimeout,
 } from "../clock.ts";
 import type { CoreModule } from "../core.ts";
+import type { Metering } from "../observe.ts";
 import type { run } from "../proto.ts";
 import type { Settings } from "../settings.ts";
-import { type Incarnation, LOOP, leave, restart, Worker, type WorkerHooks } from "../worker.ts";
+import {
+  type DrainOptions,
+  drainWithin,
+  ended,
+  type Incarnation,
+  LOOP,
+  leave,
+  restart,
+  startDrain,
+  Worker,
+  type WorkerHooks,
+} from "../worker.ts";
 import type { Workflows } from "../workflow.ts";
 import { never, type Owner, Stuck, type Task } from "./time.ts";
 import type { World } from "./world.ts";
@@ -193,6 +205,8 @@ export class Pod {
   readonly module: CoreModule;
   readonly workflows: Workflows;
   readonly settings: Settings;
+  /** The prices and observer of its environment, whose store operations it observes. */
+  readonly metering: Metering;
   readonly place: number;
   replaced = 0;
   paused = false;
@@ -200,11 +214,18 @@ export class Pod {
   clock: WorkerClock | undefined;
   worker: EnvWorker | undefined;
 
-  constructor(world: World, module: CoreModule, workflows: Workflows, settings: Settings) {
+  constructor(
+    world: World,
+    module: CoreModule,
+    workflows: Workflows,
+    settings: Settings,
+    metering: Metering,
+  ) {
     this.world = world;
     this.module = module;
     this.workflows = workflows;
     this.settings = settings;
+    this.metering = metering;
     this.place = world.pods.length;
     world.pods.push(this);
   }
@@ -214,7 +235,7 @@ export class Pod {
     const id = world.workerId(this.place, this.replaced);
     const clock = new WorkerClock(world, this, id);
     this.clock = clock;
-    const store = world.store(clock);
+    const store = this.metering.wrap(world.store(clock));
     return { core: this.module.instantiate(), store, clock, id, seed: world.coreSeed };
   }
 
@@ -234,22 +255,28 @@ export class EnvWorker extends Worker {
     world: World,
     module: CoreModule,
     workflows: Workflows,
-    partitions: number,
     settings: Settings,
     hooks: WorkerHooks,
+    metering: Metering,
   ) {
-    const pod = new Pod(world, module, workflows, settings);
-    super(pod.incarnate(), workflows, partitions, settings, {
-      // What its loop leaves behind, a held attempt, is abandoned with it.
-      stopped: () => {
-        pod.clock?.crash();
-        hooks.stopped();
+    const pod = new Pod(world, module, workflows, settings, metering);
+    super(
+      pod.incarnate(),
+      workflows,
+      settings,
+      {
+        // What its loop leaves behind, a held attempt, is abandoned with it.
+        stopped: () => {
+          pod.clock?.crash();
+          hooks.stopped();
+        },
+        died: (error) => {
+          hooks.died(error);
+          world.errors.push(error);
+        },
       },
-      died: (error) => {
-        hooks.died(error);
-        world.errors.push(error);
-      },
-    });
+      metering,
+    );
     pod.worker = this;
     this.#pod = pod;
   }
@@ -275,6 +302,31 @@ export class EnvWorker extends Worker {
   resume(): void {
     this.#pod.paused = false;
     this.#pod.world.time.kick();
+  }
+
+  /** As a worker's `drain`, on the virtual clock: moves it from deadline to deadline until the
+   * worker stopped, then throws its error if it died. */
+  override async drain(options: DrainOptions): Promise<void> {
+    const within = drainWithin(options);
+    const pod = this.#pod;
+    const world = pod.world;
+    if (pod.crashed) throw new Error(`worker ${pod.clock?.id} crashed`);
+    // A life Chaos starts in place of this one drains in its place.
+    startDrain(this, within);
+    await world.time.untilDone(
+      () => pod.paused,
+      () => pod.crashed || pod.clock?.agent?.future.done === true,
+      `the drain of worker ${pod.clock?.id}`,
+    );
+    if (pod.crashed) throw new Error(`worker ${pod.clock?.id} crashed while it drained`);
+    try {
+      await ended(this);
+    } catch (e) {
+      // Thrown here, not again by the next settle.
+      const i = world.errors.indexOf(e);
+      if (i >= 0) world.errors.splice(i, 1);
+      throw e;
+    }
   }
 
   /** Settles, then leaves as a SIGTERM does: steps that returned are recorded, held ones

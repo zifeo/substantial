@@ -98,6 +98,7 @@ struct Abi {
     free: TypedFunc<(u32, u32), ()>,
     new: TypedFunc<(u32, u32, u32), u32>,
     call: TypedFunc<(u32, u32, u32), u64>,
+    refused: TypedFunc<u32, u64>,
     drop: TypedFunc<u32, ()>,
 }
 
@@ -118,6 +119,7 @@ impl Abi {
             free: func(store, "sub_free")?.typed(&*store).map_err(typed)?,
             new: func(store, "sub_new")?.typed(&*store).map_err(typed)?,
             call: func(store, "sub_call")?.typed(&*store).map_err(typed)?,
+            refused: func(store, "sub_refused")?.typed(&*store).map_err(typed)?,
             drop: func(store, "sub_drop")?.typed(&*store).map_err(typed)?,
         })
     }
@@ -179,6 +181,18 @@ impl Core {
         let call = inner.abi.call.clone();
         let packed = inner.guard(|store| call.call(store, (machine, ptr, len)))?;
         inner.take((packed >> 32) as u32, packed as u32)
+    }
+
+    /// The response holding the error `sub_new` refused the machine's input with, `None` for a
+    /// machine made.
+    pub(crate) fn refused(&self, machine: u32) -> Result<Option<Vec<u8>>> {
+        let mut inner = self.lock()?;
+        let refused = inner.abi.refused.clone();
+        let packed = inner.guard(|store| refused.call(store, machine))?;
+        if packed == 0 {
+            return Ok(None);
+        }
+        inner.take((packed >> 32) as u32, packed as u32).map(Some)
     }
 
     pub(crate) fn drop_machine(&self, machine: u32) {
@@ -284,6 +298,12 @@ mod tests {
         ] {
             let machine = core.new_raw(kind, &input).unwrap();
             assert_ne!(machine, 0, "sub_new never returns 0");
+            let refused = core.refused(machine).unwrap().expect("refused");
+            let refused = b::AgentResponse::decode(refused.as_slice()).unwrap();
+            assert!(
+                matches!(refused.response, Some(agent_response::Response::Error(_))),
+                "{refused:?}"
+            );
             let first = agent_error(&core, machine, &next());
             assert_eq!(agent_error(&core, machine, &next()), first);
             core.drop_machine(machine);
@@ -294,7 +314,6 @@ mod tests {
     fn undecodable_requests_and_unknown_machines_are_errors() {
         let core = Core::new().unwrap();
         let config = b::AgentConfig {
-            partitions: 1,
             worker: "w".into(),
             workflows: vec![b::Served {
                 name: "w".into(),
@@ -317,9 +336,7 @@ mod tests {
             recheck_ms: 86_400_000,
             settings: Some(b::RunSettings {
                 continue_as_new_after_segments: 1000,
-                retention: Some(b::Retention {
-                    keep: Some(b::retention::Keep::Forever(b::Empty {})),
-                }),
+                retention: Some(b::Retention { ms: 3_600_000 }),
                 ..Default::default()
             }),
             ..Default::default()
@@ -327,6 +344,7 @@ mod tests {
         let machine = core
             .new_machine(Kind::Agent, &config.encode_to_vec())
             .unwrap();
+        assert_eq!(core.refused(machine).unwrap(), None, "a machine made");
         let e = agent_error(&core, machine, &[0xff, 0xff, 0xff]);
         assert_eq!(e.kind(), ErrorKind::Invalid, "{e:?}");
         let answer =

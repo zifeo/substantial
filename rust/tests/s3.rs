@@ -84,20 +84,18 @@ async fn create_and_open_run_the_probe() {
         Err(Error::LayoutError(_))
     ));
     assert!(matches!(
-        Substantial::create(&url).partitions(2).await,
+        Substantial::create(&url).await,
         Err(Error::ConfigError(_))
     ));
     let created = Substantial::create(&url)
-        .partitions(2)
         .credentials(Credentials::Env)
         .await
         .unwrap();
-    assert_eq!(created.partitions(), 2);
-    let opened = Substantial::open(&url)
+    drop(created);
+    Substantial::open(&url)
         .credentials(Credentials::Env)
         .await
         .unwrap();
-    assert_eq!(opened.partitions(), 2);
     let s = internal::open(&url, env, retry()).unwrap();
     let probes = s.list("probe/", None, 10, None).await.unwrap().keys;
     assert_eq!(probes, ["probe/exclusive"], "one probe key, kept");
@@ -111,11 +109,7 @@ async fn wrong_credentials_are_a_store_error() {
         secret_access_key: "not-the-secret".into(),
         session_token: None,
     };
-    match Substantial::create(&url)
-        .partitions(1)
-        .credentials(wrong)
-        .await
-    {
+    match Substantial::create(&url).credentials(wrong).await {
         Err(Error::StoreError(m)) => {
             assert!(m.contains("HTTP 403 SignatureDoesNotMatch: "), "{m}");
             assert!(!m.contains('<'), "the answer's XML is read: {m}");
@@ -200,11 +194,10 @@ async fn a_credentials_provider_is_called_again_near_expiry() {
     let Some(url) = s3_url("s3") else { return };
     let (provider, calls) = counted(Some(TimeDelta::hours(1)), 0);
     let sub = Substantial::create(&url)
-        .partitions(1)
         .credentials(provider)
         .await
         .unwrap();
-    assert_eq!(sub.partitions(), 1);
+    drop(sub);
     assert_eq!(calls.load(Ordering::SeqCst), 1, "called at open, then kept");
 
     let four_requests = async |s: &dyn internal::Store| {

@@ -18,6 +18,7 @@ import {
   stepKey,
   workflow,
 } from "../src/mod.ts";
+import { Metering } from "../src/observe.ts";
 import { agent, decodeValue, jsonValue, layout, run, time } from "../src/proto.ts";
 import { Channel, type ReplayEvent, replay } from "../src/replay.ts";
 import { MemoryStore } from "../src/stores/memory.ts";
@@ -105,13 +106,13 @@ class Harness {
       inbox: this.inbox,
       now: time(this.now),
       seed: new Uint8Array(32),
-      partitions: 1,
       worker: "test",
+      cost: {},
       settings: {
         continueAsNewAfterSegments: 1000n,
         continueAsNewAfterBytes: 8n << 20n,
         dedupWindowMs: 86_400_000n,
-        retention: { keep: { case: "forever", value: {} } },
+        retention: { ms: 30n * 86_400_000n },
       },
     });
   }
@@ -126,8 +127,13 @@ class Harness {
         ended.resolve(event.end);
         return;
       }
+      if (event.kind === "died") throw event.error;
       const c = event.commit;
-      channel.committed(create(agent.AgentCommand_CommittedSchema, { n: c.segment?.n ?? 0n, won }));
+      // As the agent does: the chain's cost after a progress commit won.
+      const progress = won && c.kind === run.CommitKind.PROGRESS;
+      const cost = progress ? c.segment?.cost : undefined;
+      const n = c.segment?.n ?? 0n;
+      channel.committed(create(agent.AgentCommand_CommittedSchema, { n, won, cost }));
       if (won) {
         this.history.push(...(c.segment?.events ?? []));
         this.nextN = (c.segment?.n ?? 0n) + 1n;
@@ -135,8 +141,10 @@ class Harness {
         commits.push(c);
       }
     };
-    const host = { store: this.store, stepTimeout: minutes(5) };
-    await replay(core, this.workflow, this.runInput(), fixed(now), emit, channel, host);
+    const metering = new Metering(undefined, undefined);
+    const host = { store: this.store, stepTimeout: minutes(5), metering };
+    const input = this.runInput();
+    await replay(core, this.workflow, input, undefined, fixed(now), emit, channel, host);
     return new Replayed(commits, await ended.promise);
   }
 }

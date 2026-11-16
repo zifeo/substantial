@@ -26,7 +26,7 @@ function tooLarge(e: unknown): boolean {
 
 test("a client refuses a value over the cap before any store operation", async () => {
   const recording = new Recording(new MemoryStore(`values-${token()}`));
-  const sub = await createOn(recording, { partitions: 1 });
+  const sub = await createOn(recording);
   const echo = workflow("echo", async (_c: Context, input: { s: string }) => input.s.length);
   const [created, listed] = [recording.created.length, recording.listed.length];
   await assert.rejects(sub.start(echo, { s: over() }), tooLarge);
@@ -37,7 +37,7 @@ test("a client refuses a value over the cap before any store operation", async (
 });
 
 test("workflow values over the cap fail, the core never sees them", async () => {
-  const sub = await Substantial.create(`memory://values-${token()}`, { partitions: 1 });
+  const sub = await Substantial.create(`memory://values-${token()}`);
   const big = workflow("big-step", async (c: Context) => {
     try {
       await c.step("big", () => over());

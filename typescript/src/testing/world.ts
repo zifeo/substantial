@@ -10,6 +10,30 @@ import { type Chaos, derive, FaultStore, unit } from "./store.ts";
 import { Time, type Waiter } from "./time.ts";
 import { type Hold, type Pod, WorkerClock } from "./workers.ts";
 
+const U64 = (1n << 64n) - 1n;
+
+/** The phase the core draws from its seed, a worker's first idle wait, `maxIdle` the others:
+ * SplitMix64 of the seed's first 8 bytes, big-endian, modulo `maxIdle`. */
+export function idlePhase(seed: Uint8Array, maxIdle: number): number {
+  const first = new DataView(seed.buffer, seed.byteOffset, 8).getBigUint64(0);
+  let z = (first + 0x9e3779b97f4a7c15n) & U64;
+  z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & U64;
+  z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & U64;
+  return Number((z ^ (z >> 31n)) % BigInt(maxIdle));
+}
+
+/** The earliest due entries of a workflow: of any kind, and of those that wake a run, a timer or
+ * a message; a collection entry sets no worker's timer, the next scan serves it. */
+interface Due {
+  readonly any: number;
+  readonly wake: number | undefined;
+}
+
+function earlier(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) return b;
+  return b === undefined ? a : Math.min(a, b);
+}
+
 /** The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<run>~<tag>`. */
 export function dueMs(entry: string): number {
   const n = (from: number, to: number) => Number(entry.slice(from, to));
@@ -37,7 +61,7 @@ export class World {
   /** Each run that ended failed, its chain and its failure, from the write of its result. */
   readonly failed: Map<string, { chain: string; failure: string }> = new Map();
   env!: Env;
-  #due: { writes: number; due: Map<string, number> } = { writes: -1, due: new Map() };
+  #due: { writes: number; due: Map<string, Due> } = { writes: -1, due: new Map() };
   /** Off only in the test that compares a scenario with and without skipping. */
   skipping = true;
   skipped = 0;
@@ -118,15 +142,21 @@ export class World {
     return [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
   }
 
-  /** The earliest due entry of each workflow, as of the last write. */
-  earliestDue(): Map<string, number> {
+  /** The earliest due entries of each workflow, as of the last write. */
+  earliestDue(): Map<string, Due> {
     if (this.#due.writes !== this.writes) {
-      const due = new Map<string, number>();
+      const due = new Map<string, Due>();
       for (const key of this.objects.keys()) {
         if (!key.startsWith("queues/")) continue;
         const workflow = key.split("/")[1] ?? "";
-        const at = dueMs(key.slice(key.lastIndexOf("/") + 1));
-        due.set(workflow, Math.min(due.get(workflow) ?? at, at));
+        const entry = key.slice(key.lastIndexOf("/") + 1);
+        const at = dueMs(entry);
+        const wakes = !entry.endsWith("~c") && !entry.endsWith("~g");
+        const was = due.get(workflow);
+        due.set(workflow, {
+          any: Math.min(was?.any ?? at, at),
+          wake: earlier(was?.wake, wakes ? at : undefined),
+        });
       }
       this.#due = { writes: this.writes, due };
     }
@@ -137,9 +167,9 @@ export class World {
    * anything else, keeping the instants of the scans left.
    *
    * A worker's scan is skipped when the worker is idle, its deadline is the one its last scan set
-   * (`maxIdle` after it), nothing was written since that scan, and no due entry it lists is due
-   * by then: the listing would return the keys it returned, none of them due, and set the
-   * deadline that skipping sets.
+   * (`maxIdle` after it, or the worker's phase after its first), nothing was written since that
+   * scan, and no due entry it lists is due by then: the listing would return the keys it
+   * returned, none of them due, and set the deadline that skipping sets.
    *
    * Under Chaos, a scan is skipped only when the draw of each of its listings succeeds, and the
    * skip counts their tries as the scan would: a scan whose draw fails runs, and may back off,
@@ -147,7 +177,7 @@ export class World {
   skipScans(target: number): void {
     if (!this.skipping || this.time.ms < this.outageUntil) return;
     const due = this.earliestDue();
-    const idle: [WorkerClock, Waiter, number, number | undefined][] = [];
+    const idle: [WorkerClock, Waiter, number, Due | undefined][] = [];
     let bound = target;
     for (const [task, w] of this.time.parked) {
       if (w.at === undefined || w.owner.paused) continue;
@@ -155,27 +185,34 @@ export class World {
       if (clock instanceof WorkerClock && task === clock.agent) {
         const mi = clock.pod.settings.maxIdle.ms;
         const served = clock.pod.workflows.served().flatMap((s) => due.get(s.name) ?? []);
-        const first = served.length === 0 ? undefined : Math.min(...served);
+        const first: Due | undefined =
+          served.length === 0
+            ? undefined
+            : {
+                any: Math.min(...served.map((d) => d.any)),
+                wake: served.map((d) => d.wake).reduce(earlier, undefined),
+              };
         const worker = clock.pod.worker;
         if (
           clock.scannedAt !== undefined &&
-          w.at === clock.scannedAt + mi &&
+          (w.at === clock.scannedAt + mi ||
+            w.at === clock.scannedAt + idlePhase(this.coreSeed, mi)) &&
           clock.seen === this.writes &&
           worker !== undefined &&
           !pending(worker) &&
           [...clock.tasks].every((t) => t === task || t.future.done) &&
-          (first === undefined || first > w.at)
+          (first === undefined || first.any > w.at)
         ) {
           idle.push([clock, w, mi, first]);
-          if (first !== undefined) bound = Math.min(bound, first);
+          if (first?.wake !== undefined) bound = Math.min(bound, first.wake);
           continue;
         }
       }
       bound = Math.min(bound, w.at);
     }
     for (const [clock, w, mi, first] of idle) {
+      const limit = first === undefined ? bound : Math.min(bound, first.any - 1);
       const at = w.at as number;
-      const limit = first === undefined ? bound : Math.min(bound, first - 1);
       if (limit < at) continue;
       const scans = this.#succeeding(clock, Math.floor((limit - at) / mi) + 1);
       if (scans === 0) continue;
@@ -185,7 +222,8 @@ export class World {
       this.skipped += scans;
       const last = at + (scans - 1) * mi;
       clock.scannedAt = last;
-      w.at = first === undefined ? last + mi : Math.min(last + mi, first);
+      const after = last + mi;
+      w.at = first?.wake === undefined ? after : Math.min(after, first.wake);
     }
   }
 }

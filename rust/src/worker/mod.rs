@@ -11,17 +11,21 @@ use std::sync::Arc;
 #[cfg(feature = "testing")]
 pub(crate) use agent::Agent;
 use agent::os_seed;
-pub(crate) use agent::{Event, Launch, OnDeath, Running};
+pub(crate) use agent::{Event, Launch, OnDeath, Running, panicked};
 
 use crate::clock::Clock;
 use crate::error::{Error, Result};
+use crate::observe::Metering;
 use crate::settings::Settings;
 use crate::store::Store;
 use crate::workflow::{Untyped, Workflows};
 
 /// Something a start, send or cancel of this process wakes: a worker.
 pub(crate) trait Wakes: Send + Sync {
+    /// A full scan.
     fn wake(&self);
+    /// A scan of the due entries of `workflow` alone, which a start or send created one under.
+    fn wake_workflow(&self, workflow: &str);
 }
 
 /// A running worker. Its agent machine and every run machine of its replays share one instance
@@ -35,25 +39,25 @@ pub(crate) enum Kind {
 }
 
 impl Worker {
-    /// Starts a worker on the current tokio runtime, on a namespace of `partitions`.
+    /// Starts a worker on the current tokio runtime.
     pub(crate) fn start(
         store: Arc<dyn Store>,
         workflows: Vec<Untyped>,
-        partitions: u32,
         settings: Settings,
         died: OnDeath,
+        metering: Metering,
     ) -> Result<Self> {
         settings.validate()?;
         let workflows = Workflows::new(workflows, settings.retention_min)?;
         let running = Launch {
             store,
             workflows: &workflows,
-            partitions,
             settings: &settings,
             died,
             clock: Clock::Real,
             id: hex::encode(rand::random::<[u8; 8]>()),
             seed: os_seed(),
+            metering,
         }
         .start()?;
         Ok(Self(Kind::Real(running)))
@@ -68,7 +72,7 @@ impl Worker {
         }
     }
 
-    /// Wakes the agent at once, as after a message sent from this process.
+    /// Wakes the agent at once for a full scan.
     pub(crate) fn wake(&self) {
         self.wakes().wake();
     }
@@ -105,6 +109,25 @@ impl Worker {
             Kind::Real(r) => r.shutdown(r.grace).await,
             #[cfg(feature = "testing")]
             Kind::Env(w) => w.shutdown().await,
+        }
+    }
+
+    /// Serves every run due now or within `within`, those its own work makes due, and those of a
+    /// crashed worker whose claim expires by then, then stops as `shutdown` does once nothing is
+    /// due by then and nothing is in flight; the worker's error if it died.
+    ///
+    /// # Panics
+    ///
+    /// For a worker of a `testing::Env` that crashed.
+    pub async fn drain(&self, within: std::time::Duration) -> Result<()> {
+        match &self.0 {
+            Kind::Real(r) => {
+                r.drain(within);
+                r.task.returned().await;
+                r.ended()
+            }
+            #[cfg(feature = "testing")]
+            Kind::Env(w) => w.drain(within).await,
         }
     }
 

@@ -144,7 +144,6 @@ async fn a_start_from_another_client_comes_through_the_wait() {
     let url = h3.url("e2e");
     let workflow = Workflow::without_input("answer", |_c| async { Ok(42) });
     let sub = Substantial::create(url.as_str())
-        .partitions(1)
         .credentials(FakeH3::credentials())
         .await
         .unwrap();
@@ -190,7 +189,6 @@ async fn a_result_is_waited_on_its_key_through_a_continuation() {
         Ok("liftoff".to_owned())
     });
     let sub = Substantial::create(h3.url("results").as_str())
-        .partitions(1)
         .credentials(FakeH3::credentials())
         .await
         .unwrap();
@@ -237,7 +235,7 @@ async fn a_get_is_not_queued_behind_waiting_listings() {
     let s = open(&h3).await;
     let first = s.list("p0/", None, 1, wait(None, 0)).await.unwrap();
     let etag = first.etag.expect("an etag");
-    // As a worker serving 4 workflows on 16 partitions holds 64.
+    // As 16 workers serving 4 workflows each hold 64.
     let held: Vec<_> = (0..64)
         .map(|i| {
             let (s, etag) = (s.clone(), etag.clone());
@@ -261,14 +259,13 @@ async fn a_get_is_not_queued_behind_waiting_listings() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_run_ends_promptly_with_4_workflows_on_16_partitions() {
+async fn a_run_ends_promptly_with_4_workflows_waiting() {
     let h3 = FakeH3::start().await;
     let flows: Vec<Workflow<u32>> = ["a", "b", "c", "d"]
         .into_iter()
         .map(|n| Workflow::without_input(&format!("pool-{n}"), |_c| async { Ok(1) }))
         .collect();
     let sub = Substantial::create(h3.url("pool").as_str())
-        .partitions(16)
         .credentials(FakeH3::credentials())
         .await
         .unwrap();
@@ -277,10 +274,7 @@ async fn a_run_ends_promptly_with_4_workflows_on_16_partitions() {
         .preset(Preset::Script)
         .start()
         .unwrap();
-    eventually("a held listing per workflow and partition", async || {
-        h3.holds() >= 64
-    })
-    .await;
+    eventually("a held listing per workflow", async || h3.holds() >= 4).await;
     let started = Instant::now();
     let run = sub.start(&flows[0], ()).await.unwrap();
     let value = run.result().timeout(Duration::from_secs(10)).await;

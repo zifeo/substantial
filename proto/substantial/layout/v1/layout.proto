@@ -1,4 +1,4 @@
-// The objects of layout 1 (docs/interfaces.md). Every object of a namespace but its marker,
+// The objects of layout 2, those of layout 1 unchanged (docs/interfaces.md). Every object of a namespace but its marker,
 // substantial.json, is one of these messages in protobuf binary encoding. The core alone encodes
 // them, for every host, so the bytes are the same everywhere: no map fields, whose order would vary.
 syntax = "proto3";
@@ -64,6 +64,59 @@ message Start {
   Time created_at = 13;
   // Message ids consumed within dedup_window, each expiring dedup_window after its own time.
   repeated Seen seen = 14;
+  // A retry only: the first run of its line of retries, from which it derives the ids of its
+  // children, sends and continuation, so the history it resumes matches its calls.
+  optional string line = 15;
+  // The run's limits: the start's own, else its workflow's; part of the start's identity, carried by
+  // continuations, set again or kept by a retry. None means no limit.
+  Budget budget = 16;
+  // The chain's cost before this run: of the runs it continues or the failed run it retries.
+  Cost cost = 17;
+}
+
+// An integer amount of nano-units of an ISO 4217 currency, at most 2^63-1.
+message Amount {
+  string currency = 1;
+  uint64 nano = 2;
+}
+
+// Store requests by kind, each attempt of an operation one request.
+message Requests {
+  uint64 create = 1;
+  uint64 get = 2;
+  uint64 list = 3;
+  uint64 delete = 4;
+}
+
+// Requests and amounts, the amounts sorted by currency, one per currency.
+message Meters {
+  Requests requests = 1;
+  repeated Amount amounts = 2;
+}
+
+// What a step charged, by its name.
+message StepCharges {
+  string step = 1;
+  repeated Amount amounts = 2;
+}
+
+// What a chain cost: its own store requests, priced by the price table of the worker that counted
+// them if it had one; its steps' charges, sorted by step name; and its children's totals.
+message Cost {
+  Meters store = 1;
+  repeated StepCharges steps = 2;
+  Meters children = 3;
+}
+
+// A limit on a meter: a request kind (create, get, list, delete, requests) or a currency.
+message Limit {
+  string meter = 1;
+  uint64 limit = 2;
+}
+
+// Limits sorted by meter, one per meter.
+message Budget {
+  repeated Limit limits = 1;
 }
 
 message Step {
@@ -71,6 +124,8 @@ message Step {
   uint64 occurrence = 2;
   uint32 attempt = 3;
   Value value = 4;
+  // What the attempt charged, sorted by currency.
+  repeated Amount charges = 5;
 }
 
 message StepRetry {
@@ -79,6 +134,7 @@ message StepRetry {
   uint32 attempt = 3;
   Failure error = 4;
   Time at = 5;
+  repeated Amount charges = 6;
 }
 
 message StepFailed {
@@ -86,6 +142,7 @@ message StepFailed {
   uint64 occurrence = 2;
   uint32 attempt = 3;
   Failure error = 4;
+  repeated Amount charges = 5;
 }
 
 message Timer {
@@ -114,6 +171,8 @@ message Child {
   string workflow = 3;
   optional uint32 version = 4;
   Value input = 5;
+  // The child's budget, given to its start.
+  Budget budget = 6;
 }
 
 message Sent {
@@ -138,6 +197,23 @@ message Delivery {
   string workflow = 2;
 }
 
+// The code awaited the end of a chain (c.result): what its replay read before the commit, which
+// every replay gives the code again.
+message Watched {
+  uint64 occurrence = 1;
+  // The chain awaited.
+  string chain = 2;
+  oneof outcome {
+    // The chain's last run, under which runs/<run>/watch/<watcher> was created: its end arrives as
+    // a substantial.watched message.
+    string waiting = 3;
+    // The chain's end, read before or just after the watcher key was created.
+    Ended ended = 4;
+    // RunNotFound: no such chain, or one collected.
+    Failure refused = 5;
+  }
+}
+
 message Published {
   string key = 1;
   Value value = 2;
@@ -153,6 +229,14 @@ message Failed {
 
 message Cancelled {
   string reason = 1;
+}
+
+// The run passed a limit of its budget at a decision point: recorded once, so a replay never decides
+// again. From here every blocked call raises BudgetExceeded and the run ends failed with it.
+message BudgetExceeded {
+  string meter = 1;
+  uint64 limit = 2;
+  uint64 used = 3;
 }
 
 // The next run's start is built from this event alone, so whoever does the effects needs no more.
@@ -186,6 +270,8 @@ message Event {
     Failed failed = 11;
     Cancelled cancelled = 12;
     Continued continued = 13;
+    BudgetExceeded budget_exceeded = 14;
+    Watched watched = 15;
   }
 }
 
@@ -199,15 +285,35 @@ message Segment {
   Time next_wake = 3;
   string worker = 4;
   Time created_at = 5;
-  // On an end segment, how long the run is kept after it ends; absent to keep it forever.
+  // On an end segment, how long the run is kept after it ends; absent on any other.
   optional uint64 retention_ms = 6;
+  // The run's rest marker, queues/<workflow>/rest/<run>, exists: set by the suspension that
+  // created it, waiting on messages only, and kept by every later segment of the run.
+  bool rest = 7;
+  // The chain's cost through this segment, its own commit's planned requests included.
+  Cost cost = 8;
 }
 
-// runs/<run>/snap/<n>: every event of segments 0 to n.
+// runs/<run>/snap/<n>: every event of segments 0 to n, after those of the failed runs it resumes.
 message Snapshot {
   uint64 n = 1;
   repeated Event events = 2;
   Time next_wake = 3;
+  // Segment n's rest.
+  bool rest = 4;
+  // Where the events come from, in their order, one per segment.
+  repeated Origin origins = 5;
+  // Segment n's cost.
+  Cost cost = 6;
+}
+
+// A segment whose events a snapshot holds: the run that wrote it, this one or a failed run it
+// resumes, its number and time, and how many of the events that follow are its.
+message Origin {
+  string run = 1;
+  uint64 n = 2;
+  Time created_at = 3;
+  uint64 events = 4;
 }
 
 // runs/<run>/inbox/<ord>-<id>
@@ -220,13 +326,16 @@ message Message {
   Ended ended = 5;
 }
 
-// What a child's substantial.ended tells its parent: the end of its chain, as its result says.
+// What a child's substantial.ended tells its parent, and substantial.watched a run awaiting the chain:
+// the end of its chain, as its result says.
 message Ended {
   string run = 1;
   Status status = 2;
   Value value = 3;
   Failure error = 4;
   string reason = 5;
+  // The child chain's cost, as its end segment recorded it.
+  Cost cost = 6;
 }
 
 // runs/<run>/claim/<n>-<attempt>

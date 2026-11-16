@@ -10,7 +10,7 @@ import type { CoreError, Empty, OpResult, StoreOp } from "./boundary_pb.ts";
 import { file_substantial_boundary_v1_boundary } from "./boundary_pb.ts";
 import type { Commit, Idle, InboxMessage, Retention, RunInput, RunSettings } from "./run_pb.ts";
 import { file_substantial_boundary_v1_run } from "./run_pb.ts";
-import type { Time } from "../../layout/v1/layout_pb.ts";
+import type { Cost, Time } from "../../layout/v1/layout_pb.ts";
 import { file_substantial_layout_v1_layout } from "../../layout/v1/layout_pb.ts";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file substantial/boundary/v1/agent.proto.
  */
 export const file_substantial_boundary_v1_agent: GenFile = /*@__PURE__*/
-  fileDesc("CiNzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9hZ2VudC5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiiQEKBlNlcnZlZBIMCgRuYW1lGAEgASgJEhAKCHZlcnNpb25zGAIgAygNEhgKC3VudmVyc2lvbmVkGAMgASgISACIAQESNQoJcmV0ZW50aW9uGAQgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmV0ZW50aW9uQg4KDF91bnZlcnNpb25lZCLSAwoLQWdlbnRDb25maWcSDgoGcHJlZml4GAEgASgJEhIKCnBhcnRpdGlvbnMYAiABKA0SDgoGd29ya2VyGAMgASgJEjIKCXdvcmtmbG93cxgEIAMoCzIfLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlNlcnZlZBITCgtjb25jdXJyZW5jeRgFIAEoDRIUCgxjbGFpbV90dGxfbXMYBiABKAQSFQoNY2xhaW1fc2tld19tcxgHIAEoBBITCgttYXhfaWRsZV9tcxgIIAEoBBIQCghkdWVfcGFnZRgJIAEoDRIRCglkdWVfcGFnZXMYCiABKA0SFgoOc25hcHNob3RfZXZlcnkYCyABKAQSEgoKb3BfcmV0cmllcxgMIAEoDRIMCgRzZWVkGA0gASgMEjYKCHNldHRpbmdzGA4gASgLMiQuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUnVuU2V0dGluZ3MSEwoLc3RvcmVfd2FpdHMYDyABKAgSFAoMd2FpdF9zZWNvbmRzGBAgASgNEhQKDHRvbWJzdG9uZV9tcxgRIAEoBBIYChByZXRlbnRpb25fbWluX21zGBIgASgEEhIKCnJlY2hlY2tfbXMYEyABKAQidAoJUmVwbGF5RW5kEi0KBGlkbGUYASABKAsyHS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5JZGxlSAASMQoHZHJvcHBlZBgCIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SABCBQoDZW5kItMECgxBZ2VudFJlcXVlc3QSKwoEbmV4dBgBIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lSAASOgoEZmVlZBgCIAEoCzIqLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50UmVxdWVzdC5GZWVkSAASQQoGY29tbWl0GAMgASgLMi8uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRSZXF1ZXN0LlJ1bkNvbW1pdEgAEkkKDHJlcGxheV9lbmRlZBgEIAEoCzIxLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50UmVxdWVzdC5SZXBsYXlFbmRlZEgAEi4KBHdha2UYBSABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjIKCHNodXRkb3duGAYgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABpFCgRGZWVkEgoKAmlkGAEgASgEEjEKBnJlc3VsdBgCIAEoCzIhLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk9wUmVzdWx0GkkKCVJ1bkNvbW1pdBILCgNydW4YASABKAkSLwoGY29tbWl0GAIgASgLMh8uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29tbWl0GksKC1JlcGxheUVuZGVkEgsKA3J1bhgBIAEoCRIvCgNlbmQYAiABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SZXBsYXlFbmRCCQoHcmVxdWVzdCLLBAoMQWdlbnRDb21tYW5kEjwKBXN0b3JlGAEgASgLMisuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlN0b3JlSAASPgoGcmVwbGF5GAIgASgLMiwuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlJlcGxheUgAEkQKCWNvbW1pdHRlZBgDIAEoCzIvLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50Q29tbWFuZC5Db21taXR0ZWRIABIVCgtzdG9wX3JlcGxheRgEIAEoCUgAEjEKCndhaXRfdW50aWwYBSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEi4KBHN0b3AYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAGkEKBVN0b3JlEgoKAmlkGAEgASgEEiwKAm9wGAIgASgLMiAuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuU3RvcmVPcBpHCgZSZXBsYXkSCwoDcnVuGAEgASgJEjAKBWlucHV0GAIgASgLMiEuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUnVuSW5wdXQaZgoJQ29tbWl0dGVkEgsKA3J1bhgBIAEoCRIJCgFuGAIgASgEEgsKA3dvbhgDIAEoCBI0CgVpbmJveBgEIAMoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkluYm94TWVzc2FnZUIJCgdjb21tYW5kIroBCg1BZ2VudFJlc3BvbnNlEjMKBWVycm9yGAEgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29yZUVycm9ySAASOAoHY29tbWFuZBgCIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50Q29tbWFuZEgAEi4KBGRvbmUYAyABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAQgoKCHJlc3BvbnNlYgZwcm90bzM", [file_substantial_boundary_v1_boundary, file_substantial_boundary_v1_run, file_substantial_layout_v1_layout]);
+  fileDesc("CiNzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9hZ2VudC5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiiQEKBlNlcnZlZBIMCgRuYW1lGAEgASgJEhAKCHZlcnNpb25zGAIgAygNEhgKC3VudmVyc2lvbmVkGAMgASgISACIAQESNQoJcmV0ZW50aW9uGAQgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmV0ZW50aW9uQg4KDF91bnZlcnNpb25lZCLQAwoLQWdlbnRDb25maWcSDgoGcHJlZml4GAEgASgJEg4KBndvcmtlchgDIAEoCRIyCgl3b3JrZmxvd3MYBCADKAsyHy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TZXJ2ZWQSEwoLY29uY3VycmVuY3kYBSABKA0SFAoMY2xhaW1fdHRsX21zGAYgASgEEhUKDWNsYWltX3NrZXdfbXMYByABKAQSEwoLbWF4X2lkbGVfbXMYCCABKAQSEAoIZHVlX3BhZ2UYCSABKA0SEQoJZHVlX3BhZ2VzGAogASgNEhYKDnNuYXBzaG90X2V2ZXJ5GAsgASgEEhIKCm9wX3JldHJpZXMYDCABKA0SDAoEc2VlZBgNIAEoDBI2CghzZXR0aW5ncxgOIAEoCzIkLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlJ1blNldHRpbmdzEhMKC3N0b3JlX3dhaXRzGA8gASgIEhQKDHdhaXRfc2Vjb25kcxgQIAEoDRIUCgx0b21ic3RvbmVfbXMYESABKAQSGAoQcmV0ZW50aW9uX21pbl9tcxgSIAEoBBISCgpyZWNoZWNrX21zGBMgASgESgQIAhADUgpwYXJ0aXRpb25zInQKCVJlcGxheUVuZBItCgRpZGxlGAEgASgLMh0uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuSWRsZUgAEjEKB2Ryb3BwZWQYAiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAQgUKA2VuZCKaBQoMQWdlbnRSZXF1ZXN0EisKBG5leHQYASABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEjoKBGZlZWQYAiABKAsyKi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudFJlcXVlc3QuRmVlZEgAEkEKBmNvbW1pdBgDIAEoCzIvLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50UmVxdWVzdC5SdW5Db21taXRIABJJCgxyZXBsYXlfZW5kZWQYBCABKAsyMS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudFJlcXVlc3QuUmVwbGF5RW5kZWRIABIuCgR3YWtlGAUgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABIyCghzaHV0ZG93bhgGIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAASFwoNd2FrZV93b3JrZmxvdxgHIAEoCUgAEiwKBWRyYWluGAggASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWVIABpFCgRGZWVkEgoKAmlkGAEgASgEEjEKBnJlc3VsdBgCIAEoCzIhLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk9wUmVzdWx0GkkKCVJ1bkNvbW1pdBILCgNydW4YASABKAkSLwoGY29tbWl0GAIgASgLMh8uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29tbWl0GksKC1JlcGxheUVuZGVkEgsKA3J1bhgBIAEoCRIvCgNlbmQYAiABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SZXBsYXlFbmRCCQoHcmVxdWVzdCKQBgoMQWdlbnRDb21tYW5kEjwKBXN0b3JlGAEgASgLMisuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlN0b3JlSAASPgoGcmVwbGF5GAIgASgLMiwuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlJlcGxheUgAEkQKCWNvbW1pdHRlZBgDIAEoCzIvLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50Q29tbWFuZC5Db21taXR0ZWRIABIVCgtzdG9wX3JlcGxheRgEIAEoCUgAEjEKCndhaXRfdW50aWwYBSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEi4KBHN0b3AYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEkAKB3NjYW5uZWQYByABKAsyLS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudENvbW1hbmQuU2Nhbm5lZEgAGkEKBVN0b3JlEgoKAmlkGAEgASgEEiwKAm9wGAIgASgLMiAuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuU3RvcmVPcBp0CgZSZXBsYXkSCwoDcnVuGAEgASgJEjAKBWlucHV0GAIgASgLMiEuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUnVuSW5wdXQSKwoGZHVlX2F0GAMgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUakQEKCUNvbW1pdHRlZBILCgNydW4YASABKAkSCQoBbhgCIAEoBBILCgN3b24YAyABKAgSNAoFaW5ib3gYBCADKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5JbmJveE1lc3NhZ2USKQoEY29zdBgFIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5Db3N0GigKB1NjYW5uZWQSEAoId29ya2Zsb3cYASABKAkSCwoDZHVlGAIgASgNQgkKB2NvbW1hbmQiugEKDUFnZW50UmVzcG9uc2USMwoFZXJyb3IYASABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5Db3JlRXJyb3JIABI4Cgdjb21tYW5kGAIgASgLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kSAASLgoEZG9uZRgDIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SABCCgoIcmVzcG9uc2ViBnByb3RvMw", [file_substantial_boundary_v1_boundary, file_substantial_boundary_v1_run, file_substantial_layout_v1_layout]);
 
 /**
  * A workflow a worker serves: runs of one of versions, and runs without a version if unversioned.
@@ -68,11 +68,6 @@ export type AgentConfig = Message<"substantial.boundary.v1.AgentConfig"> & {
    * @generated from field: string prefix = 1;
    */
   prefix: string;
-
-  /**
-   * @generated from field: uint32 partitions = 2;
-   */
-  partitions: number;
 
   /**
    * @generated from field: string worker = 3;
@@ -242,6 +237,8 @@ export type AgentRequest = Message<"substantial.boundary.v1.AgentRequest"> & {
     case: "replayEnded";
   } | {
     /**
+     * A full scan, of every workflow served.
+     *
      * @generated from field: substantial.boundary.v1.Empty wake = 5;
      */
     value: Empty;
@@ -252,6 +249,24 @@ export type AgentRequest = Message<"substantial.boundary.v1.AgentRequest"> & {
      */
     value: Empty;
     case: "shutdown";
+  } | {
+    /**
+     * A start or send of this process created a due entry under this workflow: a scan of its due
+     * entries alone; a workflow the worker does not serve is ignored.
+     *
+     * @generated from field: string wake_workflow = 7;
+     */
+    value: string;
+    case: "wakeWorkflow";
+  } | {
+    /**
+     * Serve the entries due by this time, then stop as after shutdown: no idle scan, no waiting
+     * listing, no entry due after it taken or waited for (I-18, drain).
+     *
+     * @generated from field: substantial.layout.v1.Time drain = 8;
+     */
+    value: Time;
+    case: "drain";
   } | { case: undefined; value?: undefined };
 };
 
@@ -374,6 +389,12 @@ export type AgentCommand = Message<"substantial.boundary.v1.AgentCommand"> & {
      */
     value: Empty;
     case: "stop";
+  } | {
+    /**
+     * @generated from field: substantial.boundary.v1.AgentCommand.Scanned scanned = 7;
+     */
+    value: AgentCommand_Scanned;
+    case: "scanned";
   } | { case: undefined; value?: undefined };
 };
 
@@ -419,6 +440,13 @@ export type AgentCommand_Replay = Message<"substantial.boundary.v1.AgentCommand.
    * @generated from field: substantial.boundary.v1.RunInput input = 2;
    */
   input?: RunInput | undefined;
+
+  /**
+   * The earliest due entry the replay serves, absent when it serves none.
+   *
+   * @generated from field: substantial.layout.v1.Time due_at = 3;
+   */
+  dueAt?: Time | undefined;
 };
 
 /**
@@ -454,6 +482,14 @@ export type AgentCommand_Committed = Message<"substantial.boundary.v1.AgentComma
    * @generated from field: repeated substantial.boundary.v1.InboxMessage inbox = 4;
    */
   inbox: InboxMessage[];
+
+  /**
+   * After a progress commit won, the chain's cost as the agent now knows it, for
+   * RunRequest.arrived.
+   *
+   * @generated from field: substantial.layout.v1.Cost cost = 5;
+   */
+  cost?: Cost | undefined;
 };
 
 /**
@@ -462,6 +498,30 @@ export type AgentCommand_Committed = Message<"substantial.boundary.v1.AgentComma
  */
 export const AgentCommand_CommittedSchema: GenMessage<AgentCommand_Committed> = /*@__PURE__*/
   messageDesc(file_substantial_boundary_v1_agent, 4, 2);
+
+/**
+ * A scan listed the due entries of a workflow: how many of those it listed were due.
+ *
+ * @generated from message substantial.boundary.v1.AgentCommand.Scanned
+ */
+export type AgentCommand_Scanned = Message<"substantial.boundary.v1.AgentCommand.Scanned"> & {
+  /**
+   * @generated from field: string workflow = 1;
+   */
+  workflow: string;
+
+  /**
+   * @generated from field: uint32 due = 2;
+   */
+  due: number;
+};
+
+/**
+ * Describes the message substantial.boundary.v1.AgentCommand.Scanned.
+ * Use `create(AgentCommand_ScannedSchema)` to create a new message.
+ */
+export const AgentCommand_ScannedSchema: GenMessage<AgentCommand_Scanned> = /*@__PURE__*/
+  messageDesc(file_substantial_boundary_v1_agent, 4, 3);
 
 /**
  * @generated from message substantial.boundary.v1.AgentResponse

@@ -1,5 +1,7 @@
-// A handle on a chain (I-17): `send`, `result`, `status`, `read` and `cancel` act on its last run.
+// A handle on a chain (I-17): `send`, `result`, `status`, `read`, `history`, `retry` and `cancel`
+// act on its last run.
 import { create } from "@bufbuild/protobuf";
+import { type Budget, budgetProto } from "./cost.ts";
 import { Duration, delay } from "./durations.ts";
 import {
   InvalidArgument,
@@ -13,14 +15,29 @@ import {
   WaitTimeout,
 } from "./errors.ts";
 import { checkKey, checkName } from "./names.ts";
+import { ObserverRaised } from "./observe.ts";
 import { outcomeOf, type runPlan } from "./plan.ts";
-import { decodeValue, encodeJson, jsonValue, layout, plan } from "./proto.ts";
+import {
+  decodeValue,
+  encodeJson,
+  failureFrom,
+  jsonValue,
+  layout,
+  parseJson,
+  plan,
+} from "./proto.ts";
 import { RETENTION_MIN } from "./settings.ts";
 import { resultCreated } from "./stores/s3.ts";
 import { type Store, StoreFailure } from "./stores/store.ts";
 import type { AnyWorkflow } from "./workflow.ts";
 
 export type RunStatus = "pending" | "running" | "suspended" | "completed" | "failed" | "cancelled";
+
+const ENDS = new Map<layout.Status, RunStatus>([
+  [layout.Status.COMPLETED, "completed"],
+  [layout.Status.FAILED, "failed"],
+  [layout.Status.CANCELLED, "cancelled"],
+]);
 
 const STATUSES: (RunStatus | undefined)[] = [
   undefined,
@@ -32,12 +49,38 @@ const STATUSES: (RunStatus | undefined)[] = [
   "cancelled",
 ];
 
+/** An event of a run's history, as its replay reads it. */
+export interface HistoryEvent {
+  /** The run whose segment recorded it: the chain's last run, or a failed run it resumes. */
+  readonly run: string;
+  readonly segment: number;
+  /** When its segment was committed. */
+  readonly at: Date;
+  /** `step`, `step_retry`, `step_failed`, `timer`, `fired`, `message`, `child`, `sent`,
+   * `published`, `budget_exceeded`, `completed`, `failed`, `cancelled` or `continued`. */
+  readonly kind: string;
+  /** Its fields: times in RFC 3339, failures as `{type, message, retryable, details}`, values as
+   * the code gave them, raw bytes as `{$bytes: <base64>}`. */
+  readonly data: Record<string, unknown>;
+}
+
+function historyEvent(event: plan.HistoryEvent): HistoryEvent {
+  if (event.at === undefined) throw new ProtocolError(`event of ${event.run} without its time`);
+  return {
+    run: event.run,
+    segment: Number(event.segment),
+    at: new Date(Number(event.at.ms)),
+    kind: event.kind,
+    data: parseJson(event.data) as Record<string, unknown>,
+  };
+}
+
 /** What a handle needs of its namespace. */
 export interface Namespace {
-  readonly partitions: number;
   readonly store: Store;
   plan(input: plan.PlanInput): ReturnType<typeof runPlan>;
-  wake(): void;
+  /** Wakes the workers of this process serving `workflow`. */
+  wake(workflow: string): void;
   /** Rejected with the error of the next worker of the namespace that dies. */
   died(): Promise<never>;
   now(): layout.Time;
@@ -63,6 +106,7 @@ async function created(
   try {
     await resultCreated(store, key, deadline, signal);
   } catch (e) {
+    if (e instanceof ObserverRaised) throw e.error;
     throw e instanceof StoreFailure ? new StoreError(e.message) : e;
   }
 }
@@ -72,9 +116,26 @@ export interface SendOptions {
   readonly id?: string;
 }
 
+export interface RetryOptions {
+  /** The retry's budget; the failed run's when not given. */
+  readonly budget?: Budget;
+}
+
 export interface ResultOptions {
   /** `WaitTimeout` once it passes first. */
   readonly timeout?: Duration;
+  /** The longest wait between two polls, whose interval doubles up to it, 30 s when not given;
+   * a store whose listings wait does not poll. */
+  readonly maxInterval?: Duration;
+}
+
+/** The longest wait between two polls of `result`, in ms. */
+export function maxIntervalMs(maxInterval: unknown): number {
+  if (maxInterval === undefined) return 30_000;
+  if (!(maxInterval instanceof Duration) || maxInterval.ms <= 0) {
+    throw new InvalidArgument(`maxInterval is a positive Duration, not ${maxInterval}`);
+  }
+  return maxInterval.ms;
 }
 
 function text(value: unknown, what: string): string {
@@ -137,7 +198,6 @@ export class Run<O = unknown> {
     const ord = this.#ns.ulid(Number(at.ms));
     const send = {
       prefix: "",
-      partitions: this.#ns.partitions,
       chain,
       name: checkName("message name", name),
       value: jsonValue(encodeJson(value, "the message")),
@@ -156,7 +216,6 @@ export class Run<O = unknown> {
     const ord = this.#ns.ulid(Number(at.ms));
     const cancel = {
       prefix: "",
-      partitions: this.#ns.partitions,
       chain,
       reason: why,
       id: ord,
@@ -170,10 +229,14 @@ export class Run<O = unknown> {
     const sent = outcomeOf("send", await this.#ns.plan(input), "sent").sent;
     switch (sent.case) {
       case "accepted":
-        this.#ns.wake();
+        this.#ns.wake(sent.value.workflow);
         return;
-      case "refused":
-        throw new RunEnded(`run ${sent.value.run} has ended`);
+      case "refused": {
+        const how = ENDS.get(sent.value.status);
+        if (how === undefined)
+          throw new ProtocolError(`send refused by a run ${sent.value.status}`);
+        throw new RunEnded(`run ${sent.value.run} has ended, ${how}`);
+      }
       case "noChain":
         throw this.#notFound(sent.value);
       case "failed":
@@ -186,7 +249,6 @@ export class Run<O = unknown> {
   async status(): Promise<RunStatus> {
     const value = {
       prefix: "",
-      partitions: this.#ns.partitions,
       chain: checkKey("run id", this.chain),
       now: this.#ns.now(),
     };
@@ -203,7 +265,6 @@ export class Run<O = unknown> {
   async read<T = unknown>(key: string): Promise<T | undefined> {
     const value = {
       prefix: "",
-      partitions: this.#ns.partitions,
       chain: checkKey("run id", this.chain),
       key: checkKey("published key", key),
     };
@@ -215,18 +276,61 @@ export class Run<O = unknown> {
     return decodeValue(read.value) as T;
   }
 
+  /** The events of the chain's last run as its replay reads them, a retry's including those of
+   * the failed run it resumes. */
+  async history(): Promise<HistoryEvent[]> {
+    const value = { prefix: "", chain: checkKey("run id", this.chain) };
+    const input = create(plan.PlanInputSchema, { plan: { case: "history", value } });
+    const history = outcomeOf("history", await this.#ns.plan(input), "history").history;
+    if (history.case === "noChain") throw this.#notFound(history.value);
+    if (history.case === "failed") throw new StoreError(history.value.message);
+    if (history.case !== "events") throw new ProtocolError("empty history outcome");
+    return history.value.events.map(historyEvent);
+  }
+
+  /** Retries the chain's last run, which failed: a new run replays its history without the
+   * failure, so its successful steps keep their values and the failed step runs again. It keeps
+   * the failed run's budget and its cost so far, unless `budget` gives another; a second retry of
+   * the same failed run with another budget is `InvalidArgument`. */
+  async retry(options: RetryOptions = {}): Promise<void> {
+    onlyOptions(options, ["budget"], "retry");
+    const value = {
+      prefix: "",
+      chain: checkKey("run id", this.chain),
+      now: this.#ns.now(),
+      ...(options.budget === undefined ? {} : { budget: budgetProto(options.budget) }),
+    };
+    const input = create(plan.PlanInputSchema, { plan: { case: "retry", value } });
+    const retried = outcomeOf("retry", await this.#ns.plan(input), "retried").retried;
+    switch (retried.case) {
+      case "created":
+      case "existing":
+        this.#ns.wake(retried.value.workflow);
+        return;
+      case "notRetryable":
+        throw new InvalidArgument(retried.value.message);
+      case "noChain":
+        throw this.#notFound(retried.value);
+      case "failed":
+        throw new StoreError(retried.value.message);
+      default:
+        throw new ProtocolError("empty retry outcome");
+    }
+  }
+
   /** The value the chain ended with, waited for through its continuations; throws `RunFailed`
    * if it failed or was cancelled, and the error of a worker of this namespace that dies
-   * meanwhile. */
+   * meanwhile. Polls double their interval up to `maxInterval`. */
   async result(options: ResultOptions = {}): Promise<O> {
-    onlyOptions(options, ["timeout"], "result");
+    onlyOptions(options, ["timeout", "maxInterval"], "result");
     const { timeout } = options;
     if (timeout !== undefined && !(timeout instanceof Duration)) {
       throw new InvalidArgument(`timeout is a Duration, not ${timeout}`);
     }
+    const cap = maxIntervalMs(options.maxInterval);
     const deadline = timeout === undefined ? undefined : performance.now() + timeout.ms;
     const died = this.#ns.died();
-    let wait = 10;
+    let wait = Math.min(10, cap);
     let last: string | undefined;
     let followed = performance.now();
     for (;;) {
@@ -247,7 +351,7 @@ export class Run<O = unknown> {
       const ends = [pause.promise, died];
       if (store.capabilities.wait)
         ends.push(created(store, ended.resultKey, performance.now() + held, settled.signal));
-      else wait = Math.min(wait * 2, 30_000);
+      else wait = Math.min(wait * 2, cap);
       try {
         await Promise.race(ends);
       } finally {
@@ -262,7 +366,6 @@ export class Run<O = unknown> {
   async #ended(last: string | undefined): Promise<Ended> {
     const value = {
       prefix: "",
-      partitions: this.#ns.partitions,
       chain: checkKey("run id", this.chain),
       run: last,
     };
@@ -284,9 +387,8 @@ export class Run<O = unknown> {
     if (r === undefined) throw new ProtocolError(`ended ${run} without its result`);
     if (r.status === layout.Status.COMPLETED) return { done: true, value: decodeValue(r.value) };
     if (r.status === layout.Status.FAILED && r.error !== undefined) {
-      const { type, message, retryable, details } = r.error;
-      const cause = runFailedCause(type, details === undefined ? undefined : decodeValue(details));
-      throw new RunFailed(run, "failed", { type, message, retryable }, cause);
+      const error = failureFrom(r.error);
+      throw new RunFailed(run, "failed", error, runFailedCause(error.type, error.details));
     }
     if (r.status === layout.Status.CANCELLED) {
       const failure = { type: "Cancelled", message: r.reason, retryable: false };

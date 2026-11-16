@@ -1,11 +1,12 @@
 """Retention on every store, on the real clock: the collection's deletes and the tombstone,
 with retention and tombstone shortened through the settings a worker does not take publicly."""
 
+import asyncio
 import dataclasses
 from datetime import timedelta
 
 import pytest
-from conftest import LONG, eventually
+from conftest import LONG, Recording, eventually
 
 import substantial as s
 from substantial import Substantial
@@ -30,7 +31,11 @@ async def keys(store: Store, prefix: str) -> list[str]:
 
 
 async def test_a_run_is_collected_and_its_id_taken_until_the_tombstone_ends(store: Store) -> None:
-    sub = await Substantial._create(store, partitions=1)
+    # The tombstone's end held until the checks made during it are done.
+    released = asyncio.Event()
+    recording = Recording(store)
+    recording.hold_delete = ("runs/q/gone", released)
+    sub = await Substantial._create(recording)
     preset = Settings.preset("script", waiting_store=store.capabilities.wait)
     settings = dataclasses.replace(preset, max_idle=timedelta(milliseconds=50), **SHORT)
     async with sub._worker([quick], settings):
@@ -40,13 +45,16 @@ async def test_a_run_is_collected_and_its_id_taken_until_the_tombstone_ends(stor
         async def collected() -> bool:
             return await keys(store, "runs/q/") == ["runs/q/gone"]
 
-        await eventually("the collection", collected, within=10)
-        with pytest.raises(s.RunNotFound) as e:
-            await run.status()
-        assert e.value.collected
-        with pytest.raises(s.RunExists) as exists:
-            await sub.start(quick, id="q")
-        assert exists.value.collected
+        try:
+            await eventually("the collection", collected, within=10)
+            with pytest.raises(s.RunNotFound) as e:
+                await run.status()
+            assert e.value.collected
+            with pytest.raises(s.RunExists) as exists:
+                await sub.start(quick, id="q")
+            assert exists.value.collected
+        finally:
+            released.set()
 
         async def ended() -> bool:
             return await keys(store, "runs/q/") == []

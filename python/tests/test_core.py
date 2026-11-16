@@ -37,6 +37,11 @@ def test_invalid_machines_answer_every_call_with_their_error() -> None:
     for kind, data in [(9, b""), (Kind.AGENT, b"\xff\xff"), (Kind.AGENT, b"")]:
         machine = core.new_machine(kind, data)
         assert machine != 0, "sub_new never returns 0"
+        refused = core.refused(machine)
+        assert refused is not None, "refused"
+        response = agent.AgentResponse()
+        response.ParseFromString(refused)
+        assert response.WhichOneof("response") == "error"
         first = agent_error(core, machine, next_request())
         assert agent_error(core, machine, next_request()) == first
         core.drop_machine(machine)
@@ -44,7 +49,6 @@ def test_invalid_machines_answer_every_call_with_their_error() -> None:
 
 def config() -> agent.AgentConfig:
     return agent.AgentConfig(
-        partitions=1,
         worker="w",
         workflows=[agent.Served(name="w", unversioned=True)],
         concurrency=1,
@@ -62,7 +66,7 @@ def config() -> agent.AgentConfig:
         recheck_ms=86_400_000,
         settings=run.RunSettings(
             continue_as_new_after_segments=1000,
-            retention=run.Retention(forever=boundary.Empty()),
+            retention=run.Retention(ms=3_600_000),
         ),
     )
 
@@ -70,6 +74,7 @@ def config() -> agent.AgentConfig:
 def test_undecodable_requests_and_unknown_machines_are_errors() -> None:
     core = Core.new()
     machine = core.new_machine(Kind.AGENT, config().SerializeToString())
+    assert core.refused(machine) is None, "a machine made"
     invalid = boundary.ERROR_KIND_INVALID
     assert agent_error(core, machine, b"\xff\xff\xff").kind == invalid
     response = agent.AgentResponse()
@@ -81,10 +86,10 @@ def test_undecodable_requests_and_unknown_machines_are_errors() -> None:
 
 
 def test_core_errors_map_to_host_errors() -> None:
-    machine = AgentMachine(Core.new(), agent.AgentConfig())
     with pytest.raises(CoreError) as raised:
-        machine.next(layout.Time(ms=0))
-    assert raised.value.kind == "INVALID"
+        AgentMachine(Core.new(), agent.AgentConfig())
+    assert raised.value.kind == "INVALID", "refused where it is made"
+    machine = AgentMachine(Core.new(), config())
     machine.close()
     machine.close()
     kinds = {

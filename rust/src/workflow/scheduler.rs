@@ -31,6 +31,27 @@ pub(crate) struct StepSpec {
 pub(crate) type Handler = Box<dyn FnMut(&b::Message) -> Result<(), Failure> + Send>;
 type Predicate = Box<dyn Fn() -> bool + Send>;
 
+/// The messages of one name delivered so far and the receives of it made, for a `receive` with a
+/// timeout.
+#[derive(Default)]
+pub(crate) struct Receives {
+    pub(crate) delivered: u64,
+    pub(crate) taken: u64,
+    pub(crate) bound: bool,
+    // Receives pending without and with a timeout: never both at once.
+    pub(crate) plain: u64,
+    pub(crate) timed: u64,
+}
+
+/// A step call pending: what its attempts run, its name and step key, and its attempts in all.
+#[derive(Clone)]
+pub(crate) struct PendingStep {
+    pub(crate) body: StepBody,
+    pub(crate) name: String,
+    pub(crate) key: String,
+    pub(crate) max_attempts: u32,
+}
+
 #[derive(Default)]
 struct Slot {
     result: Option<Result<Option<layout::Value>>>,
@@ -40,13 +61,14 @@ struct Slot {
 struct State {
     machine: RunMachine,
     slots: HashMap<u64, Slot>,
-    /// The steps pending, with their name and step key.
-    steps: HashMap<u64, (StepBody, String, String)>,
+    /// The steps pending.
+    steps: HashMap<u64, PendingStep>,
     /// The undos of every step call of the replay, by call.
     undos: HashMap<u64, UndoSpec>,
     /// The children whose end the core consumed, by run.
     ended: HashSet<String>,
     handlers: HashMap<String, Vec<Handler>>,
+    receives: HashMap<String, Arc<Mutex<Receives>>>,
     waits: Vec<(u64, Predicate)>,
     /// A core error met by a call of the code: the replay cannot go on.
     fatal: Option<String>,
@@ -55,6 +77,9 @@ struct State {
     diverged: Option<String>,
     /// A failure outside the code's reach, a handler's: the run fails with it.
     code_failure: Option<Failure>,
+    /// The core's details of each `StepFailed` it resolved a step with, by the failure and its
+    /// cause, which the run's end carries as they are: a retry reads the failed step from them.
+    step_failures: Vec<(Failure, Failure, layout::Value)>,
 }
 
 /// What the code and the replay driver share for one replay.
@@ -62,6 +87,9 @@ pub(crate) struct Shared {
     state: Mutex<State>,
     clock: Clock,
     run: String,
+    /// The first run of the run's line of retries, else the run: the step keys of a retry stay
+    /// those of the failed run it resumes, so that a half-done effect keeps its idempotency key.
+    line: String,
     chain: String,
     input: Vec<u8>,
     /// The timeout of the steps and undos that set none: the workflow's, else the worker's.
@@ -75,12 +103,15 @@ impl Shared {
     pub(crate) fn new(
         machine: RunMachine,
         clock: Clock,
-        run: String,
+        run_input: &b::RunInput,
         chain: String,
         input: Vec<u8>,
-        recorded: bool,
         step_timeout: std::time::Duration,
     ) -> Arc<Self> {
+        let run = run_input.run.clone();
+        let line = (run_input.start.as_ref())
+            .and_then(|start| start.line.clone())
+            .unwrap_or_else(|| run.clone());
         let state = State {
             machine,
             slots: HashMap::new(),
@@ -88,19 +119,22 @@ impl Shared {
             undos: HashMap::new(),
             ended: HashSet::new(),
             handlers: HashMap::new(),
+            receives: HashMap::new(),
             waits: Vec::new(),
             fatal: None,
             diverged: None,
             code_failure: None,
+            step_failures: Vec::new(),
         };
         Arc::new(Self {
             state: Mutex::new(state),
             clock,
             run,
+            line,
             chain,
             input,
             step_timeout,
-            live: AtomicBool::new(!recorded),
+            live: AtomicBool::new(run_input.history.is_empty()),
         })
     }
 
@@ -155,7 +189,9 @@ impl Shared {
                 | Call::Bind(_)
                 | Call::Start(_)
                 | Call::ChildResult(_)
+                | Call::ChainResult(_)
                 | Call::Send(_)
+                | Call::Cancel(_)
                 | Call::Publish(_)
                 | Call::Iterate(_)
         );
@@ -176,6 +212,10 @@ impl Shared {
                     (Some(called), occurrence) => Ok((called, occurrence, a.live)),
                 });
         match answer {
+            Ok((Called::Failed(failure), _, live)) => {
+                self.live.store(live, Ordering::Relaxed);
+                Err(Error::from(failure))
+            }
             Ok((called, occurrence, live)) => {
                 self.live.store(live, Ordering::Relaxed);
                 Ok((called, occurrence))
@@ -202,12 +242,21 @@ impl Shared {
     /// Makes a step call: a pending one keeps its body, its undo and its step key.
     fn call_step(&self, step: b::call::Step, spec: StepSpec) -> Result<Called> {
         let name = step.name.clone();
+        // A step without a retry policy has one attempt (I-6).
+        let retry = step.options.as_ref().and_then(|o| o.retry.as_ref());
+        let max_attempts = retry.map_or(1, |r| r.max_attempts);
         let (called, occurrence) = self.call_full(b::call::Call::Step(step))?;
         let occurrence = occurrence.expect("call_full checks that a step has its occurrence");
         if let Called::Pending(id) = called {
-            let key = format!("{}/{name}/{occurrence}", self.run);
+            let key = format!("{}/{name}/{occurrence}", self.line);
             let mut state = self.lock();
-            state.steps.insert(id, (spec.body, name, key));
+            let pending = PendingStep {
+                body: spec.body,
+                name,
+                key,
+                max_attempts,
+            };
+            state.steps.insert(id, pending);
             if let Some(undo) = spec.undo {
                 state.undos.insert(id, undo);
             }
@@ -248,11 +297,15 @@ impl Shared {
         self.lock().handlers.entry(name).or_default().push(handler);
     }
 
+    pub(crate) fn receives(&self, name: &str) -> Arc<Mutex<Receives>> {
+        (self.lock().receives.entry(name.to_owned()).or_default()).clone()
+    }
+
     pub(crate) fn add_wait(&self, call: u64, predicate: Predicate) {
         self.lock().waits.push((call, predicate));
     }
 
-    pub(crate) fn step_body(&self, call: u64) -> Option<(StepBody, String, String)> {
+    pub(crate) fn step_body(&self, call: u64) -> Option<PendingStep> {
         self.lock().steps.get(&call).cloned()
     }
 
@@ -287,9 +340,13 @@ impl Shared {
     }
 
     pub(crate) fn resolve(&self, r: b::next::Resolve) -> Result<()> {
+        let mut details = None;
         let result = match r.resolution.and_then(|r| r.resolution) {
             Some(resolution::Resolution::Value(v)) => Ok(Some(v)),
-            Some(resolution::Resolution::Error(f)) => Err(Error::from(f)),
+            Some(resolution::Resolution::Error(f)) => {
+                details = f.details.clone();
+                Err(Error::from(f))
+            }
             Some(resolution::Resolution::Cancelled(reason)) => Err(Error::Cancelled(reason)),
             None => {
                 return Err(Error::Protocol(format!(
@@ -299,6 +356,9 @@ impl Shared {
             }
         };
         let mut state = self.lock();
+        if let (Err(Error::StepFailed { error, cause }), Some(details)) = (&result, details) {
+            (state.step_failures).push((error.clone(), (**cause).clone(), details));
+        }
         state.steps.remove(&r.call);
         state.waits.retain(|(call, _)| *call != r.call);
         let slot = state
@@ -312,23 +372,33 @@ impl Shared {
         Ok(())
     }
 
+    /// The core's details of the `StepFailed` it resolved a step with, `None` for one the code
+    /// made itself.
+    pub(crate) fn step_failure(&self, error: &Failure, cause: &Failure) -> Option<layout::Value> {
+        let state = self.lock();
+        (state.step_failures.iter().rev())
+            .find(|(e, c, _)| e == error && c == cause)
+            .map(|(_, _, details)| details.clone())
+    }
+
     pub(crate) fn step_ended(
         &self,
         call: u64,
         attempt: u32,
         outcome: b::outcome::Outcome,
+        charges: Vec<layout::Amount>,
     ) -> Result<()> {
         self.lock()
             .machine
-            .step_ended(call, attempt, outcome, self.now())
+            .step_ended(call, attempt, outcome, charges, self.now())
     }
 
-    pub(crate) fn stored(&self, result: b::op_result::Result) -> Result<()> {
+    pub(crate) fn stored(&self, result: b::OpResult) -> Result<()> {
         self.lock().machine.stored(result)
     }
 
-    pub(crate) fn arrived(&self, messages: Vec<b::InboxMessage>) -> Result<()> {
-        self.lock().machine.arrived(messages)
+    pub(crate) fn arrived(&self, messages: Vec<b::InboxMessage>, cost: layout::Cost) -> Result<()> {
+        self.lock().machine.arrived(messages, cost)
     }
 
     pub(crate) fn next(&self) -> Result<Next> {

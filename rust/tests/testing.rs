@@ -238,12 +238,16 @@ async fn a_client_shares_the_namespace_and_the_clock() {
         .id("from-a-client")
         .await
         .unwrap();
-    // No worker of the client: the environment's finds the run at its next scan, at 30 s.
-    env.advance(seconds(19)).await.unwrap();
+    // No worker of the client: the environment's finds the run at its next scan, within
+    // `max_idle`, 30 s.
     assert_eq!(run.status().await.unwrap(), RunStatus::Pending);
-    env.advance(seconds(1)).await.unwrap();
+    env.advance(seconds(30)).await.unwrap();
     let ended = env.run(napping(), "from-a-client").result().await.unwrap();
-    assert_eq!(ended, iso(t0() + seconds(30)));
+    let ended = DateTime::parse_from_rfc3339(&ended).unwrap().to_utc();
+    assert!(
+        ended > t0() + seconds(10) && ended <= t0() + seconds(40),
+        "{ended}"
+    );
     assert_eq!(run.status().await.unwrap(), RunStatus::Completed);
     worker.shutdown().await.unwrap();
     let other = env.client().await.unwrap();
@@ -356,4 +360,56 @@ async fn stuck_names_a_message_and_a_workflow_no_worker_serves() {
     stuck(parent.result().await, "the-child");
     worker.shutdown().await.unwrap();
     done(env).await;
+}
+
+#[tokio::test]
+async fn result_takes_max_interval_and_checks_it() {
+    let env = env().await;
+    let worker = env
+        .worker(napping())
+        .preset(Preset::Service)
+        .start()
+        .unwrap();
+    let run = env.start(napping(), json!({ "days": 0 })).await.unwrap();
+    let ended = run.result().max_interval(seconds(1)).await.unwrap();
+    assert_eq!(ended, iso(t0()));
+    let refused = run.result().max_interval(seconds(0)).await;
+    assert!(
+        matches!(&refused, Err(Error::InvalidArgument(m)) if m.contains("max_interval")),
+        "{refused:?}"
+    );
+    worker.shutdown().await.unwrap();
+    done(env).await;
+}
+
+/// Python's event loop is a tokio runtime here: a call from a thread with a runtime of its own.
+#[tokio::test]
+async fn a_call_from_another_event_loop_names_both_loops() {
+    let env = Arc::new(env().await);
+    let another = || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    };
+    let e = env.clone();
+    let started = tokio::task::spawn_blocking(move || {
+        another().block_on(async { e.start(napping(), json!({ "days": 1 })).await })
+    })
+    .await
+    .unwrap();
+    assert!(
+        matches!(&started, Err(Error::InvalidArgument(m))
+            if m.contains("opened on the tokio runtime") && m.contains("called from the tokio runtime")),
+        "{started:?}"
+    );
+    let e = env.clone();
+    let settled = tokio::task::spawn_blocking(move || another().block_on(e.settle()))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&settled, Err(Error::InvalidArgument(m)) if m.contains("a task the test spawns")),
+        "{settled:?}"
+    );
+    done(Arc::into_inner(env).unwrap()).await;
 }

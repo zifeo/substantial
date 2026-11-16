@@ -10,7 +10,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde_json::json;
 use substantial::__internal::{self as internal, MemoryStore, Store};
 use substantial::testing::Env;
-use substantial::{Error, FOREVER, Preset, RunStatus, Workflow, days, hours, minutes};
+use substantial::{Error, Preset, RunStatus, Workflow, days, hours, minutes};
 
 fn t0() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2030, 1, 7, 9, 0, 0).unwrap()
@@ -31,10 +31,6 @@ fn quick() -> Workflow<u32> {
 
 fn kept() -> Workflow<u32> {
     Workflow::without_input("kept", |_c| async { Ok(2) }).with_retention(days(90))
-}
-
-fn forever() -> Workflow<u32> {
-    Workflow::without_input("forever", |_c| async { Ok(3) }).with_retention(FOREVER)
 }
 
 /// Continues as new at every iteration, `n` times, then ends with the count.
@@ -185,26 +181,6 @@ async fn a_workflow_retention_overrides_the_workers() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn forever_keeps_a_run() {
-    let env = env().await;
-    let worker = env
-        .worker((quick(), forever()))
-        .preset(Preset::Script)
-        .set("retention", FOREVER)
-        .start()
-        .unwrap();
-    let q = env.start(quick(), ()).id("q").await.unwrap();
-    let f = env.start(forever(), ()).id("f").await.unwrap();
-    assert_eq!(q.result().await.unwrap(), 1);
-    assert_eq!(f.result().await.unwrap(), 3);
-    env.advance(days(400)).await.unwrap();
-    assert_eq!(q.status().await.unwrap(), RunStatus::Completed);
-    assert_eq!(f.result().await.unwrap(), 3);
-    worker.shutdown().await.unwrap();
-    done(env).await;
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn a_long_lived_chain_keeps_a_bounded_number_of_runs() {
     let env = env().await;
     let worker = env
@@ -299,7 +275,7 @@ async fn a_retention_over_100_years_is_a_config_error() {
         let long = Workflow::without_input("long", |_c| async { Ok(1) }).with_retention(retention);
         let refused = env.worker(long).preset(Preset::Script).start();
         assert!(
-            matches!(&refused, Err(Error::ConfigError(m)) if m.contains("at most 3153600000000 ms or forever")),
+            matches!(&refused, Err(Error::ConfigError(m)) if m.contains("at most 3153600000000 ms, ")),
             "{retention:?}"
         );
     }
@@ -357,7 +333,7 @@ async fn a_send_to_a_collected_chain_raises_run_not_found() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_result_wait_follows_its_chain_again_and_sees_it_collected() {
     let store: Arc<dyn Store> = Arc::new(MemoryStore::open("retention-refollow").unwrap());
-    let sub = internal::create(store.clone()).partitions(1).await.unwrap();
+    let sub = internal::create(store.clone()).await.unwrap();
     let run = sub.start(quick(), ()).id("q").await.unwrap();
     let wait = internal::refollow(run.result(), Duration::from_millis(50));
     let wait = tokio::spawn(wait.timeout(Duration::from_secs(10)).into_future());

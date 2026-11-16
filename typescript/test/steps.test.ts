@@ -35,7 +35,7 @@ async function slow(c: Context, timeout?: number): Promise<string> {
 }
 
 test("a step's own timeout wins, then its workflow's, then its worker's", async () => {
-  const sub = await Substantial.create(`memory://steps-${token()}`, { partitions: 1 });
+  const sub = await Substantial.create(`memory://steps-${token()}`);
   const fromWorker = workflow("from-worker", async (c: Context) => slow(c));
   const fromWorkflow = workflow("from-workflow", async (c: Context) => slow(c), {
     stepTimeout: seconds(5),
@@ -65,7 +65,7 @@ test("a workflow's stepTimeout is a positive Duration", () => {
 });
 
 test("StepFailed holds the failure of the step's last attempt", async () => {
-  const sub = await Substantial.create(`memory://steps-${token()}`, { partitions: 1 });
+  const sub = await Substantial.create(`memory://steps-${token()}`);
   const causes = workflow("causes", async (c: Context) => {
     const seen: unknown[] = [];
     const steps: [string, () => unknown, { timeout?: ReturnType<typeof milliseconds> }][] = [
@@ -98,7 +98,7 @@ test("StepFailed holds the failure of the step's last attempt", async () => {
 });
 
 test("a failed run holds the cause of the step that failed it", async () => {
-  const sub = await Substantial.create(`memory://causes-${token()}`, { partitions: 1 });
+  const sub = await Substantial.create(`memory://causes-${token()}`);
   const paying = workflow("paying", async (c: Context) => {
     await c.step("charge", () => {
       throw new CardDeclined("card declined");
@@ -155,7 +155,7 @@ test("a StepFailed without the failure it wraps is the core's bug", () => {
 
 test("a timed-out async step is interrupted", async () => {
   const reached: string[] = [];
-  const sub = await Substantial.create(`memory://hang-${token()}`, { partitions: 1 });
+  const sub = await Substantial.create(`memory://hang-${token()}`);
   const hanging = workflow("hanging", async (c: Context) => {
     try {
       await c.step(
@@ -188,7 +188,7 @@ test("a timed-out async step is interrupted", async () => {
 
 test("an uninterruptible step runs to its end with its outcome dropped", async () => {
   const finished: string[] = [];
-  const sub = await Substantial.create(`memory://block-${token()}`, { partitions: 1 });
+  const sub = await Substantial.create(`memory://block-${token()}`);
   const blocking = workflow("blocking", async (c: Context) => {
     return await c.step(
       "block",

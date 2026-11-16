@@ -8,10 +8,12 @@ from the loop's thread. The code of each replay runs on a loop of its own that t
 
 from substantial import testing
 from substantial.child import Child
-from substantial.client import Run, RunStatus, Substantial
+from substantial.client import HistoryEvent, Run, RunInfo, RunStatus, Substantial
 from substantial.context import Context
+from substantial.cost import Amount, Cost, Meters, Prices
 from substantial.durations import days, hours, minutes, seconds
 from substantial.errors import (
+    BudgetExceeded,
     Cancelled,
     ConfigError,
     ContinuedAsNew,
@@ -34,41 +36,55 @@ from substantial.errors import (
     ValueTooLarge,
     WaitTimeout,
 )
-from substantial.settings import FOREVER, ContinueAsNewAfter
-from substantial.step import Step, step, step_key
+from substantial.observe import Attempt, Observed, Replay, Scan, StoreOp
+from substantial.schedule import Cron
+from substantial.settings import ContinueAsNewAfter
+from substantial.step import Step, charge, step, step_key
 from substantial.stores import Credentials, Password
 from substantial.worker import Worker
 from substantial.workflow import Permanent, Retry, Workflow, workflow
 
 __all__ = [
-    "FOREVER",
+    "Amount",
+    "Attempt",
+    "BudgetExceeded",
     "Cancelled",
     "Child",
     "ConfigError",
     "Context",
     "ContinueAsNewAfter",
     "ContinuedAsNew",
+    "Cost",
     "Credentials",
+    "Cron",
     "Failed",
     "Failure",
+    "HistoryEvent",
     "InvalidArgument",
     "LayoutError",
+    "Meters",
     "NonDeterminism",
     "NotCompressible",
     "NotInWorkflow",
+    "Observed",
     "Password",
     "Permanent",
+    "Prices",
+    "Replay",
     "Retry",
     "RolledBack",
     "Run",
     "RunEnded",
     "RunExists",
     "RunFailed",
+    "RunInfo",
     "RunNotFound",
     "RunStatus",
+    "Scan",
     "Step",
     "StepFailed",
     "StoreError",
+    "StoreOp",
     "Substantial",
     "SubstantialError",
     "UndoFailed",
@@ -76,6 +92,7 @@ __all__ = [
     "WaitTimeout",
     "Worker",
     "Workflow",
+    "charge",
     "days",
     "hours",
     "minutes",

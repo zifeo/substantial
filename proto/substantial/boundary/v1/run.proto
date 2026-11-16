@@ -13,14 +13,27 @@ message RunSettings {
   uint64 dedup_window_ms = 4;
   // Required: recorded on the run's end segment.
   Retention retention = 5;
+  // The store's prices: the money of each store request counted for a run, by the agent and by the
+  // run machine (a workflow's send's reads). Absent, the requests are counted and no money is.
+  Prices prices = 6;
 }
 
-// How long a run is kept after its chain's last run ends, then collected.
+// One ISO 4217 currency and integer nano-units per 1,000 requests of each kind, each at most
+// 2^63-1; a request costs its share rounded up.
+message Prices {
+  string currency = 1;
+  uint64 create = 2;
+  uint64 get = 3;
+  uint64 list = 4;
+  uint64 delete = 5;
+}
+
+// How long a run is kept after its chain's last run ends, then collected: at least the agent's
+// retention_min_ms.
 message Retention {
-  oneof keep {
-    uint64 ms = 1;
-    Empty forever = 2;
-  }
+  reserved 2;
+  reserved "forever";
+  uint64 ms = 1;
 }
 
 message InboxMessage {
@@ -45,7 +58,11 @@ message RunInput {
   RunSettings settings = 10;
   // The namespace, whose keys a workflow's send reads its chain under (Next.store).
   string prefix = 11;
-  uint32 partitions = 12;
+  reserved 12;
+  reserved "partitions";
+  // The chain's cost as the agent knows it at the open: the last segment's, or the start's, and the
+  // requests of this wakeup so far.
+  layout.v1.Cost cost = 13;
 }
 
 message RetryPolicy {
@@ -99,12 +116,25 @@ message Call {
     optional uint32 version = 2;
     layout.v1.Value input = 3;
     optional string id = 4;
+    // The child's budget: the one c.start was given, else the child workflow's; absent, none.
+    layout.v1.Budget budget = 5;
   }
   message Send {
     string run = 1;
     string name = 2;
     layout.v1.Value value = 3;
     optional string id = 4;
+  }
+  // substantial.cancel holding reason, to a child this run started; answered and recorded as a send.
+  message Cancel {
+    string run = 1;
+    string reason = 2;
+  }
+  // The end of the chain `chain`, child or not (c.result): resolved with its value, RunFailed or
+  // RunNotFound; past timeout_ms, by the run's timer, with WaitTimeout. Never the run's own chain.
+  message ChainResult {
+    string chain = 1;
+    optional uint64 timeout_ms = 2;
   }
   message SagaEnd {
     uint64 saga = 1;
@@ -132,6 +162,10 @@ message Call {
     layout.v1.Value iterate = 17;
     Empty should_continue_as_new = 18;
     End end = 19;
+    // The chain's cost so far, recorded as now is.
+    Empty cost = 20;
+    Cancel cancel = 21;
+    ChainResult chain_result = 22;
   }
 }
 
@@ -164,6 +198,8 @@ message Called {
     Undos undos = 5;
     layout.v1.Value value = 6;
     Empty done = 7;
+    // The call raised this failure: BudgetExceeded for a child start or a send past the budget.
+    layout.v1.Failure failed = 10;
   }
   // Set for a step call: its occurrence, the one of its step key (I-6).
   optional uint64 occurrence = 8;
@@ -232,7 +268,8 @@ message Next {
     // A child's chain ended, its substantial.ended consumed: the run its start answered. The
     // child's result calls resolve after it.
     string child_ended = 7;
-    // A read of a workflow's send, of the chain it sends to, before the replay goes on: the host
+    // An operation of a workflow's send, reads of the chain it sends to, or of a c.result's
+    // registration, reads and the create of its watcher key, before the replay goes on: the host
     // performs it on the namespace's store and answers RunRequest.stored before the next `next`.
     // A store that fails after the adapter's retries drops the replay.
     StoreOp store = 9;
@@ -251,10 +288,14 @@ message RunRequest {
     uint32 attempt = 2;
     Outcome outcome = 3;
     layout.v1.Time now = 4;
+    // What the attempt charged (s.charge), in call order; the core sums them by currency.
+    repeated layout.v1.Amount charges = 5;
   }
   // The messages of AgentCommand.Committed.inbox.
   message Arrived {
     repeated InboxMessage messages = 1;
+    // AgentCommand.Committed.cost: sent after every progress commit won, messages or not.
+    layout.v1.Cost cost = 2;
   }
   oneof request {
     MakeCall call = 1;
@@ -262,7 +303,8 @@ message RunRequest {
     uint64 satisfied = 3;
     layout.v1.Time next = 4;
     Arrived arrived = 5;
-    // The answer to Next.store: bytes or missing for a get, a listing for a list; never failed.
+    // The answer to Next.store: bytes or missing for a get, a listing for a list, created or exists
+    // for a create; never failed.
     OpResult stored = 6;
   }
 }

@@ -6,15 +6,17 @@ import asyncio
 import json
 import time
 import weakref
-from collections.abc import Coroutine, Generator, Iterable
+from collections.abc import AsyncIterator, Coroutine, Generator, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Self
 
 from substantial._proto import json_value, layout, plan
-from substantial.child import input_object
+from substantial.child import effective_budget, input_object
 from substantial.clock import REAL, Clock
 from substantial.core import Core
+from substantial.cost import Prices, budget_proto
 from substantial.errors import (
     ConfigError,
     Failure,
@@ -30,7 +32,9 @@ from substantial.errors import (
     run_failed_cause,
 )
 from substantial.names import check_key, check_name, check_str
-from substantial.plan import outcome_of, run_plan, ulid
+from substantial.observe import Metering, Observe, ObserverRaised
+from substantial.plan import outcome_of, plan_steps, run_plan, ulid
+from substantial.schedule import Cron, check_config, config
 from substantial.scheduler import decode_json
 from substantial.settings import RETENTION_MIN, Settings
 from substantial.stores import Store, StoreFailure, open_store
@@ -38,6 +42,12 @@ from substantial.stores.credentials import CredentialsArg
 from substantial.stores.s3 import result_created
 from substantial.worker import Worker
 from substantial.workflow import Workflow, Workflows
+
+_ENDS = {
+    layout.STATUS_COMPLETED: "completed",
+    layout.STATUS_FAILED: "failed",
+    layout.STATUS_CANCELLED: "cancelled",
+}
 
 
 class RunStatus(StrEnum):
@@ -51,6 +61,56 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+@dataclass(frozen=True)
+class RunInfo:
+    """A live run of a workflow, as `Substantial.runs` lists it."""
+
+    chain: str
+    run: str
+    version: int | None
+    # Its earliest due time; `None` when it waits on messages alone.
+    due_at: datetime | None
+    # "start", "time" (a timer or a step's retry backoff), "inbox" (a message arrived, consumed
+    # at its next wakeup) or "message" (idle until one comes, no timer).
+    waiting_on: str
+
+
+@dataclass(frozen=True)
+class HistoryEvent:
+    """An event of a run's history, with the segment that recorded it."""
+
+    # The run of the segment: the chain's last run, or a failed run it resumes.
+    run: str
+    segment: int
+    # When the segment was committed.
+    at: datetime
+    kind: str
+    # The event's fields: times in RFC 3339, failures as {"type", "message", "retryable",
+    # "details"}, a value of raw bytes as {"$bytes": <base64>}.
+    data: dict[str, Any]
+
+
+_WAITING = {
+    plan.WAITING_START: "start",
+    plan.WAITING_TIME: "time",
+    plan.WAITING_INBOX: "inbox",
+    plan.WAITING_MESSAGE: "message",
+}
+
+
+def _run_info(info: plan.RunInfo) -> RunInfo:
+    waiting_on = _WAITING.get(info.waiting)
+    if waiting_on is None:
+        raise ProtocolError(f"run {info.run} waits on {info.waiting}")
+    return RunInfo(
+        chain=info.chain,
+        run=info.run,
+        version=info.version if info.HasField("version") else None,
+        due_at=_datetime(info.due_at) if info.HasField("due_at") else None,
+        waiting_on=waiting_on,
+    )
+
+
 def _encode(value: Any, what: str) -> bytes:
     try:
         return json.dumps(value, allow_nan=False).encode()
@@ -59,16 +119,17 @@ def _encode(value: Any, what: str) -> bytes:
 
 
 class Substantial:
-    """An opened namespace: the store, its partitions, and the workers of this process serving
-    it."""
+    """An opened namespace: the store, and the workers of this process serving it."""
 
-    def __init__(self, core: Core, store: Store, partitions: int, owned: bool) -> None:
+    def __init__(self, core: Core, store: Store, owned: bool, metering: Metering) -> None:
         self._core = core
+        # Observed already when there is an observer.
         self._store = store
         self._owned = owned
+        # Its prices and observer, which its workers take.
+        self._metering = metering
         self._clock: Clock = REAL
         self._ulid = ulid
-        self.partitions = partitions
         self._workers: weakref.WeakSet[Worker] = weakref.WeakSet()
         # The futures of the `result` waits in progress, given the error of a worker that dies.
         self._waits: set[asyncio.Future[BaseException]] = set()
@@ -86,32 +147,52 @@ class Substantial:
 
     @classmethod
     def create(
-        cls, url: str, *, partitions: int | None = None, credentials: CredentialsArg = None
+        cls,
+        url: str,
+        *,
+        credentials: CredentialsArg = None,
+        prices: Prices | None = None,
+        observe: Observe | None = None,
     ) -> Opening:
-        """Creates the namespace, or opens it if it exists with the same `partitions`, which
-        are required: `None` only stands for a missing argument, refused with `ConfigError`.
-        `await` it, or `async with` it to close it at the end."""
-        data = _create_plan(partitions)
-        return Opening(cls._opened(open_store(url, credentials), True, data))
+        """Creates the namespace, or opens it if it exists. `await` it, or `async with` it to
+        close it at the end. `prices` price the store's requests (I-27); `observe` is called with
+        each store operation, step attempt, replay and scan (I-29)."""
+        metering = Metering(prices, observe)
+        return Opening(cls._opened(open_store(url, credentials), True, _create_plan(), metering))
 
     @classmethod
-    def open(cls, url: str, *, credentials: CredentialsArg = None) -> Opening:
+    def open(
+        cls,
+        url: str,
+        *,
+        credentials: CredentialsArg = None,
+        prices: Prices | None = None,
+        observe: Observe | None = None,
+    ) -> Opening:
         """Opens the namespace; one that does not exist is a `LayoutError`. `await` it, or
-        `async with` it to close it at the end."""
-        return Opening(cls._opened(open_store(url, credentials), True, _open_plan()))
+        `async with` it to close it at the end. `prices` and `observe` as for `create`."""
+        metering = Metering(prices, observe)
+        return Opening(cls._opened(open_store(url, credentials), True, _open_plan(), metering))
 
     @classmethod
-    async def _create(cls, store: Store, *, partitions: int | None) -> Substantial:
+    async def _create(
+        cls, store: Store, *, prices: Prices | None = None, observe: Observe | None = None
+    ) -> Substantial:
         """`create` on a store object, which stays its caller's."""
-        return await cls._opened(store, False, _create_plan(partitions))
+        return await cls._opened(store, False, _create_plan(), Metering(prices, observe))
 
     @classmethod
-    async def _open(cls, store: Store) -> Substantial:
+    async def _open(
+        cls, store: Store, *, prices: Prices | None = None, observe: Observe | None = None
+    ) -> Substantial:
         """`open` on a store object, which stays its caller's."""
-        return await cls._opened(store, False, _open_plan())
+        return await cls._opened(store, False, _open_plan(), Metering(prices, observe))
 
     @classmethod
-    async def _opened(cls, store: Store, owned: bool, data: plan.PlanInput) -> Substantial:
+    async def _opened(
+        cls, store: Store, owned: bool, data: plan.PlanInput, metering: Metering
+    ) -> Substantial:
+        store = metering.wrap(store)
         try:
             try:
                 await store.open()
@@ -127,14 +208,14 @@ class Substantial:
             if owned:
                 await store.close()
             raise
-        return cls(core, store, value, owned)
+        return cls(core, store, owned, metering)
 
     def worker(
         self, workflows: Iterable[Workflow[..., Any]], *, preset: str | None = None, **settings: Any
     ) -> Worker:
-        """A worker serving `workflows` on every partition, with the settings of `preset` and
-        these overrides; `async with` it, or `serve()` it. The preset is required: `None` only
-        stands for a missing argument, refused with `ConfigError`."""
+        """A worker serving `workflows`, with the settings of `preset` and these overrides;
+        `async with` it, or `serve()` it. The preset is required: `None` only stands for a
+        missing argument, refused with `ConfigError`."""
         if preset is None:
             raise ConfigError("a worker needs a preset, script or service")
         resolved = Settings.preset(preset, waiting_store=self._store.capabilities.wait)
@@ -145,9 +226,9 @@ class Substantial:
         worker = Worker(
             self._store,
             Workflows(workflows, settings.retention_min),
-            self.partitions,
             settings,
             self._worker_died,
+            self._metering,
         )
         self._workers.add(worker)
         return worker
@@ -163,8 +244,10 @@ class Substantial:
         input: dict[str, Any] | None = None,
         *,
         id: str | None = None,
+        budget: Mapping[str, int] | None = None,
     ) -> Run[R]:
-        """Starts a run of `workflow`, idempotently under `id`, a ULID when none is given."""
+        """Starts a run of `workflow`, idempotently under `id`, a ULID when none is given, with
+        `budget`, else its workflow's (I-28): the same id with another budget is `RunExists`."""
         if not isinstance(workflow, Workflow):
             raise InvalidArgument(f"start takes a workflow, not {workflow!r}")
         data_input = input_object(input)
@@ -173,20 +256,76 @@ class Substantial:
         chain = self._ulid(at.ms) if id is None else check_key("run id", id)
         data = plan.StartPlan(
             prefix="",
-            partitions=self.partitions,
             workflow=workflow.name,
             version=workflow.version,
             input=json_value(data_input),
             id=chain,
             now=at,
+            budget=effective_budget(budget, workflow),
         )
         case, value = outcome_of("start", *await self._plan(plan.PlanInput(start=data)), "started")
         if case == "run_exists":
             raise RunExists(chain, until=_collected_until(value))
         if case == "failed":
             raise StoreError(value.message)
-        self._wake_workers()
+        self._wake_workers(workflow.name)
         return self._handle(workflow, chain)
+
+    async def runs(self, workflow: Workflow[..., Any]) -> AsyncIterator[RunInfo]:
+        """The live runs of `workflow`, all its versions: pending, waiting on a timer or a retry
+        backoff, overdue, or waiting on messages. Ended runs are not listed."""
+        if not isinstance(workflow, Workflow):
+            raise InvalidArgument(f"runs takes a workflow, not {workflow!r}")
+        check_key("workflow name", workflow.name)
+        data = plan.RunsPlan(prefix="", workflow=workflow.name)
+        steps = plan_steps(self._core, self._store, plan.PlanInput(runs=data))
+        try:
+            async for step in steps:
+                case, value = outcome_of("runs", *step, "runs")
+                if case == "end":
+                    return
+                if case == "failed":
+                    raise StoreError(value.message)
+                for info in value.runs:
+                    yield _run_info(info)
+        finally:
+            await steps.aclose()
+
+    async def schedule[R](
+        self,
+        workflow: Workflow[..., R],
+        id: str,
+        cron: Cron | None,
+        *,
+        revision: int,
+        backfill: int = 5,
+    ) -> Run[R]:
+        """Configures the schedule of the run `id` of `workflow`, whose code loops on
+        `c.schedule()`: starts it if needed and sends it this config, applied only if `revision`
+        is higher than its own. `None` disables it. `backfill` is how many fires missed while no
+        worker ran fire when one does, the most recent ones, 5 unless given. A revision already
+        applied with the same config does nothing; a higher one applied, or the same with another
+        config, raises `ConfigError`."""
+        check_config(revision, cron, backfill)
+        wanted = config(revision, cron, backfill)
+        published = await self.run(workflow, id).read("schedule")
+        if published is not None:
+            applied = {k: published.get(k) for k in ("revision", "cron", "tz", "backfill")}
+            if applied["revision"] > revision:
+                raise ConfigError(
+                    f"schedule {id}: revision {applied['revision']} is applied already, "
+                    f"higher than {revision}"
+                )
+            if applied["revision"] == revision:
+                if applied == wanted:
+                    return self.run(workflow, id)
+                raise ConfigError(
+                    f"schedule {id}: revision {revision} is applied with another config, "
+                    f"{applied}, not {wanted}"
+                )
+        run = await self.start(workflow, id=id)
+        await run.send("schedule", wanted, id=f"schedule-{revision}")
+        return run
 
     def run[R](self, workflow: Workflow[..., R], id: str) -> Run[R]:
         """A handle on an existing chain."""
@@ -198,11 +337,11 @@ class Substantial:
     async def _plan(self, data: plan.PlanInput) -> tuple[str, object]:
         return await run_plan(self._core, self._store, data)
 
-    def _wake_workers(self) -> None:
-        """Wakes the workers of this process, which then list at once instead of after
-        `max_idle`."""
+    def _wake_workers(self, workflow: str) -> None:
+        """Wakes the workers of this process serving `workflow`, which then list its due
+        entries at once instead of after `max_idle`."""
         for worker in list(self._workers):
-            worker._wake()
+            worker._wake_workflow(workflow)
 
 
 class Opening:
@@ -224,11 +363,31 @@ class Opening:
         await self._sub.close()
 
 
+def _check_timeout(timeout: timedelta | None) -> None:
+    if timeout is not None and not isinstance(timeout, timedelta):
+        raise InvalidArgument(f"timeout is a timedelta, not {timeout!r}")
+    if timeout is not None and timeout < timedelta(0):
+        raise InvalidArgument(f"timeout is not negative: {timeout}")
+
+
+def _max_interval(max_interval: timedelta | None) -> float:
+    """The longest wait between two polls of `result`, in seconds."""
+    if max_interval is None:
+        return 30.0
+    if not isinstance(max_interval, timedelta) or max_interval <= timedelta(0):
+        raise InvalidArgument(f"max_interval is a positive timedelta, not {max_interval!r}")
+    return max_interval.total_seconds()
+
+
+def _datetime(at: layout.Time) -> datetime:
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=at.ms)
+
+
 def _collected_until(value: Any) -> datetime | None:
     """The `collected_until` of a `NoChain` or a `RunExists`."""
     if not value.HasField("collected_until"):
         return None
-    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=value.collected_until.ms)
+    return _datetime(value.collected_until)
 
 
 # A wait follows its chain from the first run again this often, as polling one run's `result`
@@ -236,13 +395,8 @@ def _collected_until(value: Any) -> datetime | None:
 REFOLLOW = RETENTION_MIN.total_seconds() / 2
 
 
-def _create_plan(partitions: int | None) -> plan.PlanInput:
-    if partitions is None:
-        raise ConfigError("create needs partitions, a positive whole number")
-    if isinstance(partitions, bool) or not isinstance(partitions, int) or partitions <= 0:
-        raise ConfigError(f"partitions must be a positive whole number, not {partitions!r}")
-    data = plan.CreatePlan(prefix="", partitions=partitions)
-    return plan.PlanInput(create=data)
+def _create_plan() -> plan.PlanInput:
+    return plan.PlanInput(create=plan.CreatePlan(prefix=""))
 
 
 def _open_plan() -> plan.PlanInput:
@@ -250,7 +404,8 @@ def _open_plan() -> plan.PlanInput:
 
 
 class Run[R]:
-    """A handle on a chain: `send`, `result`, `status` and `cancel` act on its last run."""
+    """A handle on a chain: `send`, `result`, `status`, `cancel`, `history` and `retry` act on its
+    last run."""
 
     def __init__(self, sub: Substantial, workflow: Workflow[..., R], chain: str) -> None:
         self._sub = sub
@@ -274,7 +429,6 @@ class Run[R]:
         ord = self._sub._ulid(at.ms)
         data = plan.SendPlan(
             prefix="",
-            partitions=self._sub.partitions,
             chain=self.chain,
             name=name,
             value=json_value(_encode(value, "the message")),
@@ -292,7 +446,6 @@ class Run[R]:
         ord = self._sub._ulid(at.ms)
         data = plan.CancelPlan(
             prefix="",
-            partitions=self._sub.partitions,
             chain=self.chain,
             reason=reason,
             id=ord,
@@ -304,9 +457,12 @@ class Run[R]:
     async def _sent(self, data: plan.PlanInput) -> None:
         case, value = outcome_of("send", *await self._sub._plan(data), "sent")
         if case == "accepted":
-            self._sub._wake_workers()
+            self._sub._wake_workers(value.workflow)
         elif case == "refused":
-            raise RunEnded(f"run {value.run} has ended")
+            how = _ENDS.get(value.status)
+            if how is None:
+                raise ProtocolError(f"send refused by a run {value.status}")
+            raise RunEnded(f"run {value.run} has ended, {how}")
         elif case == "no_chain":
             raise self._not_found(value)
         else:
@@ -314,9 +470,7 @@ class Run[R]:
 
     async def status(self) -> RunStatus:
         check_key("run id", self.chain)
-        data = plan.StatusPlan(
-            prefix="", partitions=self._sub.partitions, chain=self.chain, now=self._sub._clock.now()
-        )
+        data = plan.StatusPlan(prefix="", chain=self.chain, now=self._sub._clock.now())
         case, value = outcome_of(
             "status", *await self._sub._plan(plan.PlanInput(status=data)), "status"
         )
@@ -329,11 +483,58 @@ class Run[R]:
             raise ProtocolError("unspecified run status")
         return RunStatus(name)
 
+    async def history(self) -> list[HistoryEvent]:
+        """The events of the chain's last run as its replay reads them, a retried run's including
+        those of the failed run it resumes."""
+        check_key("run id", self.chain)
+        data = plan.HistoryPlan(prefix="", chain=self.chain)
+        case, value = outcome_of(
+            "history", *await self._sub._plan(plan.PlanInput(history=data)), "history"
+        )
+        if case == "no_chain":
+            raise self._not_found(value)
+        if case == "failed":
+            raise StoreError(value.message)
+        return [
+            HistoryEvent(
+                run=e.run,
+                segment=e.segment,
+                at=_datetime(e.at),
+                kind=e.kind,
+                data=json.loads(e.data),
+            )
+            for e in value.events
+        ]
+
+    async def retry(self, *, budget: Mapping[str, int] | None = None) -> None:
+        """Retries the chain's last run, which failed, keeping its recorded steps: the failed step
+        runs again with a fresh retry budget, the others return their recorded values. The retry
+        keeps the failed run's budget and its cost so far, unless `budget` gives another; a
+        second retry of the same failed run with another budget is `InvalidArgument`."""
+        check_key("run id", self.chain)
+        data = plan.RetryPlan(
+            prefix="",
+            chain=self.chain,
+            now=self._sub._clock.now(),
+            budget=None if budget is None else budget_proto(budget),
+        )
+        case, value = outcome_of(
+            "retry", *await self._sub._plan(plan.PlanInput(retry=data)), "retried"
+        )
+        if case in ("created", "existing"):
+            self._sub._wake_workers(value.workflow)
+        elif case == "not_retryable":
+            raise InvalidArgument(value.message)
+        elif case == "no_chain":
+            raise self._not_found(value)
+        else:
+            raise StoreError(value.message)
+
     async def read(self, key: str) -> Any:
         """The last value published under `key` by any run of the chain, or `None`."""
         check_key("run id", self.chain)
         check_key("published key", key)
-        data = plan.ReadPlan(prefix="", partitions=self._sub.partitions, chain=self.chain, key=key)
+        data = plan.ReadPlan(prefix="", chain=self.chain, key=key)
         case, value = outcome_of("read", *await self._sub._plan(plan.PlanInput(read=data)), "read")
         if case == "none":
             return None
@@ -341,16 +542,19 @@ class Run[R]:
             raise StoreError(value.message)
         return decode_json(value)
 
-    async def result(self, *, timeout: timedelta | None = None) -> R:
+    async def result(
+        self, *, timeout: timedelta | None = None, max_interval: timedelta | None = None
+    ) -> R:
         """The value the chain ended with, waited for through its continuations; raises
-        `RunFailed` if it failed or was cancelled, `WaitTimeout` when `timeout` passes first."""
-        if timeout is not None and not isinstance(timeout, timedelta):
-            raise InvalidArgument(f"timeout is a timedelta, not {timeout!r}")
+        `RunFailed` if it failed or was cancelled, `WaitTimeout` when `timeout` passes first.
+        Polls double their interval up to `max_interval`, 30 s unless given."""
+        _check_timeout(timeout)
+        cap = _max_interval(max_interval)
         died: asyncio.Future[BaseException] = asyncio.get_running_loop().create_future()
         self._sub._waits.add(died)
         try:
             async with asyncio.timeout(None if timeout is None else timeout.total_seconds()):
-                delay, last = 0.01, None
+                delay, last = min(0.01, cap), None
                 followed = time.monotonic()
                 while True:
                     if time.monotonic() - followed >= self._refollow:
@@ -364,7 +568,7 @@ class Run[R]:
                         await self._result_created(value.result_key, died, left)
                     else:
                         await asyncio.wait({died}, timeout=delay)
-                        delay = min(delay * 2, 30.0)
+                        delay = min(delay * 2, cap)
                     if died.done():
                         raise died.result()
         except TimeoutError:
@@ -387,13 +591,14 @@ class Run[R]:
                 waiting.result()
             except StoreFailure as e:
                 raise StoreError(e.message) from e
+            except ObserverRaised as e:
+                raise e.error from None
 
     async def _ended(self, last: str | None) -> tuple[bool, Any]:
         """The chain's end, or its last run while it has none: `last` is the run the poll before
         answered, whose `result` alone the core then gets."""
         check_key("run id", self.chain)
-        partitions = self._sub.partitions
-        data = plan.ResultPlan(prefix="", partitions=partitions, chain=self.chain, run=last)
+        data = plan.ResultPlan(prefix="", chain=self.chain, run=last)
         case, value = outcome_of(
             "result", *await self._sub._plan(plan.PlanInput(result=data)), "result"
         )
@@ -408,10 +613,7 @@ class Run[R]:
             return True, decode_json(result.value if result.HasField("value") else None)
         if result.status == layout.STATUS_FAILED:
             error = Failure.from_proto(result.error)
-            details = decode_json(
-                result.error.details if result.error.HasField("details") else None
-            )
-            cause = run_failed_cause(error.type, details)
+            cause = run_failed_cause(error.type, error.details)
             raise RunFailed(run_id, RunStatus.FAILED, error, cause)
         if result.status == layout.STATUS_CANCELLED:
             raise RunFailed(run_id, RunStatus.CANCELLED, Failure("Cancelled", result.reason), None)

@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, overload
 
-from substantial import child, iterate, messages, saga
+from substantial import child, iterate, messages, saga, schedule
 from substantial._proto import boundary, json_value, layout, run
 from substantial.child import Child
+from substantial.cost import Cost, cost_of
 from substantial.durations import millis
-from substantial.errors import Cancelled, ContinuedAsNew, InvalidArgument, ProtocolError
+from substantial.errors import (
+    Cancelled,
+    ContinuedAsNew,
+    InvalidArgument,
+    ProtocolError,
+    WaitTimeout,
+)
 from substantial.log import Log
-from substantial.names import check_name, check_str
-from substantial.scheduler import Shared, decode_json
+from substantial.names import check_step_name, check_str
+from substantial.scheduler import Receives, Shared, decode_json
 from substantial.step import call_step
 from substantial.workflow import Retry, Workflow
 
@@ -43,6 +50,10 @@ def _decode_uuid(value: layout.Value | None) -> uuid.UUID:
         raise ProtocolError(f"uuid {text!r}: {e}") from e
 
 
+def _decode_cost(value: layout.Value | None) -> Cost:
+    return cost_of(decode_json(value))
+
+
 def _decode_bool(value: layout.Value | None) -> bool:
     x = decode_json(value)
     if not isinstance(x, bool):
@@ -51,6 +62,13 @@ def _decode_bool(value: layout.Value | None) -> bool:
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _both_pending(name: str) -> InvalidArgument:
+    return InvalidArgument(
+        f"a receive of {name!r} with a timeout and one without are pending at once: which one "
+        "takes a message would depend on the order of the code's branches"
+    )
 
 
 def _decode_none(_: layout.Value | None) -> None:
@@ -104,10 +122,65 @@ class Context:
         undo: Callable[..., Any] | None = None,
     ) -> asyncio.Future[Any]:
         """Runs `fn(*args)` as the step `name`; an awaitable it returns is awaited."""
-        check_name("step name", name)
+        check_step_name(name)
         if not callable(fn):
             raise InvalidArgument(f"a step runs a function, not {fn!r}")
         return call_step(self._shared, name, fn, args, {}, retry, timeout, undo)
+
+    @overload
+    async def poll[*Ts, R](
+        self,
+        name: str,
+        fn: Callable[[*Ts], Awaitable[R | None]],
+        /,
+        *args: *Ts,
+        every: timedelta,
+        timeout: timedelta,
+        retry: Retry | None = None,
+    ) -> R | None: ...
+    @overload
+    async def poll[*Ts, R](
+        self,
+        name: str,
+        fn: Callable[[*Ts], R | None],
+        /,
+        *args: *Ts,
+        every: timedelta,
+        timeout: timedelta,
+        retry: Retry | None = None,
+    ) -> R | None: ...
+    async def poll(
+        self,
+        name: str,
+        fn: Callable[..., Any],
+        /,
+        *args: Any,
+        every: timedelta,
+        timeout: timedelta,
+        retry: Retry | None = None,
+    ) -> Any:
+        """Runs `fn(*args)` as the step `name` until it returns something other than `None`,
+        sleeping `every` between two tries; `None` once `timeout`, counted from the first call,
+        has passed."""
+        if not isinstance(every, timedelta) or millis(every) <= 0:
+            raise InvalidArgument(f"every is a positive timedelta, not {every!r}")
+        if not isinstance(timeout, timedelta) or timeout < timedelta(0):
+            raise InvalidArgument(f"timeout is a timedelta, not negative, not {timeout!r}")
+        deadline = await self.now() + timeout
+        while True:
+            value = await self.step(name, fn, *args, retry=retry)
+            if value is not None:
+                return value
+            left = deadline - await self.now()
+            if left <= timedelta(0):
+                return None
+            await self.sleep(min(every, left))
+
+    def schedule(self) -> AsyncIterator[datetime]:
+        """`async for at in c.schedule()`: each fire time of the schedule `sub.schedule`
+        configures, the workflow's one `iterate`; fires missed while no worker ran come oldest
+        first, at most `backfill` of them."""
+        return schedule.schedule(self)
 
     def now(self) -> asyncio.Future[datetime]:
         """The time, UTC, recorded."""
@@ -121,6 +194,10 @@ class Context:
         """A UUID, recorded."""
         return self._shared.future(run.Call(uuid=boundary.Empty()), _decode_uuid)
 
+    def cost(self) -> asyncio.Future[Cost]:
+        """The chain's cost so far, recorded."""
+        return self._shared.future(run.Call(cost=boundary.Empty()), _decode_cost)
+
     def sleep(self, duration: timedelta) -> asyncio.Future[None]:
         """Sleeps for `duration`, fixed when it first runs; a replay never sleeps again."""
         return self._shared.future(run.Call(sleep_ms=millis(duration)), _decode_none)
@@ -132,9 +209,58 @@ class Context:
         until = layout.Time(ms=(at - _EPOCH) // timedelta(milliseconds=1))
         return self._shared.future(run.Call(sleep_until=until), _decode_none)
 
-    def receive(self, name: str) -> asyncio.Future[Any]:
-        """The next message of `name` that no `receive` took yet."""
-        return self._shared.future(run.Call(receive=name), decode_json)
+    def receive(self, name: str, *, timeout: timedelta | None = None) -> Awaitable[Any]:
+        """The next message of `name` that no `receive` took yet; `WaitTimeout` once `timeout`
+        passed with none."""
+        counts = self._shared.receives.setdefault(name, Receives())
+        if timeout is not None:
+            millis(timeout)
+            if counts.plain:
+                raise _both_pending(name)
+            # Pending from the call, as a receive without timeout is, not from the first await.
+            counts.timed += 1
+            return self._receive_within(name, timeout, counts)
+        if counts.timed:
+            raise _both_pending(name)
+        received = self._shared.future(run.Call(receive=name), decode_json)
+        counts.taken += 1
+        counts.plain += 1
+
+        def done(_: object) -> None:
+            counts.plain -= 1
+
+        received.add_done_callback(done)
+        return received
+
+    async def _receive_within(self, name: str, timeout: timedelta, counts: Receives) -> Any:
+        try:
+            return await self._receive_claimed(name, timeout, counts)
+        finally:
+            counts.timed -= 1
+
+    async def _receive_claimed(self, name: str, timeout: timedelta, counts: Receives) -> Any:
+        if not counts.bound:
+
+            def count(_: run.Message) -> None:
+                counts.delivered += 1
+
+            self._shared.bind([name], count)
+            counts.bound = True
+        claimed = False
+
+        # Claiming in the predicate keeps two receives woken by one message from both taking it.
+        def claim() -> bool:
+            nonlocal claimed
+            if not claimed and counts.delivered > counts.taken:
+                counts.taken += 1
+                claimed = True
+            return claimed
+
+        if not claim():
+            await self.wait_until(claim, timeout=timeout)
+        if not claimed:
+            raise WaitTimeout(f"no message {name!r} within {timeout}")
+        return await self._shared.future(run.Call(receive=name), decode_json)
 
     @overload
     def handle(self, name: str, fn: Callable[[Any], object]) -> None: ...
@@ -197,10 +323,17 @@ class Context:
         input: dict[str, Any] | None = None,
         *,
         id: str | None = None,
+        budget: Mapping[str, int] | None = None,
     ) -> asyncio.Future[Child[R]]:
         """Starts a child run of `workflow`, under `id`, or an id the core derives from this
-        run's."""
-        return child.start(self._shared, workflow, input, id)
+        run's, with `budget`, else its workflow's."""
+        return child.start(self._shared, workflow, input, id, budget)
+
+    def result(self, chain: str, *, timeout: timedelta | None = None) -> asyncio.Future[Any]:
+        """The value the chain `chain` ended with, a child of this run or not; `RunFailed` if it
+        failed or was cancelled, `RunNotFound` if there is none, `WaitTimeout` once `timeout`
+        passed first."""
+        return child.chain_result(self._shared, chain, timeout)
 
     def iterate[S](self, init: S) -> iterate.Iteration:
         """`async for s in c.iterate(State())`: compresses at each boundary past the threshold."""

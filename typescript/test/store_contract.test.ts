@@ -60,10 +60,14 @@ eachAdapter("list in byte order", async (store) => {
   assert.deepEqual(await ls("", undefined, 1), ["p/a"]);
 });
 
-eachAdapter("list refuses wait", async (store, _adapter, t) => {
-  if (store.capabilities.wait) return t.skip("this store's listings wait");
-  await assert.rejects(store.list("q/", { maxKeys: 10, wait: { seconds: 1 } }), StoreFailure);
-});
+eachAdapter(
+  "list refuses wait",
+  async (store) => {
+    assert.ok(!store.capabilities.wait);
+    await assert.rejects(store.list("q/", { maxKeys: 10, wait: { seconds: 1 } }), StoreFailure);
+  },
+  ["memory", "file", "s3"],
+);
 
 eachAdapter("concurrent creates of one key", async (store) => {
   const outcomes = await Promise.all(

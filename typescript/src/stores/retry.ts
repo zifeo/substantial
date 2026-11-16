@@ -1,6 +1,7 @@
 // Retries of transient failures and resolution of ambiguous creates, shared by every adapter.
 import { sleep } from "../durations.ts";
 import type { StoreRetry } from "../settings.ts";
+import { sent } from "./attempts.ts";
 import { type Create, StoreFailure } from "./store.ts";
 
 /** How one attempt of an operation failed. */
@@ -61,6 +62,7 @@ export async function withRetry<T>(
 ): Promise<T> {
   const backoff = new Backoff(policy, wait);
   for (;;) {
+    sent();
     try {
       return await op();
     } catch (e) {
@@ -91,6 +93,7 @@ export async function create(
   for (;;) {
     if (ambiguous) {
       let stored: Uint8Array | undefined;
+      sent();
       try {
         stored = await get();
       } catch (e) {
@@ -105,6 +108,7 @@ export async function create(
       ambiguous = false;
     }
     let outcome: Create;
+    sent();
     try {
       outcome = await attempt();
     } catch (e) {

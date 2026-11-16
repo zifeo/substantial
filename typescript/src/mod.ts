@@ -8,11 +8,37 @@
  * @module
  */
 
-export { Child, type ChildOptions, type MessageOptions } from "./child.ts";
-export { type CreateOptions, type OpenOptions, type StartOptions, Substantial } from "./client.ts";
-export type { Context, ContinueOptions, ReceiveOptions, WaitOptions } from "./context.ts";
+export {
+  type ChainResultOptions,
+  Child,
+  type ChildOptions,
+  type MessageOptions,
+} from "./child.ts";
+export {
+  type OpenOptions,
+  type RunInfo,
+  type ScheduleOptions,
+  type StartOptions,
+  Substantial,
+} from "./client.ts";
+export type {
+  Context,
+  ContinueOptions,
+  PollOptions,
+  ReceiveOptions,
+  WaitOptions,
+} from "./context.ts";
+export {
+  Amount,
+  type Budget,
+  Cost,
+  Meters,
+  type PriceFields,
+  Prices,
+} from "./cost.ts";
 export { Duration, days, hours, milliseconds, minutes, seconds } from "./durations.ts";
 export {
+  BudgetExceeded,
   Cancelled,
   ConfigError,
   ContinuedAsNew,
@@ -40,9 +66,19 @@ export {
 } from "./errors.ts";
 export type { Log } from "./log.ts";
 export type { HandleOptions } from "./messages.ts";
-export { type ResultOptions, Run, type RunStatus, type SendOptions } from "./run.ts";
-export { FOREVER, type Preset, type Retention, type WorkerOptions } from "./settings.ts";
+export { Attempt, type Observed, Replay, Scan, StoreOp } from "./observe.ts";
 export {
+  type HistoryEvent,
+  type ResultOptions,
+  type RetryOptions,
+  Run,
+  type RunStatus,
+  type SendOptions,
+} from "./run.ts";
+export { Cron } from "./schedule.ts";
+export type { Preset, WorkerOptions } from "./settings.ts";
+export {
+  charge,
   type DeclaredStepOptions,
   type StepOptions,
   step,
@@ -60,7 +96,7 @@ export {
   type ProvidedPassword,
 } from "./stores/credentials.ts";
 export * as testing from "./testing/mod.ts";
-export { Worker } from "./worker.ts";
+export { type DrainOptions, Worker } from "./worker.ts";
 export {
   Permanent,
   type Retry,

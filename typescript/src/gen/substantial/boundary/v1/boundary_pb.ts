@@ -8,6 +8,8 @@
 //                                        or PlanInput
 //   sub_call(machine, ptr, len) -> u64   the request is the machine's RunRequest, AgentRequest or
 //                                        PlanRequest; the answer its response, as ptr << 32 | len
+//   sub_refused(machine) -> u64          the error sub_new refused the machine's input with, a
+//                                        response as ptr << 32 | len, or 0 for a machine made
 //   sub_drop(machine)                    frees a machine
 //
 // Ownership: sub_new and sub_call take the request buffer and free it, whatever the outcome. A
@@ -15,7 +17,9 @@
 //
 // Errors: every response has CoreError error = 1, so an error decodes the same whatever the kind.
 // sub_new never returns 0: given an unknown kind or an input that does not decode or is invalid, it
-// returns a machine that answers every call with that error, and must still be dropped. A request
+// returns a machine that answers every call with that error, and must still be dropped. A host
+// asks sub_refused right after sub_new, so an invalid input (an AgentConfig refused, such as prices
+// in a currency outside ISO 4217) fails where it is given rather than at the first call. A request
 // that does not decode is answered with an error and leaves the machine as it was; so does a call
 // on a machine that does not exist. A trap is a bug of the core: the host drops the instance.
 
@@ -31,7 +35,7 @@ import type { Message, UnknownEnum } from "@bufbuild/protobuf";
  * Describes the file substantial/boundary/v1/boundary.proto.
  */
 export const file_substantial_boundary_v1_boundary: GenFile = /*@__PURE__*/
-  fileDesc("CiZzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9ib3VuZGFyeS5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiBwoFRW1wdHkiTgoJQ29yZUVycm9yEjAKBGtpbmQYASABKA4yIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FcnJvcktpbmQSDwoHbWVzc2FnZRgCIAEoCSLOAgoHU3RvcmVPcBI5CgZjcmVhdGUYASABKAsyJy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkNyZWF0ZUgAEg0KA2dldBgCIAEoCUgAEjUKBGxpc3QYAyABKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkxpc3RIABIQCgZkZWxldGUYBCABKAlIABokCgZDcmVhdGUSCwoDa2V5GAEgASgJEg0KBWJ5dGVzGAIgASgMGoMBCgRMaXN0Eg4KBnByZWZpeBgBIAEoCRIYCgtzdGFydF9hZnRlchgCIAEoCUgAiAEBEhAKCG1heF9rZXlzGAMgASgNEi8KBHdhaXQYBCABKAsyIS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5MaXN0V2FpdEIOCgxfc3RhcnRfYWZ0ZXJCBAoCb3AiNwoITGlzdFdhaXQSEQoEZXRhZxgBIAEoCUgAiAEBEg8KB3NlY29uZHMYAiABKA1CBwoFX2V0YWciHwoMU3RvcmVGYWlsdXJlEg8KB21lc3NhZ2UYASABKAkinAMKCE9wUmVzdWx0EjEKB2NyZWF0ZWQYASABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjAKBmV4aXN0cxgCIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAASDwoFYnl0ZXMYAyABKAxIABIxCgdtaXNzaW5nGAQgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABI8CgdsaXN0aW5nGAUgASgLMikuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuT3BSZXN1bHQuTGlzdGluZ0gAEjEKB2RlbGV0ZWQYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjcKBmZhaWxlZBgHIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlN0b3JlRmFpbHVyZUgAGjMKB0xpc3RpbmcSDAoEa2V5cxgBIAMoCRIRCgRldGFnGAIgASgJSACIAQFCBwoFX2V0YWdCCAoGcmVzdWx0KnAKC01hY2hpbmVLaW5kEhwKGE1BQ0hJTkVfS0lORF9VTlNQRUNJRklFRBAAEhQKEE1BQ0hJTkVfS0lORF9SVU4QARIWChJNQUNISU5FX0tJTkRfQUdFTlQQAhIVChFNQUNISU5FX0tJTkRfUExBThADKsQBCglFcnJvcktpbmQSGgoWRVJST1JfS0lORF9VTlNQRUNJRklFRBAAEh4KGkVSUk9SX0tJTkRfTk9OX0RFVEVSTUlOSVNNEAESFgoSRVJST1JfS0lORF9JTlZBTElEEAISFAoQRVJST1JfS0lORF9FTkRFRBADEhYKEkVSUk9SX0tJTkRfQ09SUlVQVBAEEhUKEUVSUk9SX0tJTkRfTEFZT1VUEAUSHgoaRVJST1JfS0lORF9WQUxVRV9UT09fTEFSR0UQBmIGcHJvdG8z");
+  fileDesc("CiZzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9ib3VuZGFyeS5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiBwoFRW1wdHkiTgoJQ29yZUVycm9yEjAKBGtpbmQYASABKA4yIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FcnJvcktpbmQSDwoHbWVzc2FnZRgCIAEoCSLOAgoHU3RvcmVPcBI5CgZjcmVhdGUYASABKAsyJy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkNyZWF0ZUgAEg0KA2dldBgCIAEoCUgAEjUKBGxpc3QYAyABKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkxpc3RIABIQCgZkZWxldGUYBCABKAlIABokCgZDcmVhdGUSCwoDa2V5GAEgASgJEg0KBWJ5dGVzGAIgASgMGoMBCgRMaXN0Eg4KBnByZWZpeBgBIAEoCRIYCgtzdGFydF9hZnRlchgCIAEoCUgAiAEBEhAKCG1heF9rZXlzGAMgASgNEi8KBHdhaXQYBCABKAsyIS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5MaXN0V2FpdEIOCgxfc3RhcnRfYWZ0ZXJCBAoCb3AiNwoITGlzdFdhaXQSEQoEZXRhZxgBIAEoCUgAiAEBEg8KB3NlY29uZHMYAiABKA1CBwoFX2V0YWciHwoMU3RvcmVGYWlsdXJlEg8KB21lc3NhZ2UYASABKAkirgMKCE9wUmVzdWx0EjEKB2NyZWF0ZWQYASABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjAKBmV4aXN0cxgCIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAASDwoFYnl0ZXMYAyABKAxIABIxCgdtaXNzaW5nGAQgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABI8CgdsaXN0aW5nGAUgASgLMikuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuT3BSZXN1bHQuTGlzdGluZ0gAEjEKB2RlbGV0ZWQYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjcKBmZhaWxlZBgHIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlN0b3JlRmFpbHVyZUgAEhAKCGF0dGVtcHRzGAggASgNGjMKB0xpc3RpbmcSDAoEa2V5cxgBIAMoCRIRCgRldGFnGAIgASgJSACIAQFCBwoFX2V0YWdCCAoGcmVzdWx0KnAKC01hY2hpbmVLaW5kEhwKGE1BQ0hJTkVfS0lORF9VTlNQRUNJRklFRBAAEhQKEE1BQ0hJTkVfS0lORF9SVU4QARIWChJNQUNISU5FX0tJTkRfQUdFTlQQAhIVChFNQUNISU5FX0tJTkRfUExBThADKsQBCglFcnJvcktpbmQSGgoWRVJST1JfS0lORF9VTlNQRUNJRklFRBAAEh4KGkVSUk9SX0tJTkRfTk9OX0RFVEVSTUlOSVNNEAESFgoSRVJST1JfS0lORF9JTlZBTElEEAISFAoQRVJST1JfS0lORF9FTkRFRBADEhYKEkVSUk9SX0tJTkRfQ09SUlVQVBAEEhUKEUVSUk9SX0tJTkRfTEFZT1VUEAUSHgoaRVJST1JfS0lORF9WQUxVRV9UT09fTEFSR0UQBmIGcHJvdG8z");
 
 /**
  * @generated from message substantial.boundary.v1.Empty
@@ -256,6 +260,14 @@ export type OpResult = Message<"substantial.boundary.v1.OpResult"> & {
     value: StoreFailure;
     case: "failed";
   } | { case: undefined; value?: undefined };
+
+  /**
+   * The requests the adapter sent for the operation, its retries and read-backs included: at least
+   * 1 on every result fed to an agent or a run machine, which count them; plans ignore it.
+   *
+   * @generated from field: uint32 attempts = 8;
+   */
+  attempts: number;
 };
 
 /**

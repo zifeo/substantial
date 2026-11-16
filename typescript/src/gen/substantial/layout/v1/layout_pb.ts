@@ -1,4 +1,4 @@
-// The objects of layout 1 (docs/interfaces.md). Every object of a namespace but its marker,
+// The objects of layout 2, those of layout 1 unchanged (docs/interfaces.md). Every object of a namespace but its marker,
 // substantial.json, is one of these messages in protobuf binary encoding. The core alone encodes
 // them, for every host, so the bytes are the same everywhere: no map fields, whose order would vary.
 
@@ -14,7 +14,7 @@ import type { Message as Message$1, UnknownEnum } from "@bufbuild/protobuf";
  * Describes the file substantial/layout/v1/layout.proto.
  */
 export const file_substantial_layout_v1_layout: GenFile = /*@__PURE__*/
-  fileDesc("CiJzdWJzdGFudGlhbC9sYXlvdXQvdjEvbGF5b3V0LnByb3RvEhVzdWJzdGFudGlhbC5sYXlvdXQudjEiEgoEVGltZRIKCgJtcxgBIAEoAyI0CgVWYWx1ZRIOCgRqc29uGAEgASgMSAASDQoDcmF3GAIgASgMSABCBgoEa2luZEoECAMQBCJqCgdGYWlsdXJlEgwKBHR5cGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIRCglyZXRyeWFibGUYAyABKAgSLQoHZGV0YWlscxgEIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZSI6CgZQYXJlbnQSCwoDcnVuGAEgASgJEhIKCm9jY3VycmVuY2UYAiABKAQSDwoHc2VnbWVudBgDIAEoBCI7CgRTZWVuEgoKAmlkGAEgASgJEicKAmF0GAIgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUinwMKBVN0YXJ0EhAKCHdvcmtmbG93GAEgASgJEhQKB3ZlcnNpb24YAiABKA1IAIgBARIrCgVpbnB1dBgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRINCgVjaGFpbhgEIAEoCRILCgNzZXEYBSABKAQSFQoIcHJldmlvdXMYBiABKAlIAYgBARIUCgdyZXN1bWVzGAcgASgJSAKIAQESLQoGcGFyZW50GAggASgLMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLlBhcmVudBIrCgVzdGF0ZRgJIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIPCgdjYXJyaWVkGAsgAygJEi8KCmNyZWF0ZWRfYXQYDSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIpCgRzZWVuGA4gAygLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlNlZW5CCgoIX3ZlcnNpb25CCwoJX3ByZXZpb3VzQgoKCF9yZXN1bWVzSgQIChALSgQIDBANImYKBFN0ZXASDAoEbmFtZRgBIAEoCRISCgpvY2N1cnJlbmNlGAIgASgEEg8KB2F0dGVtcHQYAyABKA0SKwoFdmFsdWUYBCABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUilgEKCVN0ZXBSZXRyeRIMCgRuYW1lGAEgASgJEhIKCm9jY3VycmVuY2UYAiABKAQSDwoHYXR0ZW1wdBgDIAEoDRItCgVlcnJvchgEIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlEicKAmF0GAUgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUibgoKU3RlcEZhaWxlZBIMCgRuYW1lGAEgASgJEhIKCm9jY3VycmVuY2UYAiABKAQSDwoHYXR0ZW1wdBgDIAEoDRItCgVlcnJvchgEIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlIkcKBVRpbWVyEhIKCm9jY3VycmVuY2UYASABKAQSKgoFdW50aWwYAiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZSIbCgVGaXJlZBISCgpvY2N1cnJlbmNlGAEgASgEIrsBCg9NZXNzYWdlQ29uc3VtZWQSCwoDa2V5GAEgASgJEgoKAmlkGAIgASgJEgwKBG5hbWUYAyABKAkSKwoFdmFsdWUYBCABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSKwoFZW5kZWQYBSABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuRW5kZWQSJwoCYXQYBiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZSKJAQoFQ2hpbGQSEgoKb2NjdXJyZW5jZRgBIAEoBBILCgNydW4YAiABKAkSEAoId29ya2Zsb3cYAyABKAkSFAoHdmVyc2lvbhgEIAEoDUgAiAEBEisKBWlucHV0GAUgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlQgoKCF92ZXJzaW9uItsBCgRTZW50EhIKCm9jY3VycmVuY2UYASABKAQSCwoDcnVuGAIgASgJEgoKAmlkGAMgASgJEgwKBG5hbWUYBCABKAkSKwoFdmFsdWUYBSABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSLQoCdG8YBiABKAsyHy5zdWJzdGFudGlhbC5sYXlvdXQudjEuRGVsaXZlcnlIABIxCgdyZWZ1c2VkGAcgASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZhaWx1cmVIAEIJCgdvdXRjb21lIikKCERlbGl2ZXJ5EgsKA3J1bhgBIAEoCRIQCgh3b3JrZmxvdxgCIAEoCSJFCglQdWJsaXNoZWQSCwoDa2V5GAEgASgJEisKBXZhbHVlGAIgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlIjgKCUNvbXBsZXRlZBIrCgV2YWx1ZRgBIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZSI3CgZGYWlsZWQSLQoFZXJyb3IYASABKAsyHi5zdWJzdGFudGlhbC5sYXlvdXQudjEuRmFpbHVyZSIbCglDYW5jZWxsZWQSDgoGcmVhc29uGAEgASgJIu4BCglDb250aW51ZWQSCwoDcnVuGAEgASgJEhAKCHdvcmtmbG93GAIgASgJEisKBWlucHV0GAMgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlEisKBXN0YXRlGAQgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlEg8KB2NhcnJpZWQYBiADKAkSFAoHdmVyc2lvbhgIIAEoDUgAiAEBEikKBHNlZW4YCSADKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuU2VlbkIKCghfdmVyc2lvbkoECAUQBkoECAcQCCKwBQoFRXZlbnQSKwoEc3RlcBgBIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5TdGVwSAASNgoKc3RlcF9yZXRyeRgCIAEoCzIgLnN1YnN0YW50aWFsLmxheW91dC52MS5TdGVwUmV0cnlIABI4CgtzdGVwX2ZhaWxlZBgDIAEoCzIhLnN1YnN0YW50aWFsLmxheW91dC52MS5TdGVwRmFpbGVkSAASLQoFdGltZXIYBCABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZXJIABItCgVmaXJlZBgFIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5GaXJlZEgAEjkKB21lc3NhZ2UYBiABKAsyJi5zdWJzdGFudGlhbC5sYXlvdXQudjEuTWVzc2FnZUNvbnN1bWVkSAASLQoFY2hpbGQYByABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuQ2hpbGRIABIrCgRzZW50GAggASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlNlbnRIABI1CglwdWJsaXNoZWQYCSABKAsyIC5zdWJzdGFudGlhbC5sYXlvdXQudjEuUHVibGlzaGVkSAASNQoJY29tcGxldGVkGAogASgLMiAuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNvbXBsZXRlZEgAEi8KBmZhaWxlZBgLIAEoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsZWRIABI1CgljYW5jZWxsZWQYDCABKAsyIC5zdWJzdGFudGlhbC5sYXlvdXQudjEuQ2FuY2VsbGVkSAASNQoJY29udGludWVkGA0gASgLMiAuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNvbnRpbnVlZEgAQgYKBGtpbmQi3wEKB1NlZ21lbnQSCQoBbhgBIAEoBBIsCgZldmVudHMYAiADKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuRXZlbnQSLgoJbmV4dF93YWtlGAMgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUSDgoGd29ya2VyGAQgASgJEi8KCmNyZWF0ZWRfYXQYBSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIZCgxyZXRlbnRpb25fbXMYBiABKARIAIgBAUIPCg1fcmV0ZW50aW9uX21zInMKCFNuYXBzaG90EgkKAW4YASABKAQSLAoGZXZlbnRzGAIgAygLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkV2ZW50Ei4KCW5leHRfd2FrZRgDIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lIqsBCgdNZXNzYWdlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSKwoFdmFsdWUYAyABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSLAoHc2VudF9hdBgEIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEisKBWVuZGVkGAUgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkVuZGVkIq8BCgVFbmRlZBILCgNydW4YASABKAkSLQoGc3RhdHVzGAIgASgOMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLlN0YXR1cxIrCgV2YWx1ZRgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRItCgVlcnJvchgEIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlEg4KBnJlYXNvbhgFIAEoCSJQCgVDbGFpbRIOCgZ3b3JrZXIYASABKAkSJwoCYXQYAiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIOCgZ0dGxfbXMYAyABKAQinwIKBlJlc3VsdBItCgZzdGF0dXMYASABKA4yHS5zdWJzdGFudGlhbC5sYXlvdXQudjEuU3RhdHVzEisKBXZhbHVlGAIgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlEi0KBWVycm9yGAMgASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZhaWx1cmUSDgoGcmVhc29uGAQgASgJEhEKBG5leHQYBSABKAlIAIgBARItCghlbmRlZF9hdBgGIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEi8KCndyaXR0ZW5fYXQYByABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUIHCgVfbmV4dCIyCgRHb25lEioKBXVudGlsGAEgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUiPQoOUHVibGlzaGVkVmFsdWUSKwoFdmFsdWUYASABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUqdQoGU3RhdHVzEhYKElNUQVRVU19VTlNQRUNJRklFRBAAEhQKEFNUQVRVU19DT01QTEVURUQQARIRCg1TVEFUVVNfRkFJTEVEEAISFAoQU1RBVFVTX0NBTkNFTExFRBADEhQKEFNUQVRVU19DT05USU5VRUQQBGIGcHJvdG8z");
+  fileDesc("CiJzdWJzdGFudGlhbC9sYXlvdXQvdjEvbGF5b3V0LnByb3RvEhVzdWJzdGFudGlhbC5sYXlvdXQudjEiEgoEVGltZRIKCgJtcxgBIAEoAyI0CgVWYWx1ZRIOCgRqc29uGAEgASgMSAASDQoDcmF3GAIgASgMSABCBgoEa2luZEoECAMQBCJqCgdGYWlsdXJlEgwKBHR5cGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIRCglyZXRyeWFibGUYAyABKAgSLQoHZGV0YWlscxgEIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZSI6CgZQYXJlbnQSCwoDcnVuGAEgASgJEhIKCm9jY3VycmVuY2UYAiABKAQSDwoHc2VnbWVudBgDIAEoBCI7CgRTZWVuEgoKAmlkGAEgASgJEicKAmF0GAIgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUilQQKBVN0YXJ0EhAKCHdvcmtmbG93GAEgASgJEhQKB3ZlcnNpb24YAiABKA1IAIgBARIrCgVpbnB1dBgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRINCgVjaGFpbhgEIAEoCRILCgNzZXEYBSABKAQSFQoIcHJldmlvdXMYBiABKAlIAYgBARIUCgdyZXN1bWVzGAcgASgJSAKIAQESLQoGcGFyZW50GAggASgLMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLlBhcmVudBIrCgVzdGF0ZRgJIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIPCgdjYXJyaWVkGAsgAygJEi8KCmNyZWF0ZWRfYXQYDSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIpCgRzZWVuGA4gAygLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlNlZW4SEQoEbGluZRgPIAEoCUgDiAEBEi0KBmJ1ZGdldBgQIAEoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5CdWRnZXQSKQoEY29zdBgRIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5Db3N0QgoKCF92ZXJzaW9uQgsKCV9wcmV2aW91c0IKCghfcmVzdW1lc0IHCgVfbGluZUoECAoQC0oECAwQDSIoCgZBbW91bnQSEAoIY3VycmVuY3kYASABKAkSDAoEbmFubxgCIAEoBCJFCghSZXF1ZXN0cxIOCgZjcmVhdGUYASABKAQSCwoDZ2V0GAIgASgEEgwKBGxpc3QYAyABKAQSDgoGZGVsZXRlGAQgASgEImsKBk1ldGVycxIxCghyZXF1ZXN0cxgBIAEoCzIfLnN1YnN0YW50aWFsLmxheW91dC52MS5SZXF1ZXN0cxIuCgdhbW91bnRzGAIgAygLMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkFtb3VudCJLCgtTdGVwQ2hhcmdlcxIMCgRzdGVwGAEgASgJEi4KB2Ftb3VudHMYAiADKAsyHS5zdWJzdGFudGlhbC5sYXlvdXQudjEuQW1vdW50IpgBCgRDb3N0EiwKBXN0b3JlGAEgASgLMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLk1ldGVycxIxCgVzdGVwcxgCIAMoCzIiLnN1YnN0YW50aWFsLmxheW91dC52MS5TdGVwQ2hhcmdlcxIvCghjaGlsZHJlbhgDIAEoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5NZXRlcnMiJQoFTGltaXQSDQoFbWV0ZXIYASABKAkSDQoFbGltaXQYAiABKAQiNgoGQnVkZ2V0EiwKBmxpbWl0cxgBIAMoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5MaW1pdCKWAQoEU3RlcBIMCgRuYW1lGAEgASgJEhIKCm9jY3VycmVuY2UYAiABKAQSDwoHYXR0ZW1wdBgDIAEoDRIrCgV2YWx1ZRgEIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIuCgdjaGFyZ2VzGAUgAygLMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkFtb3VudCLGAQoJU3RlcFJldHJ5EgwKBG5hbWUYASABKAkSEgoKb2NjdXJyZW5jZRgCIAEoBBIPCgdhdHRlbXB0GAMgASgNEi0KBWVycm9yGAQgASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZhaWx1cmUSJwoCYXQYBSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIuCgdjaGFyZ2VzGAYgAygLMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkFtb3VudCKeAQoKU3RlcEZhaWxlZBIMCgRuYW1lGAEgASgJEhIKCm9jY3VycmVuY2UYAiABKAQSDwoHYXR0ZW1wdBgDIAEoDRItCgVlcnJvchgEIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlEi4KB2NoYXJnZXMYBSADKAsyHS5zdWJzdGFudGlhbC5sYXlvdXQudjEuQW1vdW50IkcKBVRpbWVyEhIKCm9jY3VycmVuY2UYASABKAQSKgoFdW50aWwYAiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZSIbCgVGaXJlZBISCgpvY2N1cnJlbmNlGAEgASgEIrsBCg9NZXNzYWdlQ29uc3VtZWQSCwoDa2V5GAEgASgJEgoKAmlkGAIgASgJEgwKBG5hbWUYAyABKAkSKwoFdmFsdWUYBCABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSKwoFZW5kZWQYBSABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuRW5kZWQSJwoCYXQYBiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZSK4AQoFQ2hpbGQSEgoKb2NjdXJyZW5jZRgBIAEoBBILCgNydW4YAiABKAkSEAoId29ya2Zsb3cYAyABKAkSFAoHdmVyc2lvbhgEIAEoDUgAiAEBEisKBWlucHV0GAUgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlEi0KBmJ1ZGdldBgGIAEoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5CdWRnZXRCCgoIX3ZlcnNpb24i2wEKBFNlbnQSEgoKb2NjdXJyZW5jZRgBIAEoBBILCgNydW4YAiABKAkSCgoCaWQYAyABKAkSDAoEbmFtZRgEIAEoCRIrCgV2YWx1ZRgFIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRItCgJ0bxgGIAEoCzIfLnN1YnN0YW50aWFsLmxheW91dC52MS5EZWxpdmVyeUgAEjEKB3JlZnVzZWQYByABKAsyHi5zdWJzdGFudGlhbC5sYXlvdXQudjEuRmFpbHVyZUgAQgkKB291dGNvbWUiKQoIRGVsaXZlcnkSCwoDcnVuGAEgASgJEhAKCHdvcmtmbG93GAIgASgJIqwBCgdXYXRjaGVkEhIKCm9jY3VycmVuY2UYASABKAQSDQoFY2hhaW4YAiABKAkSEQoHd2FpdGluZxgDIAEoCUgAEi0KBWVuZGVkGAQgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkVuZGVkSAASMQoHcmVmdXNlZBgFIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlSABCCQoHb3V0Y29tZSJFCglQdWJsaXNoZWQSCwoDa2V5GAEgASgJEisKBXZhbHVlGAIgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlIjgKCUNvbXBsZXRlZBIrCgV2YWx1ZRgBIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZSI3CgZGYWlsZWQSLQoFZXJyb3IYASABKAsyHi5zdWJzdGFudGlhbC5sYXlvdXQudjEuRmFpbHVyZSIbCglDYW5jZWxsZWQSDgoGcmVhc29uGAEgASgJIjwKDkJ1ZGdldEV4Y2VlZGVkEg0KBW1ldGVyGAEgASgJEg0KBWxpbWl0GAIgASgEEgwKBHVzZWQYAyABKAQi7gEKCUNvbnRpbnVlZBILCgNydW4YASABKAkSEAoId29ya2Zsb3cYAiABKAkSKwoFaW5wdXQYAyABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSKwoFc3RhdGUYBCABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSDwoHY2FycmllZBgGIAMoCRIUCgd2ZXJzaW9uGAggASgNSACIAQESKQoEc2VlbhgJIAMoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5TZWVuQgoKCF92ZXJzaW9uSgQIBRAGSgQIBxAIIqUGCgVFdmVudBIrCgRzdGVwGAEgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlN0ZXBIABI2CgpzdGVwX3JldHJ5GAIgASgLMiAuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlN0ZXBSZXRyeUgAEjgKC3N0ZXBfZmFpbGVkGAMgASgLMiEuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlN0ZXBGYWlsZWRIABItCgV0aW1lchgEIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lckgAEi0KBWZpcmVkGAUgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZpcmVkSAASOQoHbWVzc2FnZRgGIAEoCzImLnN1YnN0YW50aWFsLmxheW91dC52MS5NZXNzYWdlQ29uc3VtZWRIABItCgVjaGlsZBgHIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5DaGlsZEgAEisKBHNlbnQYCCABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuU2VudEgAEjUKCXB1Ymxpc2hlZBgJIAEoCzIgLnN1YnN0YW50aWFsLmxheW91dC52MS5QdWJsaXNoZWRIABI1Cgljb21wbGV0ZWQYCiABKAsyIC5zdWJzdGFudGlhbC5sYXlvdXQudjEuQ29tcGxldGVkSAASLwoGZmFpbGVkGAsgASgLMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZhaWxlZEgAEjUKCWNhbmNlbGxlZBgMIAEoCzIgLnN1YnN0YW50aWFsLmxheW91dC52MS5DYW5jZWxsZWRIABI1Cgljb250aW51ZWQYDSABKAsyIC5zdWJzdGFudGlhbC5sYXlvdXQudjEuQ29udGludWVkSAASQAoPYnVkZ2V0X2V4Y2VlZGVkGA4gASgLMiUuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkJ1ZGdldEV4Y2VlZGVkSAASMQoHd2F0Y2hlZBgPIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5XYXRjaGVkSABCBgoEa2luZCKYAgoHU2VnbWVudBIJCgFuGAEgASgEEiwKBmV2ZW50cxgCIAMoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5FdmVudBIuCgluZXh0X3dha2UYAyABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIOCgZ3b3JrZXIYBCABKAkSLwoKY3JlYXRlZF9hdBgFIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEhkKDHJldGVudGlvbl9tcxgGIAEoBEgAiAEBEgwKBHJlc3QYByABKAgSKQoEY29zdBgIIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5Db3N0Qg8KDV9yZXRlbnRpb25fbXMi3AEKCFNuYXBzaG90EgkKAW4YASABKAQSLAoGZXZlbnRzGAIgAygLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkV2ZW50Ei4KCW5leHRfd2FrZRgDIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEgwKBHJlc3QYBCABKAgSLgoHb3JpZ2lucxgFIAMoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5PcmlnaW4SKQoEY29zdBgGIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5Db3N0ImEKBk9yaWdpbhILCgNydW4YASABKAkSCQoBbhgCIAEoBBIvCgpjcmVhdGVkX2F0GAMgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUSDgoGZXZlbnRzGAQgASgEIqsBCgdNZXNzYWdlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSKwoFdmFsdWUYAyABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSLAoHc2VudF9hdBgEIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEisKBWVuZGVkGAUgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkVuZGVkItoBCgVFbmRlZBILCgNydW4YASABKAkSLQoGc3RhdHVzGAIgASgOMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLlN0YXR1cxIrCgV2YWx1ZRgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRItCgVlcnJvchgEIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlEg4KBnJlYXNvbhgFIAEoCRIpCgRjb3N0GAYgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNvc3QiUAoFQ2xhaW0SDgoGd29ya2VyGAEgASgJEicKAmF0GAIgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUSDgoGdHRsX21zGAMgASgEIp8CCgZSZXN1bHQSLQoGc3RhdHVzGAEgASgOMh0uc3Vic3RhbnRpYWwubGF5b3V0LnYxLlN0YXR1cxIrCgV2YWx1ZRgCIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRItCgVlcnJvchgDIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlEg4KBnJlYXNvbhgEIAEoCRIRCgRuZXh0GAUgASgJSACIAQESLQoIZW5kZWRfYXQYBiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIvCgp3cml0dGVuX2F0GAcgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWVCBwoFX25leHQiMgoER29uZRIqCgV1bnRpbBgBIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lIj0KDlB1Ymxpc2hlZFZhbHVlEisKBXZhbHVlGAEgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlKnUKBlN0YXR1cxIWChJTVEFUVVNfVU5TUEVDSUZJRUQQABIUChBTVEFUVVNfQ09NUExFVEVEEAESEQoNU1RBVFVTX0ZBSUxFRBACEhQKEFNUQVRVU19DQU5DRUxMRUQQAxIUChBTVEFUVVNfQ09OVElOVUVEEARiBnByb3RvMw");
 
 /**
  * Milliseconds since the Unix epoch, UTC.
@@ -224,6 +224,29 @@ export type Start = Message$1<"substantial.layout.v1.Start"> & {
    * @generated from field: repeated substantial.layout.v1.Seen seen = 14;
    */
   seen: Seen[];
+
+  /**
+   * A retry only: the first run of its line of retries, from which it derives the ids of its
+   * children, sends and continuation, so the history it resumes matches its calls.
+   *
+   * @generated from field: optional string line = 15;
+   */
+  line?: string | undefined;
+
+  /**
+   * The run's limits: the start's own, else its workflow's; part of the start's identity, carried by
+   * continuations, set again or kept by a retry. None means no limit.
+   *
+   * @generated from field: substantial.layout.v1.Budget budget = 16;
+   */
+  budget?: Budget | undefined;
+
+  /**
+   * The chain's cost before this run: of the runs it continues or the failed run it retries.
+   *
+   * @generated from field: substantial.layout.v1.Cost cost = 17;
+   */
+  cost?: Cost | undefined;
 };
 
 /**
@@ -232,6 +255,185 @@ export type Start = Message$1<"substantial.layout.v1.Start"> & {
  */
 export const StartSchema: GenMessage<Start> = /*@__PURE__*/
   messageDesc(file_substantial_layout_v1_layout, 5);
+
+/**
+ * An integer amount of nano-units of an ISO 4217 currency, at most 2^63-1.
+ *
+ * @generated from message substantial.layout.v1.Amount
+ */
+export type Amount = Message$1<"substantial.layout.v1.Amount"> & {
+  /**
+   * @generated from field: string currency = 1;
+   */
+  currency: string;
+
+  /**
+   * @generated from field: uint64 nano = 2;
+   */
+  nano: bigint;
+};
+
+/**
+ * Describes the message substantial.layout.v1.Amount.
+ * Use `create(AmountSchema)` to create a new message.
+ */
+export const AmountSchema: GenMessage<Amount> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 6);
+
+/**
+ * Store requests by kind, each attempt of an operation one request.
+ *
+ * @generated from message substantial.layout.v1.Requests
+ */
+export type Requests = Message$1<"substantial.layout.v1.Requests"> & {
+  /**
+   * @generated from field: uint64 create = 1;
+   */
+  create: bigint;
+
+  /**
+   * @generated from field: uint64 get = 2;
+   */
+  get: bigint;
+
+  /**
+   * @generated from field: uint64 list = 3;
+   */
+  list: bigint;
+
+  /**
+   * @generated from field: uint64 delete = 4;
+   */
+  delete: bigint;
+};
+
+/**
+ * Describes the message substantial.layout.v1.Requests.
+ * Use `create(RequestsSchema)` to create a new message.
+ */
+export const RequestsSchema: GenMessage<Requests> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 7);
+
+/**
+ * Requests and amounts, the amounts sorted by currency, one per currency.
+ *
+ * @generated from message substantial.layout.v1.Meters
+ */
+export type Meters = Message$1<"substantial.layout.v1.Meters"> & {
+  /**
+   * @generated from field: substantial.layout.v1.Requests requests = 1;
+   */
+  requests?: Requests | undefined;
+
+  /**
+   * @generated from field: repeated substantial.layout.v1.Amount amounts = 2;
+   */
+  amounts: Amount[];
+};
+
+/**
+ * Describes the message substantial.layout.v1.Meters.
+ * Use `create(MetersSchema)` to create a new message.
+ */
+export const MetersSchema: GenMessage<Meters> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 8);
+
+/**
+ * What a step charged, by its name.
+ *
+ * @generated from message substantial.layout.v1.StepCharges
+ */
+export type StepCharges = Message$1<"substantial.layout.v1.StepCharges"> & {
+  /**
+   * @generated from field: string step = 1;
+   */
+  step: string;
+
+  /**
+   * @generated from field: repeated substantial.layout.v1.Amount amounts = 2;
+   */
+  amounts: Amount[];
+};
+
+/**
+ * Describes the message substantial.layout.v1.StepCharges.
+ * Use `create(StepChargesSchema)` to create a new message.
+ */
+export const StepChargesSchema: GenMessage<StepCharges> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 9);
+
+/**
+ * What a chain cost: its own store requests, priced by the price table of the worker that counted
+ * them if it had one; its steps' charges, sorted by step name; and its children's totals.
+ *
+ * @generated from message substantial.layout.v1.Cost
+ */
+export type Cost = Message$1<"substantial.layout.v1.Cost"> & {
+  /**
+   * @generated from field: substantial.layout.v1.Meters store = 1;
+   */
+  store?: Meters | undefined;
+
+  /**
+   * @generated from field: repeated substantial.layout.v1.StepCharges steps = 2;
+   */
+  steps: StepCharges[];
+
+  /**
+   * @generated from field: substantial.layout.v1.Meters children = 3;
+   */
+  children?: Meters | undefined;
+};
+
+/**
+ * Describes the message substantial.layout.v1.Cost.
+ * Use `create(CostSchema)` to create a new message.
+ */
+export const CostSchema: GenMessage<Cost> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 10);
+
+/**
+ * A limit on a meter: a request kind (create, get, list, delete, requests) or a currency.
+ *
+ * @generated from message substantial.layout.v1.Limit
+ */
+export type Limit = Message$1<"substantial.layout.v1.Limit"> & {
+  /**
+   * @generated from field: string meter = 1;
+   */
+  meter: string;
+
+  /**
+   * @generated from field: uint64 limit = 2;
+   */
+  limit: bigint;
+};
+
+/**
+ * Describes the message substantial.layout.v1.Limit.
+ * Use `create(LimitSchema)` to create a new message.
+ */
+export const LimitSchema: GenMessage<Limit> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 11);
+
+/**
+ * Limits sorted by meter, one per meter.
+ *
+ * @generated from message substantial.layout.v1.Budget
+ */
+export type Budget = Message$1<"substantial.layout.v1.Budget"> & {
+  /**
+   * @generated from field: repeated substantial.layout.v1.Limit limits = 1;
+   */
+  limits: Limit[];
+};
+
+/**
+ * Describes the message substantial.layout.v1.Budget.
+ * Use `create(BudgetSchema)` to create a new message.
+ */
+export const BudgetSchema: GenMessage<Budget> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 12);
 
 /**
  * @generated from message substantial.layout.v1.Step
@@ -256,6 +458,13 @@ export type Step = Message$1<"substantial.layout.v1.Step"> & {
    * @generated from field: substantial.layout.v1.Value value = 4;
    */
   value?: Value | undefined;
+
+  /**
+   * What the attempt charged, sorted by currency.
+   *
+   * @generated from field: repeated substantial.layout.v1.Amount charges = 5;
+   */
+  charges: Amount[];
 };
 
 /**
@@ -263,7 +472,7 @@ export type Step = Message$1<"substantial.layout.v1.Step"> & {
  * Use `create(StepSchema)` to create a new message.
  */
 export const StepSchema: GenMessage<Step> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 6);
+  messageDesc(file_substantial_layout_v1_layout, 13);
 
 /**
  * @generated from message substantial.layout.v1.StepRetry
@@ -293,6 +502,11 @@ export type StepRetry = Message$1<"substantial.layout.v1.StepRetry"> & {
    * @generated from field: substantial.layout.v1.Time at = 5;
    */
   at?: Time | undefined;
+
+  /**
+   * @generated from field: repeated substantial.layout.v1.Amount charges = 6;
+   */
+  charges: Amount[];
 };
 
 /**
@@ -300,7 +514,7 @@ export type StepRetry = Message$1<"substantial.layout.v1.StepRetry"> & {
  * Use `create(StepRetrySchema)` to create a new message.
  */
 export const StepRetrySchema: GenMessage<StepRetry> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 7);
+  messageDesc(file_substantial_layout_v1_layout, 14);
 
 /**
  * @generated from message substantial.layout.v1.StepFailed
@@ -325,6 +539,11 @@ export type StepFailed = Message$1<"substantial.layout.v1.StepFailed"> & {
    * @generated from field: substantial.layout.v1.Failure error = 4;
    */
   error?: Failure | undefined;
+
+  /**
+   * @generated from field: repeated substantial.layout.v1.Amount charges = 5;
+   */
+  charges: Amount[];
 };
 
 /**
@@ -332,7 +551,7 @@ export type StepFailed = Message$1<"substantial.layout.v1.StepFailed"> & {
  * Use `create(StepFailedSchema)` to create a new message.
  */
 export const StepFailedSchema: GenMessage<StepFailed> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 8);
+  messageDesc(file_substantial_layout_v1_layout, 15);
 
 /**
  * @generated from message substantial.layout.v1.Timer
@@ -354,7 +573,7 @@ export type Timer = Message$1<"substantial.layout.v1.Timer"> & {
  * Use `create(TimerSchema)` to create a new message.
  */
 export const TimerSchema: GenMessage<Timer> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 9);
+  messageDesc(file_substantial_layout_v1_layout, 16);
 
 /**
  * @generated from message substantial.layout.v1.Fired
@@ -371,7 +590,7 @@ export type Fired = Message$1<"substantial.layout.v1.Fired"> & {
  * Use `create(FiredSchema)` to create a new message.
  */
 export const FiredSchema: GenMessage<Fired> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 10);
+  messageDesc(file_substantial_layout_v1_layout, 17);
 
 /**
  * @generated from message substantial.layout.v1.MessageConsumed
@@ -417,7 +636,7 @@ export type MessageConsumed = Message$1<"substantial.layout.v1.MessageConsumed">
  * Use `create(MessageConsumedSchema)` to create a new message.
  */
 export const MessageConsumedSchema: GenMessage<MessageConsumed> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 11);
+  messageDesc(file_substantial_layout_v1_layout, 18);
 
 /**
  * @generated from message substantial.layout.v1.Child
@@ -447,6 +666,13 @@ export type Child = Message$1<"substantial.layout.v1.Child"> & {
    * @generated from field: substantial.layout.v1.Value input = 5;
    */
   input?: Value | undefined;
+
+  /**
+   * The child's budget, given to its start.
+   *
+   * @generated from field: substantial.layout.v1.Budget budget = 6;
+   */
+  budget?: Budget | undefined;
 };
 
 /**
@@ -454,7 +680,7 @@ export type Child = Message$1<"substantial.layout.v1.Child"> & {
  * Use `create(ChildSchema)` to create a new message.
  */
 export const ChildSchema: GenMessage<Child> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 12);
+  messageDesc(file_substantial_layout_v1_layout, 19);
 
 /**
  * @generated from message substantial.layout.v1.Sent
@@ -513,7 +739,7 @@ export type Sent = Message$1<"substantial.layout.v1.Sent"> & {
  * Use `create(SentSchema)` to create a new message.
  */
 export const SentSchema: GenMessage<Sent> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 13);
+  messageDesc(file_substantial_layout_v1_layout, 20);
 
 /**
  * A workflow's send accepted: the chain's last run when it was read, and its workflow, which names
@@ -538,7 +764,64 @@ export type Delivery = Message$1<"substantial.layout.v1.Delivery"> & {
  * Use `create(DeliverySchema)` to create a new message.
  */
 export const DeliverySchema: GenMessage<Delivery> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 14);
+  messageDesc(file_substantial_layout_v1_layout, 21);
+
+/**
+ * The code awaited the end of a chain (c.result): what its replay read before the commit, which
+ * every replay gives the code again.
+ *
+ * @generated from message substantial.layout.v1.Watched
+ */
+export type Watched = Message$1<"substantial.layout.v1.Watched"> & {
+  /**
+   * @generated from field: uint64 occurrence = 1;
+   */
+  occurrence: bigint;
+
+  /**
+   * The chain awaited.
+   *
+   * @generated from field: string chain = 2;
+   */
+  chain: string;
+
+  /**
+   * @generated from oneof substantial.layout.v1.Watched.outcome
+   */
+  outcome: {
+    /**
+     * The chain's last run, under which runs/<run>/watch/<watcher> was created: its end arrives as
+     * a substantial.watched message.
+     *
+     * @generated from field: string waiting = 3;
+     */
+    value: string;
+    case: "waiting";
+  } | {
+    /**
+     * The chain's end, read before or just after the watcher key was created.
+     *
+     * @generated from field: substantial.layout.v1.Ended ended = 4;
+     */
+    value: Ended;
+    case: "ended";
+  } | {
+    /**
+     * RunNotFound: no such chain, or one collected.
+     *
+     * @generated from field: substantial.layout.v1.Failure refused = 5;
+     */
+    value: Failure;
+    case: "refused";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message substantial.layout.v1.Watched.
+ * Use `create(WatchedSchema)` to create a new message.
+ */
+export const WatchedSchema: GenMessage<Watched> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 22);
 
 /**
  * @generated from message substantial.layout.v1.Published
@@ -560,7 +843,7 @@ export type Published = Message$1<"substantial.layout.v1.Published"> & {
  * Use `create(PublishedSchema)` to create a new message.
  */
 export const PublishedSchema: GenMessage<Published> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 15);
+  messageDesc(file_substantial_layout_v1_layout, 23);
 
 /**
  * @generated from message substantial.layout.v1.Completed
@@ -577,7 +860,7 @@ export type Completed = Message$1<"substantial.layout.v1.Completed"> & {
  * Use `create(CompletedSchema)` to create a new message.
  */
 export const CompletedSchema: GenMessage<Completed> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 16);
+  messageDesc(file_substantial_layout_v1_layout, 24);
 
 /**
  * @generated from message substantial.layout.v1.Failed
@@ -594,7 +877,7 @@ export type Failed = Message$1<"substantial.layout.v1.Failed"> & {
  * Use `create(FailedSchema)` to create a new message.
  */
 export const FailedSchema: GenMessage<Failed> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 17);
+  messageDesc(file_substantial_layout_v1_layout, 25);
 
 /**
  * @generated from message substantial.layout.v1.Cancelled
@@ -611,7 +894,37 @@ export type Cancelled = Message$1<"substantial.layout.v1.Cancelled"> & {
  * Use `create(CancelledSchema)` to create a new message.
  */
 export const CancelledSchema: GenMessage<Cancelled> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 18);
+  messageDesc(file_substantial_layout_v1_layout, 26);
+
+/**
+ * The run passed a limit of its budget at a decision point: recorded once, so a replay never decides
+ * again. From here every blocked call raises BudgetExceeded and the run ends failed with it.
+ *
+ * @generated from message substantial.layout.v1.BudgetExceeded
+ */
+export type BudgetExceeded = Message$1<"substantial.layout.v1.BudgetExceeded"> & {
+  /**
+   * @generated from field: string meter = 1;
+   */
+  meter: string;
+
+  /**
+   * @generated from field: uint64 limit = 2;
+   */
+  limit: bigint;
+
+  /**
+   * @generated from field: uint64 used = 3;
+   */
+  used: bigint;
+};
+
+/**
+ * Describes the message substantial.layout.v1.BudgetExceeded.
+ * Use `create(BudgetExceededSchema)` to create a new message.
+ */
+export const BudgetExceededSchema: GenMessage<BudgetExceeded> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 27);
 
 /**
  * The next run's start is built from this event alone, so whoever does the effects needs no more.
@@ -662,7 +975,7 @@ export type Continued = Message$1<"substantial.layout.v1.Continued"> & {
  * Use `create(ContinuedSchema)` to create a new message.
  */
 export const ContinuedSchema: GenMessage<Continued> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 19);
+  messageDesc(file_substantial_layout_v1_layout, 28);
 
 /**
  * @generated from message substantial.layout.v1.Event
@@ -749,6 +1062,18 @@ export type Event = Message$1<"substantial.layout.v1.Event"> & {
      */
     value: Continued;
     case: "continued";
+  } | {
+    /**
+     * @generated from field: substantial.layout.v1.BudgetExceeded budget_exceeded = 14;
+     */
+    value: BudgetExceeded;
+    case: "budgetExceeded";
+  } | {
+    /**
+     * @generated from field: substantial.layout.v1.Watched watched = 15;
+     */
+    value: Watched;
+    case: "watched";
   } | { case: undefined; value?: undefined };
 };
 
@@ -757,7 +1082,7 @@ export type Event = Message$1<"substantial.layout.v1.Event"> & {
  * Use `create(EventSchema)` to create a new message.
  */
 export const EventSchema: GenMessage<Event> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 20);
+  messageDesc(file_substantial_layout_v1_layout, 29);
 
 /**
  * runs/<run>/log/<n>
@@ -795,11 +1120,26 @@ export type Segment = Message$1<"substantial.layout.v1.Segment"> & {
   createdAt?: Time | undefined;
 
   /**
-   * On an end segment, how long the run is kept after it ends; absent to keep it forever.
+   * On an end segment, how long the run is kept after it ends; absent on any other.
    *
    * @generated from field: optional uint64 retention_ms = 6;
    */
   retentionMs?: bigint | undefined;
+
+  /**
+   * The run's rest marker, queues/<workflow>/rest/<run>, exists: set by the suspension that
+   * created it, waiting on messages only, and kept by every later segment of the run.
+   *
+   * @generated from field: bool rest = 7;
+   */
+  rest: boolean;
+
+  /**
+   * The chain's cost through this segment, its own commit's planned requests included.
+   *
+   * @generated from field: substantial.layout.v1.Cost cost = 8;
+   */
+  cost?: Cost | undefined;
 };
 
 /**
@@ -807,10 +1147,10 @@ export type Segment = Message$1<"substantial.layout.v1.Segment"> & {
  * Use `create(SegmentSchema)` to create a new message.
  */
 export const SegmentSchema: GenMessage<Segment> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 21);
+  messageDesc(file_substantial_layout_v1_layout, 30);
 
 /**
- * runs/<run>/snap/<n>: every event of segments 0 to n.
+ * runs/<run>/snap/<n>: every event of segments 0 to n, after those of the failed runs it resumes.
  *
  * @generated from message substantial.layout.v1.Snapshot
  */
@@ -829,6 +1169,27 @@ export type Snapshot = Message$1<"substantial.layout.v1.Snapshot"> & {
    * @generated from field: substantial.layout.v1.Time next_wake = 3;
    */
   nextWake?: Time | undefined;
+
+  /**
+   * Segment n's rest.
+   *
+   * @generated from field: bool rest = 4;
+   */
+  rest: boolean;
+
+  /**
+   * Where the events come from, in their order, one per segment.
+   *
+   * @generated from field: repeated substantial.layout.v1.Origin origins = 5;
+   */
+  origins: Origin[];
+
+  /**
+   * Segment n's cost.
+   *
+   * @generated from field: substantial.layout.v1.Cost cost = 6;
+   */
+  cost?: Cost | undefined;
 };
 
 /**
@@ -836,7 +1197,42 @@ export type Snapshot = Message$1<"substantial.layout.v1.Snapshot"> & {
  * Use `create(SnapshotSchema)` to create a new message.
  */
 export const SnapshotSchema: GenMessage<Snapshot> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 22);
+  messageDesc(file_substantial_layout_v1_layout, 31);
+
+/**
+ * A segment whose events a snapshot holds: the run that wrote it, this one or a failed run it
+ * resumes, its number and time, and how many of the events that follow are its.
+ *
+ * @generated from message substantial.layout.v1.Origin
+ */
+export type Origin = Message$1<"substantial.layout.v1.Origin"> & {
+  /**
+   * @generated from field: string run = 1;
+   */
+  run: string;
+
+  /**
+   * @generated from field: uint64 n = 2;
+   */
+  n: bigint;
+
+  /**
+   * @generated from field: substantial.layout.v1.Time created_at = 3;
+   */
+  createdAt?: Time | undefined;
+
+  /**
+   * @generated from field: uint64 events = 4;
+   */
+  events: bigint;
+};
+
+/**
+ * Describes the message substantial.layout.v1.Origin.
+ * Use `create(OriginSchema)` to create a new message.
+ */
+export const OriginSchema: GenMessage<Origin> = /*@__PURE__*/
+  messageDesc(file_substantial_layout_v1_layout, 32);
 
 /**
  * runs/<run>/inbox/<ord>-<id>
@@ -877,10 +1273,11 @@ export type Message = Message$1<"substantial.layout.v1.Message"> & {
  * Use `create(MessageSchema)` to create a new message.
  */
 export const MessageSchema: GenMessage<Message> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 23);
+  messageDesc(file_substantial_layout_v1_layout, 33);
 
 /**
- * What a child's substantial.ended tells its parent: the end of its chain, as its result says.
+ * What a child's substantial.ended tells its parent, and substantial.watched a run awaiting the chain:
+ * the end of its chain, as its result says.
  *
  * @generated from message substantial.layout.v1.Ended
  */
@@ -909,6 +1306,13 @@ export type Ended = Message$1<"substantial.layout.v1.Ended"> & {
    * @generated from field: string reason = 5;
    */
   reason: string;
+
+  /**
+   * The child chain's cost, as its end segment recorded it.
+   *
+   * @generated from field: substantial.layout.v1.Cost cost = 6;
+   */
+  cost?: Cost | undefined;
 };
 
 /**
@@ -916,7 +1320,7 @@ export type Ended = Message$1<"substantial.layout.v1.Ended"> & {
  * Use `create(EndedSchema)` to create a new message.
  */
 export const EndedSchema: GenMessage<Ended> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 24);
+  messageDesc(file_substantial_layout_v1_layout, 34);
 
 /**
  * runs/<run>/claim/<n>-<attempt>
@@ -945,7 +1349,7 @@ export type Claim = Message$1<"substantial.layout.v1.Claim"> & {
  * Use `create(ClaimSchema)` to create a new message.
  */
 export const ClaimSchema: GenMessage<Claim> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 25);
+  messageDesc(file_substantial_layout_v1_layout, 35);
 
 /**
  * runs/<run>/result
@@ -997,7 +1401,7 @@ export type Result = Message$1<"substantial.layout.v1.Result"> & {
  * Use `create(ResultSchema)` to create a new message.
  */
 export const ResultSchema: GenMessage<Result> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 26);
+  messageDesc(file_substantial_layout_v1_layout, 36);
 
 /**
  * runs/<run>/gone: the run was collected, and its id stays taken until then.
@@ -1016,7 +1420,7 @@ export type Gone = Message$1<"substantial.layout.v1.Gone"> & {
  * Use `create(GoneSchema)` to create a new message.
  */
 export const GoneSchema: GenMessage<Gone> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 27);
+  messageDesc(file_substantial_layout_v1_layout, 37);
 
 /**
  * pub/<chain>/<key>/<seq>-<n>-<i>
@@ -1035,7 +1439,7 @@ export type PublishedValue = Message$1<"substantial.layout.v1.PublishedValue"> &
  * Use `create(PublishedValueSchema)` to create a new message.
  */
 export const PublishedValueSchema: GenMessage<PublishedValue> = /*@__PURE__*/
-  messageDesc(file_substantial_layout_v1_layout, 28);
+  messageDesc(file_substantial_layout_v1_layout, 38);
 
 /**
  * @generated from enum substantial.layout.v1.Status

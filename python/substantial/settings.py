@@ -6,8 +6,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from datetime import timedelta
-from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from substantial.errors import ConfigError
 
@@ -25,35 +24,22 @@ PUBLIC = (
 )
 # The least retention of the presets; a `result` wait follows its chain again within half of it.
 RETENTION_MIN = timedelta(hours=1)
-# The longest retention, 100 years; longer is `FOREVER`. A collection's due key names its year in
-# 4 digits, which far longer retentions would pass.
+# The longest retention, 100 years. A collection's due key names its year in 4 digits, which far
+# longer retentions would pass.
 RETENTION_MAX = timedelta(days=36_500)
 
 
-class Forever(Enum):
-    """`FOREVER`, a run kept until its namespace is deleted."""
-
-    FOREVER = "forever"
-
-
-FOREVER = Forever.FOREVER
-
-type Retention = timedelta | Literal[Forever.FOREVER]
-
-
 def check_retention(retention: object, minimum: timedelta, what: str) -> None:
-    if retention is FOREVER:
-        return
     if not isinstance(retention, timedelta):
-        raise ConfigError(f"{what} must be a timedelta or s.FOREVER, not {retention!r}")
+        raise ConfigError(f"{what} must be a timedelta, not {retention!r}")
     if retention < minimum:
         raise ConfigError(
-            f"{what} must be at least {minimum // timedelta(milliseconds=1)} ms or forever, "
+            f"{what} must be at least {minimum // timedelta(milliseconds=1)} ms, "
             f"not {retention // timedelta(milliseconds=1)} ms"
         )
     if retention > RETENTION_MAX:
         raise ConfigError(
-            f"{what} must be at most {RETENTION_MAX // timedelta(milliseconds=1)} ms or forever, "
+            f"{what} must be at most {RETENTION_MAX // timedelta(milliseconds=1)} ms, "
             f"not {retention // timedelta(milliseconds=1)} ms"
         )
 
@@ -90,7 +76,7 @@ class Settings:
     continue_as_new_after: ContinueAsNewAfter
     dedup_window: timedelta
     step_timeout: timedelta
-    retention: Retention
+    retention: timedelta
     tombstone: timedelta
     retention_min: timedelta
     recheck: timedelta
@@ -113,7 +99,7 @@ class Settings:
             claim_skew=timedelta(seconds=5),
             max_idle=max_idle,
             wait=timedelta(seconds=20),
-            due_page=100,
+            due_page=1000,
             due_pages=10,
             snapshot_every=64,
             continue_as_new_after=ContinueAsNewAfter(segments=1000, bytes=8 * MIB),
@@ -130,7 +116,7 @@ class Settings:
         refused.
 
         `continue_as_new_after` takes a `ContinueAsNewAfter`, or `0` to compress at every
-        boundary; `retention` a `timedelta` or `FOREVER`.
+        boundary; `retention` a `timedelta`.
         """
         unknown = sorted(set(settings) - set(PUBLIC))
         if unknown:

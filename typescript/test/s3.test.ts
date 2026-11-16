@@ -181,10 +181,8 @@ const live = { skip: NO_S3 };
 test("create and open run the probe", live, async () => {
   const url = s3Url();
   await assert.rejects(Substantial.open(url, { credentials: "env" }), LayoutError);
-  const created = await Substantial.create(url, { partitions: 2, credentials: "env" });
-  assert.equal(created.partitions, 2);
+  const created = await Substantial.create(url, { credentials: "env" });
   const opened = await Substantial.open(url, { credentials: "env" });
-  assert.equal(opened.partitions, 2);
   await created.close();
   await opened.close();
   const store = await openStore(url, "env");
@@ -202,7 +200,7 @@ test("wrong credentials are a store error", live, async () => {
     secretAccessKey: "not-the-secret",
   });
   await assert.rejects(
-    Substantial.create(s3Url(), { partitions: 1, credentials: wrong }),
+    Substantial.create(s3Url(), { credentials: wrong }),
     (e) =>
       e instanceof StoreError &&
       e.message.includes("HTTP 403 SignatureDoesNotMatch: ") &&
@@ -293,7 +291,7 @@ test("a credentials provider near expiry is called before each request", live, a
     };
   };
   const answer = workflow("answer", async () => 42);
-  const sub = await Substantial.create(s3Url(), { partitions: 1, credentials: provider });
+  const sub = await Substantial.create(s3Url(), { credentials: provider });
   const opened = calls;
   assert.ok(opened >= 1, "called at open");
   {

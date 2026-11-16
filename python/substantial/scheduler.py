@@ -36,7 +36,18 @@ UndoBody = Callable[[Any], StepBody]
 Handler = Callable[[run.Message], None]
 
 # Calls carrying the code's own names or values: `INVALID` for them is the code's argument.
-_NAMED = {"step", "receive", "bind", "start", "child_result", "send", "publish", "iterate"}
+_NAMED = {
+    "step",
+    "receive",
+    "bind",
+    "start",
+    "child_result",
+    "chain_result",
+    "send",
+    "cancel",
+    "publish",
+    "iterate",
+}
 
 
 def decode_json(value: layout.Value | None) -> Any:
@@ -48,11 +59,35 @@ def decode_json(value: layout.Value | None) -> Any:
 
 
 @dataclass(frozen=True)
+class PendingStep:
+    """A step call pending: what its attempts run, its name and step key, and its attempts in
+    all."""
+
+    body: StepBody
+    name: str
+    key: str
+    max_attempts: int
+
+
+@dataclass(frozen=True)
 class StepSpec:
     """What a step call runs: its attempts, and its undo with the step's options."""
 
     body: StepBody
     undo: tuple[UndoBody, run.StepOptions] | None = None
+
+
+@dataclass
+class Receives:
+    """The messages of one name delivered so far and the receives of it made, for a `receive`
+    with a timeout."""
+
+    delivered: int = 0
+    taken: int = 0
+    bound: bool = False
+    # Receives pending without and with a timeout: never both at once.
+    plain: int = 0
+    timed: int = 0
 
 
 class Shared:
@@ -73,14 +108,17 @@ class Shared:
         self.clock = clock
         self.run = data.run
         self.start = data.start
+        # A retry keeps the step keys of the first run of its line, so that a half-done effect
+        # keeps its idempotency key.
+        self.line = data.start.line if data.start.HasField("line") else data.run
         self.input = input_json
         self.loop = loop
         self.slots: dict[int, tuple[asyncio.Future, Decode]] = {}
-        # The steps pending, with their name and step key.
-        self.steps: dict[int, tuple[StepBody, str, str]] = {}
+        self.steps: dict[int, PendingStep] = {}
         # The undos of every step call of the replay, by call.
         self.undos: dict[int, tuple[UndoBody, run.StepOptions]] = {}
         self.handlers: dict[str, list[Handler]] = {}
+        self.receives: dict[str, Receives] = {}
         self.waits: list[tuple[int, Callable[[], object]]] = []
         # The children whose chain ended, for `Child.done`.
         self.ended: set[str] = set()
@@ -125,6 +163,8 @@ class Shared:
             self.fatal = self.fatal or str(e)
             raise
         self.live = called.live
+        if called.WhichOneof("called") == "failed":
+            raise error_from_failure(called.failed)
         return called
 
     def expect(self, call: run.Call, expected: str) -> Any:
@@ -150,8 +190,12 @@ class Shared:
             if not called.HasField("occurrence"):
                 raise self.protocol(f"step call answered without its occurrence: {called}")
             if which == "pending":
-                key = f"{self.run}/{call.step.name}/{called.occurrence}"
-                self.steps[called.pending] = (spec.body, call.step.name, key)
+                key = f"{self.line}/{call.step.name}/{called.occurrence}"
+                options = call.step.options
+                # A step without a retry policy has one attempt (I-6).
+                attempts = options.retry.max_attempts if options.HasField("retry") else 1
+                pending = PendingStep(spec.body, call.step.name, key, attempts)
+                self.steps[called.pending] = pending
                 if spec.undo is not None:
                     self.undos[called.pending] = spec.undo
         fut = self.loop.create_future()
@@ -167,7 +211,7 @@ class Shared:
             raise self.protocol(f"unexpected answer {which} to {call.WhichOneof('call')}")
         return fut
 
-    def step_body(self, call: int) -> tuple[StepBody, str, str] | None:
+    def step_body(self, call: int) -> PendingStep | None:
         return self.steps.get(call)
 
     def fail_code(self, failure: Failure) -> None:
@@ -228,11 +272,13 @@ class Shared:
         else:
             raise ProtocolError(f"empty resolution of call {r.call}")
 
-    def step_ended(self, call: int, attempt: int, outcome: run.Outcome) -> None:
-        self.machine.step_ended(call, attempt, outcome, self.clock.now())
+    def step_ended(
+        self, call: int, attempt: int, outcome: run.Outcome, charges: Sequence[layout.Amount]
+    ) -> None:
+        self.machine.step_ended(call, attempt, outcome, charges, self.clock.now())
 
-    def arrived(self, messages: Sequence[run.InboxMessage]) -> None:
-        self.machine.arrived(messages)
+    def arrived(self, messages: Sequence[run.InboxMessage], cost: layout.Cost) -> None:
+        self.machine.arrived(messages, cost)
 
     def next(self) -> run.Next:
         nxt = self.machine.next(self.clock.now())

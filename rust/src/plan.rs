@@ -12,6 +12,11 @@ pub(crate) async fn run(
     plan: b::plan_input::Plan,
 ) -> Result<plan_step::Step> {
     let machine = PlanMachine::new(core, &b::PlanInput { plan: Some(plan) })?;
+    outcome(&machine, store).await
+}
+
+/// Performs a plan's store steps up to its next outcome.
+pub(crate) async fn outcome(machine: &PlanMachine, store: &dyn Store) -> Result<plan_step::Step> {
     loop {
         match machine.next()? {
             plan_step::Step::Store(op) => machine.feed(store::perform(store, op).await)?,

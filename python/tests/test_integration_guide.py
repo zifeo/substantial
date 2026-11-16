@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 import pytest
 from test_examples import load
 
@@ -398,7 +399,7 @@ async def test_the_nightly_job_runs_at_three_in_zurich_across_a_dst_change(
             nights.append((day, p.env.now))
 
         monkeypatch.setattr(ledger, "report", report)
-        await p.env.start(web.nightly, id="nightly")
+        await p.env.schedule(web.nightly, "nightly", web.NIGHTLY, revision=1)
         await p.env.advance(s.days(3))
         assert nights == [
             ("2026-10-24", datetime(2026, 10, 24, 1, 0, tzinfo=UTC)),
@@ -407,12 +408,80 @@ async def test_the_nightly_job_runs_at_three_in_zurich_across_a_dst_change(
         ]
 
 
+async def test_nights_every_pod_missed_are_backfilled_in_order(ledger: Any) -> None:
+    async with s.testing.Env.open(now=datetime(2026, 11, 2, 12, 0, tzinfo=UTC)) as env:
+        async with env.worker(web.WORKFLOWS, preset="service"):
+            run = await env.schedule(web.nightly, "nightly", web.NIGHTLY, revision=1)
+            await env.settle()
+        await env.advance(s.days(3))
+        async with env.worker(web.WORKFLOWS, preset="service"):
+            await env.settle()
+        assert ledger.reports == ["2026-11-03", "2026-11-04", "2026-11-05"]
+        assert (await run.read("schedule"))["last"] == "2026-11-05T02:00:00.000Z"
+        await env.check()
+
+
+async def test_an_export_is_polled_until_it_is_ready(crm: Any) -> None:
+    async with pod() as p:
+        run = await p.env.start(web.crm_export, {"export": "x1"}, id="export-x1")
+        await p.env.advance(s.minutes(3))
+        assert await run.status() == "suspended"
+        crm.exports["x1"] = "https://crm.example/x1.csv"
+        await p.env.advance(s.minutes(1))
+        assert await run.result() == "https://crm.example/x1.csv"
+
+
+async def test_a_cronjob_drains_what_is_due_and_exits(ledger: Any) -> None:
+    async with s.testing.Env.open(now=datetime(2026, 11, 2, 1, 55, tzinfo=UTC)) as env:
+        await env.schedule(web.nightly, "nightly", web.NIGHTLY, revision=1)
+        await web.drain(env)
+        assert ledger.reports == []
+        await env.advance(s.minutes(10))
+        await web.drain(env)
+        assert ledger.reports == ["2026-11-02"]
+        await env.check()
+
+
 def test_the_engine_is_configured_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUBSTANTIAL_URL", raising=False)
     with pytest.raises(KeyError, match="SUBSTANTIAL_URL"):
         web.app()
     monkeypatch.setenv("SUBSTANTIAL_URL", "memory://webhooks")
-    monkeypatch.setenv("SUBSTANTIAL_PARTITIONS", "1")
     monkeypatch.setenv("SUBSTANTIAL_CONCURRENCY", "16")
-    assert web.Config.from_env() == web.Config("memory://webhooks", 1, 16)
+    assert web.Config.from_env() == web.Config("memory://webhooks", 16)
     assert web.app().router.routes
+
+
+@contextlib.asynccontextmanager
+async def http(app: Any) -> AsyncIterator[httpx.AsyncClient]:
+    """docs/testing.md, Testing an ASGI app: the lifespan entered by the test, the requests through
+    `httpx.ASGITransport`, all on the test's loop."""
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
+            yield client
+
+
+async def test_the_app_through_httpx_on_the_tests_loop(ledger: Any) -> None:
+    async with s.testing.Env.open(now=T0) as env:
+        app = web.create_app(env.client, concurrency=4)
+        async with http(app) as client:
+            op = {"id": "op-1", "kind": "credit", "amount": 30}
+            assert (await client.post("/accounts/acc-1/ops", json=op)).status_code == 202
+            await env.settle()
+            answer = await client.get("/accounts/acc-1/ops/op-1")
+            assert (answer.status_code, answer.json()) == (200, {"ok": True, "balance": 30})
+        await env.check()
+
+
+@pytest.mark.filterwarnings("ignore:Using `httpx` with `starlette.testclient`")
+def test_a_thread_portal_client_is_refused_rather_than_hanging(ledger: Any) -> None:
+    from starlette.testclient import TestClient
+
+    async def run() -> None:
+        async with s.testing.Env.open(now=T0) as env:
+            app = web.create_app(env.client, concurrency=4)
+            with pytest.raises(s.InvalidArgument, match="opened on the event loop"):
+                await asyncio.to_thread(lambda: TestClient(app).__enter__())
+
+    asyncio.run(run())

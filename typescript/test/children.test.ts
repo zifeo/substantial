@@ -38,7 +38,7 @@ const parent = workflow("parent", async (c: Context) => {
 });
 
 eachAdapter("a parent awaits its children", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [parent, double, listener]);
   const run = await sub.start(parent);
   assert.deepEqual(await run.result({ timeout: LONG }), [42, "StepFailed", "kid-ok", "now"]);
@@ -55,7 +55,7 @@ const adopter = workflow("adopter", async (c: Context) => {
 });
 
 eachAdapter("a child id taken by another run fails the child", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [adopter, double]);
   const taken = await sub.start(double, { n: 1 }, { id: "taken" });
   assert.equal(await taken.result({ timeout: LONG }), 2);
@@ -76,7 +76,7 @@ eachAdapter(
       }
       return "accepted";
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [stranger]);
     assert.equal(await (await sub.start(stranger)).result({ timeout: LONG }), "refused");
   },
@@ -102,7 +102,7 @@ eachAdapter("a loop compresses at every boundary", async (store) => {
     }
     return s.i;
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [counter], { continueAsNewAfter: 0 });
   const run = await sub.start(counter, {}, { id: "counter-1" });
   assert.equal(await run.result({ timeout: LONG }), 3);
@@ -135,7 +135,7 @@ eachAdapter(
       }
       return "accepted";
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [opaque, notObject], { continueAsNewAfter: 0 });
     const failed = await (await sub.start(opaque)).result({ timeout: LONG }).catch((e) => e);
     assert.ok(failed instanceof RunFailed, String(failed));
@@ -161,7 +161,7 @@ const flight = workflow("flight", async (c: Context, input: { n: number }) => {
 });
 
 eachAdapter("continue as new by hand", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [countdown, flight, landing]);
   const run = await sub.start(countdown, { n: 3 });
   assert.equal(await run.result({ timeout: LONG }), "liftoff");
@@ -183,7 +183,7 @@ const naming = workflow("naming", async (c: Context) => {
 eachAdapter(
   "a run knows its chain, through a continuation too",
   async (store) => {
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [named, naming]);
     const run = await sub.start(naming, {}, { id: "naming-1" });
     const { own, kid, said } = (await run.result({ timeout: LONG })) as Record<string, string>;

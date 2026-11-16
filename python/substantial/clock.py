@@ -26,6 +26,10 @@ class Clock:
         """Monotonic milliseconds, for durations a step of the wall clock must not change."""
         return time.monotonic_ns() // 1_000_000
 
+    def seconds(self) -> float:
+        """Monotonic seconds, for the durations an observer is told."""
+        return time.monotonic()
+
     async def wait(self, futures: Iterable[asyncio.Future[Any]], at: layout.Time | None) -> None:
         """Returns once one of `futures` is done, or once `at` has come."""
         pending = set(futures)

@@ -3,12 +3,15 @@ import process from "node:process";
 import { create } from "@bufbuild/protobuf";
 import { type Clock, Inbox, REAL } from "./clock.ts";
 import type { Core } from "./core.ts";
-import { ProtocolError } from "./errors.ts";
+import { type Prices, pricesProto } from "./cost.ts";
+import { Duration } from "./durations.ts";
+import { ConfigError, CoreError, InvalidArgument, onlyOptions, ProtocolError } from "./errors.ts";
 import { AgentMachine } from "./machines.ts";
+import { type Metering, ObserverRaised, Scan } from "./observe.ts";
 import { agent, type boundary, run, time } from "./proto.ts";
 import type { ReplayEvent } from "./replay.ts";
 import { Replays } from "./replays.ts";
-import { FOREVER, type Retention, type Settings } from "./settings.ts";
+import type { Settings } from "./settings.ts";
 import { perform } from "./stores/open.ts";
 import type { Store } from "./stores/store.ts";
 import type { Workflows } from "./workflow.ts";
@@ -17,7 +20,24 @@ type Event =
   | ReplayEvent
   | { readonly kind: "feed"; readonly id: bigint; readonly result: boundary.OpResult }
   | { readonly kind: "wake" }
-  | { readonly kind: "shutdown"; readonly graceMs?: number };
+  | { readonly kind: "wakeWorkflow"; readonly workflow: string }
+  | { readonly kind: "shutdown"; readonly graceMs?: number }
+  | { readonly kind: "drain"; readonly until: number };
+
+export interface DrainOptions {
+  /** The horizon, from now: what is due by then is served. */
+  readonly within: Duration;
+}
+
+/** The `within` of `drain`, checked. */
+export function drainWithin(options: DrainOptions): Duration {
+  onlyOptions(options, ["within"], "drain");
+  const { within } = options;
+  if (!(within instanceof Duration)) {
+    throw new InvalidArgument(`within is a Duration, not ${within}`);
+  }
+  return within;
+}
 
 /** The name of a worker's loop task, before its id. */
 export const LOOP = "worker ";
@@ -33,14 +53,13 @@ function randomSeed(): Uint8Array {
 export function agentConfig(
   worker: string,
   workflows: Workflows,
-  partitions: number,
   s: Settings,
   storeWaits: boolean,
+  prices: Prices | undefined,
   seed?: Uint8Array,
 ): agent.AgentConfig {
   return create(agent.AgentConfigSchema, {
     prefix: "",
-    partitions,
     worker,
     workflows: workflows.served().map(({ retention, ...served }) => ({
       ...served,
@@ -61,6 +80,7 @@ export function agentConfig(
       continueAsNewAfterBytes: BigInt(s.continueAsNewAfter.bytes),
       dedupWindowMs: BigInt(s.dedupWindow.ms),
       retention: retentionOf(s.retention),
+      ...(prices === undefined ? {} : { prices: pricesProto(prices) }),
     },
     storeWaits,
     waitSeconds: s.wait.ms / 1000,
@@ -70,12 +90,8 @@ export function agentConfig(
   });
 }
 
-function retentionOf(r: Retention): run.Retention {
-  const keep =
-    r === FOREVER
-      ? { case: "forever" as const, value: {} }
-      : { case: "ms" as const, value: BigInt(r.ms) };
-  return create(run.RetentionSchema, { keep });
+function retentionOf(r: Duration): run.Retention {
+  return create(run.RetentionSchema, { ms: BigInt(r.ms) });
 }
 
 function hex(bytes: Uint8Array): string {
@@ -93,6 +109,7 @@ export interface WorkerHooks {
 /** What one life of a worker runs on: the test environment gives each its own. */
 export interface Incarnation {
   readonly core: Core;
+  /** Observed already when its `Substantial` has an observer. */
   readonly store: Store;
   readonly clock: Clock;
   readonly id: string;
@@ -106,13 +123,22 @@ export function realIncarnation(core: Core, store: Store): Incarnation {
 }
 
 let wakeWorker: (worker: Worker) => void;
+let wakeWorkerOn: (worker: Worker, workflow: string) => void;
 let restartWorker: (worker: Worker, incarnation: Incarnation) => void;
 let leaveWorker: (worker: Worker, graceMs: number) => void;
 let workerPending: (worker: Worker) => boolean;
+let drainWorker: (worker: Worker, within: Duration) => void;
+let endedWorker: (worker: Worker) => Promise<void>;
 
-/** Wakes `worker` at once, as after a message sent from this process. */
+/** Wakes `worker` at once for a full scan of every workflow it serves. */
 export function wake(worker: Worker): void {
   wakeWorker(worker);
+}
+
+/** Wakes `worker` at once on `workflow`, as after a start or a send from this process: it lists
+ * that workflow's due entries alone. */
+export function wakeOn(worker: Worker, workflow: string): void {
+  wakeWorkerOn(worker, workflow);
 }
 
 /** Starts `worker` again as `incarnation`, its last life abandoned. */
@@ -130,46 +156,71 @@ export function pending(worker: Worker): boolean {
   return workerPending(worker);
 }
 
-/** Runs the workflows it is given, on every partition, from its creation: `await using` it,
+/** Asks `worker` to drain within `within`, without waiting for it. */
+export function startDrain(worker: Worker, within: Duration): void {
+  drainWorker(worker, within);
+}
+
+/** Its loop's end, its error thrown if it died. */
+export function ended(worker: Worker): Promise<void> {
+  return endedWorker(worker);
+}
+
+/** Runs the workflows it is given, from its creation: `await using` it,
  * `shutdown()` it, or `serve()` it until a SIGTERM or a Ctrl-C. */
 export class Worker {
   readonly #workflows: Workflows;
-  readonly #partitions: number;
   readonly #settings: Settings;
   readonly #hooks: WorkerHooks;
+  readonly #metering: Metering;
   #events = new Inbox<Event>();
   #loop: Promise<void> = Promise.resolve();
   #running = false;
   #failure: { error: unknown } | undefined;
   #wakePending = false;
+  #clock: Clock = REAL;
+  /** The horizon of a drain asked for, which a life Chaos starts in place of another drains to. */
+  #drainUntil: number | undefined;
 
   constructor(
     incarnation: Incarnation,
     workflows: Workflows,
-    partitions: number,
     settings: Settings,
     hooks: WorkerHooks,
+    metering: Metering,
   ) {
     this.#workflows = workflows;
-    this.#partitions = partitions;
     this.#settings = settings;
     this.#hooks = hooks;
+    this.#metering = metering;
     this.#start(incarnation);
   }
 
   static {
     wakeWorker = (worker) => worker.#wake();
+    wakeWorkerOn = (worker, workflow) => worker.#events.push({ kind: "wakeWorkflow", workflow });
     restartWorker = (worker, incarnation) => worker.#start(incarnation);
     leaveWorker = (worker, graceMs) => worker.#events.push({ kind: "shutdown", graceMs });
     workerPending = (worker) => !worker.#events.empty;
+    drainWorker = (worker, within) => worker.#drain(within);
+    endedWorker = (worker) => worker.#ended();
   }
 
   #start(incarnation: Incarnation): void {
     const { core, store, clock, id } = incarnation;
     const waits = store.capabilities.wait;
     const s = this.#settings;
-    const config = agentConfig(id, this.#workflows, this.#partitions, s, waits, incarnation.seed);
-    const machine = new AgentMachine(core, config);
+    const prices = this.#metering.prices;
+    const config = agentConfig(id, this.#workflows, s, waits, prices, incarnation.seed);
+    let machine: AgentMachine;
+    try {
+      machine = new AgentMachine(core, config);
+    } catch (e) {
+      // The config is the worker's: one the core refuses, such as prices in a currency outside
+      // ISO 4217, is a ConfigError where the worker starts.
+      if (e instanceof CoreError && e.kind === "INVALID") throw new ConfigError(e.detail);
+      throw e;
+    }
     let first: agent.AgentCommand;
     try {
       first = machine.next(time(clock.now()));
@@ -178,11 +229,13 @@ export class Worker {
       throw e;
     }
     const events = new Inbox<Event>();
+    if (this.#drainUntil !== undefined) events.push({ kind: "drain", until: this.#drainUntil });
     this.#events = events;
+    this.#clock = clock;
     this.#wakePending = false;
     this.#failure = undefined;
     this.#running = true;
-    const host = { store, stepTimeout: s.stepTimeout };
+    const host = { store, stepTimeout: s.stepTimeout, metering: this.#metering };
     const replays = new Replays(core, this.#workflows, events, host, clock);
     const loop = clock.spawn(
       () => this.#run(machine, replays, first, clock, store, events),
@@ -230,6 +283,19 @@ export class Worker {
     return this.#ended();
   }
 
+  /** Serves every run due now or within `within`, those its own work makes due, and those of a
+   * crashed worker whose claim expires by then, then stops as `shutdown` does once nothing is due
+   * by then and nothing is in flight; throws the worker's error if it died. */
+  drain(options: DrainOptions): Promise<void> {
+    this.#drain(drainWithin(options));
+    return this.#ended();
+  }
+
+  #drain(within: Duration): void {
+    this.#drainUntil = this.#clock.now() + within.ms;
+    this.#events.push({ kind: "drain", until: this.#drainUntil });
+  }
+
   [Symbol.asyncDispose](): Promise<void> {
     return this.shutdown();
   }
@@ -265,16 +331,24 @@ export class Worker {
             const { id, op } = c.value;
             if (op === undefined) throw new ProtocolError("store command without an op");
             clock.spawn(async () => {
-              events.push({ kind: "feed", id, result: await perform(store, op) });
+              try {
+                events.push({ kind: "feed", id, result: await perform(store, op) });
+              } catch (e) {
+                if (!(e instanceof ObserverRaised)) throw e;
+                events.push({ kind: "died", error: e.error });
+              }
             }, "store op");
             break;
           }
           case "replay":
             if (c.value.input === undefined) throw new ProtocolError("replay without input");
-            replays.spawn(c.value.run, c.value.input);
+            replays.spawn(c.value.run, c.value.input, c.value.dueAt);
             break;
           case "committed":
             replays.committed(c.value);
+            break;
+          case "scanned":
+            this.#metering.tell(new Scan(c.value.workflow, c.value.due));
             break;
           case "stopReplay":
             replays.stop(c.value);
@@ -308,6 +382,14 @@ export class Worker {
               case "wake":
                 this.#wakePending = false;
                 machine.wake();
+                break;
+              case "wakeWorkflow":
+                machine.wakeWorkflow(event.workflow);
+                break;
+              case "died":
+                throw event.error;
+              case "drain":
+                machine.drain(time(event.until));
                 break;
               case "shutdown":
                 if (graceEnds === undefined) {

@@ -7,11 +7,13 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::Substantial;
+use crate::cost::Budget;
 use crate::error::{Error, Failure, Result, run_failed_cause};
 use crate::names::{check_key, check_name};
 use crate::plan;
 use crate::proto::boundary::v1::{
-    self as b, plan_input::Plan, plan_step::Step, read_value, run_result, run_state, sent,
+    self as b, history, plan_input::Plan, plan_step::Step, read_value, retried, run_result,
+    run_state, sent,
 };
 use crate::proto::layout::v1::Status;
 use crate::store::h3;
@@ -60,8 +62,40 @@ impl TryFrom<b::RunStatus> for RunStatus {
     }
 }
 
-/// A handle on a chain whose result is an `O`: `send`, `result`, `status` and `cancel` act on
-/// its last run.
+/// An event of a run's history, as its replay reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryEvent {
+    /// The run whose segment recorded it: the chain's last run, or a failed run it resumes.
+    pub run: String,
+    pub segment: u64,
+    /// When the segment was committed.
+    pub at: chrono::DateTime<chrono::Utc>,
+    /// `step`, `step_retry`, `step_failed`, `timer`, `fired`, `message`, `child`, `sent`,
+    /// `published`, `budget_exceeded`, `completed`, `failed`, `cancelled` or `continued`.
+    pub kind: String,
+    /// The event's fields: times in RFC 3339, failures as `{"type", "message", "retryable",
+    /// "details"}`, a value of raw bytes as `{"$bytes": "<base64>"}`.
+    pub data: serde_json::Value,
+}
+
+impl TryFrom<b::HistoryEvent> for HistoryEvent {
+    type Error = Error;
+
+    fn try_from(e: b::HistoryEvent) -> Result<Self> {
+        let at =
+            e.at.ok_or_else(|| Error::Protocol("history event without a time".into()))?;
+        Ok(HistoryEvent {
+            run: e.run,
+            segment: e.segment,
+            at: super::datetime(&at),
+            kind: e.kind,
+            data: serde_json::from_slice(&e.data)?,
+        })
+    }
+}
+
+/// A handle on a chain whose result is an `O`: `send`, `result`, `status`, `cancel`, `history`
+/// and `retry` act on its last run.
 pub struct Run<O> {
     sub: Substantial,
     chain: String,
@@ -111,7 +145,6 @@ impl<O> Run<O> {
         let ord = self.sub.ulid(now.ms);
         let cancel = b::CancelPlan {
             prefix: String::new(),
-            partitions: self.sub.partitions(),
             chain: self.chain.clone(),
             reason: reason.to_owned(),
             id: ord.clone(),
@@ -137,7 +170,6 @@ impl<O> Run<O> {
         self.check_chain()?;
         let status = b::StatusPlan {
             prefix: String::new(),
-            partitions: self.sub.partitions(),
             chain: self.chain.clone(),
             now: Some(self.sub.now()),
         };
@@ -156,13 +188,46 @@ impl<O> Run<O> {
         Ok(status)
     }
 
+    /// The events of the chain's last run as its replay reads them, a retry's including those of
+    /// the failed run it resumes.
+    pub async fn history(&self) -> Result<Vec<HistoryEvent>> {
+        self.check_chain()?;
+        let plan = b::HistoryPlan {
+            prefix: String::new(),
+            chain: self.chain.clone(),
+        };
+        match self.sub.plan(Plan::History(plan)).await? {
+            Step::History(b::History {
+                history: Some(history),
+            }) => match history {
+                history::History::Events(e) => {
+                    e.events.into_iter().map(TryInto::try_into).collect()
+                }
+                history::History::NoChain(n) => Err(self.not_found(n)),
+                history::History::Failed(f) => Err(Error::StoreError(f.message)),
+            },
+            other => Err(plan::unexpected("history", other)),
+        }
+    }
+
+    /// Retries the chain's last run, which failed: a new run replays its history without its
+    /// failure, so its steps that succeeded return their recorded values and the step that
+    /// failed runs again with a fresh retry budget. The retry keeps the failed run's budget and
+    /// its cost so far, unless `.budget(..)` gives another budget.
+    pub fn retry(&self) -> RetryRun {
+        RetryRun {
+            sub: self.sub.clone(),
+            chain: self.chain.clone(),
+            budget: None,
+        }
+    }
+
     /// The last value published under `key` by any run of the chain, `None` before the first.
     pub async fn read<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
         self.check_chain()?;
         check_key("published key", key)?;
         let read = b::ReadPlan {
             prefix: String::new(),
-            partitions: self.sub.partitions(),
             chain: self.chain.clone(),
             key: key.to_owned(),
         };
@@ -181,6 +246,7 @@ impl<O> Run<O> {
         ResultWait {
             run: self.clone(),
             timeout: None,
+            max_interval: None,
             refollow: REFOLLOW,
         }
     }
@@ -194,7 +260,6 @@ impl<O> Run<O> {
         self.check_chain()?;
         let plan = b::ResultPlan {
             prefix: String::new(),
-            partitions: self.sub.partitions(),
             chain: self.chain.clone(),
             run: last,
         };
@@ -219,25 +284,27 @@ impl<O> Run<O> {
             Err(Error::RunFailed {
                 run: run.clone(),
                 status,
-                error,
+                error: Box::new(error),
                 cause,
             })
         };
         match status {
             Status::Completed => decode(result.value).map(Ended::Value),
             Status::Failed => {
-                let mut error = result
-                    .error
-                    .ok_or_else(|| Error::Protocol("failed without an error".into()))?;
-                let details = error.details.take().map(|v| decode(Some(v))).transpose()?;
-                let cause = run_failed_cause(&error.r#type, details)?;
-                failed(RunStatus::Failed, error.into(), cause)
+                let error = Failure::try_from(
+                    result
+                        .error
+                        .ok_or_else(|| Error::Protocol("failed without an error".into()))?,
+                )?;
+                let cause = run_failed_cause(&error.kind, error.details.clone())?;
+                failed(RunStatus::Failed, error, cause)
             }
             Status::Cancelled => {
                 let error = Failure {
                     kind: "Cancelled".into(),
                     message: result.reason,
                     retryable: false,
+                    details: None,
                 };
                 failed(RunStatus::Cancelled, error, None)
             }
@@ -268,8 +335,8 @@ async fn sent(sub: &Substantial, chain: &str, plan: Plan) -> Result<()> {
         Step::Sent(b::Sent {
             sent: Some(outcome),
         }) => match outcome {
-            sent::Sent::Accepted(_) => {
-                sub.wake_workers();
+            sent::Sent::Accepted(accepted) => {
+                sub.wake_workers(&accepted.workflow);
                 Ok(())
             }
             sent::Sent::Refused(r) => Err(Error::RunEnded {
@@ -280,6 +347,54 @@ async fn sent(sub: &Substantial, chain: &str, plan: Plan) -> Result<()> {
             sent::Sent::Failed(f) => Err(Error::StoreError(f.message)),
         },
         other => Err(plan::unexpected("send", other)),
+    }
+}
+
+/// A retry of a chain's failed last run, awaited to create it.
+#[must_use = "a retry does nothing until awaited"]
+pub struct RetryRun {
+    sub: Substantial,
+    chain: String,
+    budget: Option<Budget>,
+}
+
+impl RetryRun {
+    /// The retry's budget, instead of the failed run's. A second retry of the same failed run
+    /// with another budget is `InvalidArgument`.
+    pub fn budget(mut self, budget: impl Into<Budget>) -> Self {
+        self.budget = Some(budget.into());
+        self
+    }
+}
+
+impl IntoFuture for RetryRun {
+    type Output = Result<()>;
+    type IntoFuture = BoxFuture<'static, Result<()>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            check_key("run id", &self.chain)?;
+            let plan = b::RetryPlan {
+                prefix: String::new(),
+                chain: self.chain.clone(),
+                now: Some(self.sub.now()),
+                budget: self.budget.as_ref().map(Budget::to_proto).transpose()?,
+            };
+            match self.sub.plan(Plan::Retry(plan)).await? {
+                Step::Retried(b::Retried {
+                    retried: Some(outcome),
+                }) => match outcome {
+                    retried::Retried::Created(r) | retried::Retried::Existing(r) => {
+                        self.sub.wake_workers(&r.workflow);
+                        Ok(())
+                    }
+                    retried::Retried::NotRetryable(n) => Err(Error::InvalidArgument(n.message)),
+                    retried::Retried::NoChain(n) => Err(not_found(&self.chain, n)),
+                    retried::Retried::Failed(f) => Err(Error::StoreError(f.message)),
+                },
+                other => Err(plan::unexpected("retry", other)),
+            }
+        })
     }
 }
 
@@ -316,7 +431,6 @@ impl IntoFuture for SendMessage {
             let ord = self.sub.ulid(now.ms);
             let send = b::SendPlan {
                 prefix: String::new(),
-                partitions: self.sub.partitions(),
                 chain: self.chain.clone(),
                 name: self.name,
                 value: Some(json(self.value?)?),
@@ -335,12 +449,21 @@ impl IntoFuture for SendMessage {
 pub struct ResultWait<T> {
     run: Run<T>,
     timeout: Option<Duration>,
+    max_interval: Option<Duration>,
     refollow: Duration,
 }
 
 impl<T> ResultWait<T> {
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// The longest wait between two polls, which double their interval up to it, 30 s unless
+    /// given; positive. No effect on a store whose listings wait, nor in a test environment,
+    /// where nothing polls.
+    pub fn max_interval(mut self, max_interval: Duration) -> Self {
+        self.max_interval = Some(max_interval);
         self
     }
 
@@ -361,6 +484,16 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
     type IntoFuture = BoxFuture<'static, Result<T>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        let cap = match self.max_interval {
+            None => MAX_POLL,
+            Some(cap) if !cap.is_zero() => cap,
+            Some(zero) => {
+                let refused = Error::InvalidArgument(format!(
+                    "max_interval is a positive duration, not {zero:?}"
+                ));
+                return Box::pin(async { Err(refused) });
+            }
+        };
         #[cfg(feature = "testing")]
         if let Some(env) = self.run.sub.env().cloned() {
             return Box::pin(settled(self.run, env, self.timeout));
@@ -369,7 +502,7 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
             let mut died = self.run.sub.0.died.subscribe();
             let store = &*self.run.sub.0.store;
             let polled = async {
-                let (mut delay, mut last) = (FIRST_POLL, None);
+                let (mut delay, mut last) = (FIRST_POLL.min(cap), None);
                 let mut followed = tokio::time::Instant::now();
                 loop {
                     if followed.elapsed() >= self.refollow {
@@ -388,7 +521,7 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
                         }
                     } else {
                         tokio::time::sleep(delay).await;
-                        delay = (delay * 2).min(MAX_POLL);
+                        delay = (delay * 2).min(cap);
                     }
                 }
             };

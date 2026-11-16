@@ -58,7 +58,7 @@ export const backup = s.workflow("backup", async (c, input: { source: string; ta
 });
 
 export async function main(url: string): Promise<unknown> {
-  await using sub = await s.Substantial.create(url, { partitions: 1 });
+  await using sub = await s.Substantial.create(url);
   await using _worker = sub.worker([backup, verify], { preset: "script" });
   const run = await sub.start(
     backup,

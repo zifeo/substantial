@@ -87,6 +87,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         .name
         .unwrap_or_else(|| LitStr::new(&ident.unraw().to_string(), ident.span()));
     names::call(&name, "step")?;
+    names::not_reserved(&name)?;
 
     let args: Vec<Ident> = (0..types.len())
         .map(|i| format_ident!("__arg{i}"))

@@ -5,16 +5,17 @@ from __future__ import annotations
 import inspect
 import json
 import math
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Concatenate, Protocol, overload
 
 from substantial._proto import checked, run
+from substantial.cost import budget_proto
 from substantial.durations import millis
 from substantial.errors import ConfigError, Failed, Failure, InvalidArgument
 from substantial.names import check_key
-from substantial.settings import FOREVER, Retention, check_retention
+from substantial.settings import check_retention
 
 if TYPE_CHECKING:
     from substantial.context import Context
@@ -71,7 +72,8 @@ class Workflow[**P, R]:
         name: str | None = None,
         version: int | None = None,
         step_timeout: timedelta | None = None,
-        retention: Retention | None = None,
+        retention: timedelta | None = None,
+        budget: Mapping[str, int] | None = None,
     ):
         if not inspect.iscoroutinefunction(fn):
             raise InvalidArgument(f"a workflow is an async function, not {fn!r}")
@@ -79,14 +81,10 @@ class Workflow[**P, R]:
             raise InvalidArgument(f"a workflow version is an int in [0, 2**32), not {version!r}")
         if step_timeout is not None and millis(step_timeout) == 0:
             raise InvalidArgument(f"a workflow step_timeout is positive, not {step_timeout}")
-        if (
-            retention is not None
-            and retention is not FOREVER
-            and not isinstance(retention, timedelta)
-        ):
-            raise InvalidArgument(
-                f"a workflow retention is a timedelta or s.FOREVER, not {retention!r}"
-            )
+        if retention is not None and not isinstance(retention, timedelta):
+            raise InvalidArgument(f"a workflow retention is a timedelta, not {retention!r}")
+        if budget is not None:
+            budget_proto(budget)
         self.fn: Callable[..., Awaitable[R]] = fn
         self.name: str = check_key("workflow name", fn.__name__ if name is None else name)
         self.version = version
@@ -94,6 +92,8 @@ class Workflow[**P, R]:
         self.step_timeout = step_timeout
         # How long its runs are kept after their chain ends, over the worker's `retention`.
         self.retention = retention
+        # The budget of its runs started without one of their own.
+        self.budget = None if budget is None else dict(budget)
         self.__doc__ = fn.__doc__
         self.__wrapped__ = fn
 
@@ -128,7 +128,8 @@ def workflow(
     name: str | None = None,
     version: int | None = None,
     step_timeout: timedelta | None = None,
-    retention: Retention | None = None,
+    retention: timedelta | None = None,
+    budget: Mapping[str, int] | None = None,
 ) -> _WorkflowDecorator: ...
 def workflow(
     fn: Callable[..., Awaitable[Any]] | None = None,
@@ -137,13 +138,19 @@ def workflow(
     name: str | None = None,
     version: int | None = None,
     step_timeout: timedelta | None = None,
-    retention: Retention | None = None,
+    retention: timedelta | None = None,
+    budget: Mapping[str, int] | None = None,
 ) -> Workflow[..., Any] | _WorkflowDecorator:
-    """`@workflow` or `@workflow(name=, version=, step_timeout=, retention=)`."""
+    """`@workflow` or `@workflow(name=, version=, step_timeout=, retention=, budget=)`."""
     if fn is not None:
         return Workflow(fn)
     return lambda f: Workflow(
-        f, name=name, version=version, step_timeout=step_timeout, retention=retention
+        f,
+        name=name,
+        version=version,
+        step_timeout=step_timeout,
+        retention=retention,
+        budget=budget,
     )
 
 
@@ -165,7 +172,7 @@ class Workflows:
         if not self.by_key:
             raise ConfigError("a worker needs at least one workflow")
         # The core keeps one retention per name.
-        self.retentions: dict[str, Retention | None] = {}
+        self.retentions: dict[str, timedelta | None] = {}
         for (name, _), w in self.by_key.items():
             if w.retention is not None:
                 check_retention(w.retention, retention_min, f"the retention of workflow {name!r}")

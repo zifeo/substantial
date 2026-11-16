@@ -25,7 +25,7 @@ eachAdapter("now, sleepUntil and step keys", async (store) => {
     for (let i = 0; i < 2; i++) keys.push(await c.step("keyed", () => stepKey()));
     return { slept: end.getTime() - start.getTime(), keys };
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [timed]);
   const run = await sub.start(timed, {}, { id: "timed-1" });
   const { slept, keys } = (await run.result({ timeout: LONG })) as {
@@ -46,7 +46,7 @@ eachAdapter("random and uuid are recorded", async (store) => {
     await c.receive("again");
     return { x, id };
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = await sub.start(rolled);
   {
     // A commit lists the inbox after it writes the segment, so a message sent once the roll is
@@ -79,7 +79,7 @@ eachAdapter(
       }
       return refused;
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [names]);
     const run = await sub.start(names);
     const twice = (name: string) => [name, name];
@@ -97,7 +97,7 @@ eachAdapter("a run cancels itself", async (store) => {
     await c.step("first", () => null);
     await c.cancel("enough");
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   await using _ = script(sub, [quitter]);
   const failed = await (await sub.start(quitter)).result({ timeout: LONG }).catch((e) => e);
   assert.ok(failed instanceof RunFailed, String(failed));
@@ -118,7 +118,7 @@ eachAdapter("published values are read by clients", async (store) => {
     }
     return false;
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = await sub.start(publisher, {}, { id: "pub-1" });
   assert.equal(await run.read("progress"), undefined);
   {
@@ -145,7 +145,7 @@ function versioned(version?: number) {
 }
 
 eachAdapter("runs are replayed by the code of their version", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   assert.throws(() => script(sub, [versioned(), versioned(2), versioned(2)]), ConfigError);
   const none = await sub.start(versioned());
   {
@@ -164,14 +164,15 @@ eachAdapter("runs are replayed by the code of their version", async (store) => {
   assert.equal(await two.result({ timeout: LONG }), "v2");
 });
 
-/** Version 1 steps then sleeps, version 2 sleeps then steps: the same name, no version. */
+/** Version 1 steps then waits for `go`, version 2 waits for `go` then steps: the same name, no
+ * version. Waiting on a message keeps the run suspended until the test sends it. */
 function changed(first: boolean) {
   return workflow("changed", async (c: Context) => {
     if (first) {
       await c.step("one", () => 1);
-      await c.sleep(milliseconds(300));
+      await c.receive("go");
     } else {
-      await c.sleep(milliseconds(300));
+      await c.receive("go");
       await c.step("one", () => 1);
     }
     return 1;
@@ -179,13 +180,14 @@ function changed(first: boolean) {
 }
 
 eachAdapter("an incompatible change fails the run with NonDeterminism", async (store) => {
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const run = await sub.start(changed(true));
   {
     await using _ = script(sub, [changed(true)]);
-    await eventually("the sleep", async () => (await run.status()) === "suspended");
+    await eventually("the wait", async () => (await run.status()) === "suspended");
   }
   await using _ = script(sub, [changed(false)]);
+  await run.send("go", "now");
   await assert.rejects(run.result({ timeout: LONG }), (e) => {
     assert.ok(e instanceof RunFailed, String(e));
     assert.equal(e.status, "failed");
@@ -218,7 +220,7 @@ eachAdapter(
     console.info = (...data: unknown[]) => lines.push(`info ${data.join(" ")}`);
     console.warn = (...data: unknown[]) => lines.push(`warn ${data.join(" ")}`);
     try {
-      const sub = await createOn(store, { partitions: 1 });
+      const sub = await createOn(store);
       await using _ = script(sub, [logging]);
       assert.equal(await (await sub.start(logging)).result({ timeout: LONG }), 3);
     } finally {

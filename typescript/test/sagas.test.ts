@@ -43,7 +43,7 @@ eachAdapter("a rollback undoes every step most recent first", async (store) => {
     await withArgs(1, "x");
     await c.rollback("why");
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const error = await rolledBack(sub, rolling);
   assert.deepEqual([error.type, error.message], ["RolledBack", "why"]);
   assert.deepEqual(log, [["c", 1, "x"], "a"]);
@@ -67,7 +67,7 @@ eachAdapter("a saga undoes its own steps then throws again", async (store) => {
     assert.equal(await c.saga(async () => c.step("fine", () => 7)), 7);
     await c.rollback("after the saga");
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const error = await rolledBack(sub, saga);
   assert.equal(error.type, "RolledBack", error.message);
   assert.deepEqual(log, ["c", "b", "a"]);
@@ -83,7 +83,7 @@ eachAdapter("an undo without attempts left fails the run", async (store) => {
     await charge("visa");
     await c.rollback("fraud");
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const error = await rolledBack(sub, stuck);
   assert.equal(error.type, "UndoFailed", error.message);
   assert.match(error.message, /charge\.undo/);
@@ -105,7 +105,7 @@ eachAdapter(
       }
       return "accepted";
     });
-    const sub = await createOn(store, { partitions: 1 });
+    const sub = await createOn(store);
     await using _ = script(sub, [late]);
     assert.equal(await (await sub.start(late)).result({ timeout: LONG }), "refused");
   },
@@ -129,7 +129,7 @@ eachAdapter("an inner saga ended hands its steps to the outer one", async (store
     assert.ok(thrown instanceof StepFailed, String(thrown));
     await c.rollback("after");
   });
-  const sub = await createOn(store, { partitions: 1 });
+  const sub = await createOn(store);
   const error = await rolledBack(sub, nested);
   assert.equal(error.type, "RolledBack", error.message);
   assert.deepEqual(log, ["c", "b", "a", "z"]);

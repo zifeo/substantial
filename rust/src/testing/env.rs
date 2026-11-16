@@ -15,7 +15,9 @@ use super::hold::{Hold, HoldState};
 use super::store::{Chaos, Faults};
 use super::world::World;
 use crate::client::Substantial;
+use crate::cost::Prices;
 use crate::error::{Error, Result};
+use crate::observe::{Metering, Observed};
 use crate::proto::boundary::v1::{self as b, plan_input::Plan};
 use crate::time::millis;
 
@@ -41,11 +43,24 @@ pub struct Env {
 pub struct OpenEnv {
     now: DateTime<Utc>,
     chaos: Option<Chaos>,
+    metering: Metering,
 }
 
 impl OpenEnv {
     pub fn chaos(mut self, chaos: Chaos) -> Self {
         self.chaos = Some(chaos);
+        self
+    }
+
+    /// As `Create::prices`, for the environment, its clients and its workers.
+    pub fn prices(mut self, prices: Prices) -> Self {
+        self.metering.prices = Some(prices);
+        self
+    }
+
+    /// As `Create::observe`, for the environment, its clients and its workers.
+    pub fn observe(mut self, f: impl Fn(&Observed) + Send + Sync + 'static) -> Self {
+        self.metering.observe = Some(Arc::new(f));
         self
     }
 }
@@ -77,11 +92,13 @@ impl IntoFuture for OpenEnv {
                     c.rate
                 )));
             }
+            if let Some(prices) = &self.metering.prices {
+                prices.validate()?;
+            }
             let ns = format!("testing-{}", hex::encode(rand::random::<[u8; 8]>()));
-            let world = Arc::new(World::new(ns, ms, self.chaos)?);
+            let world = Arc::new(World::new(ns, ms, self.chaos, self.metering)?);
             let plan = Plan::Create(b::CreatePlan {
                 prefix: String::new(),
-                partitions: world.partitions,
             });
             let sub = Attached::new(&world, true).open(plan).await?;
             Ok(Env {
@@ -104,7 +121,11 @@ impl Deref for Env {
 impl Env {
     /// A fresh namespace in memory whose clock starts at `now`.
     pub fn open(now: DateTime<Utc>) -> OpenEnv {
-        OpenEnv { now, chaos: None }
+        OpenEnv {
+            now,
+            chaos: None,
+            metering: Metering::default(),
+        }
     }
 
     /// Another `Substantial` on the same namespace and clock, as another pod or the application

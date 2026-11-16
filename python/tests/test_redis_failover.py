@@ -17,6 +17,8 @@ from redis.asyncio import Redis
 from substantial.stores import StoreFailure, open_store
 from substantial.stores.redis_store import RedisStore
 
+pytestmark = pytest.mark.failover
+
 WRITERS_PER_KEY = 2
 KEYS_AT_ONCE = 4
 AFTER_FAILOVER_S = 3.0

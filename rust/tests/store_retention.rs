@@ -6,7 +6,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{Hidden, LONG, namespaces, script};
+use common::{Hidden, LONG, Recording, namespaces, script};
 use substantial::__internal::{self as internal, Store};
 use substantial::{Error, Workflow};
 
@@ -34,7 +34,12 @@ async fn eventually(what: &str, within: Duration, mut check: impl AsyncFnMut() -
 async fn a_run_is_collected_and_its_id_taken_until_the_tombstone_ends() {
     for ns in namespaces() {
         let store = ns.store.clone();
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        // The tombstone's end held until the checks made during it are done; dropped on a panic,
+        // the sender releases it.
+        let (release, held) = tokio::sync::watch::channel(false);
+        let recording = Recording::new(ns.store);
+        *recording.hold_delete.lock().unwrap() = Some(("runs/q/gone".into(), held));
+        let sub = internal::create(recording).await.unwrap();
         let worker = script(&sub, quick())
             .hidden("retention_min", "300ms")
             .hidden("retention", "300ms")
@@ -56,6 +61,7 @@ async fn a_run_is_collected_and_its_id_taken_until_the_tombstone_ends() {
             Err(Error::RunExists { collected, .. }) => assert!(collected, "{}", ns.name),
             other => panic!("{}: {:?}", ns.name, other.map(|_| ())),
         }
+        release.send(true).unwrap();
         eventually("the tombstone's end", Duration::from_secs(10), async || {
             keys(&*store, "runs/q/").await.is_empty()
         })

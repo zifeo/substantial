@@ -1,6 +1,6 @@
 {
   "name": "@substantial/substantial",
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0",
   "license": "MPL-2.0",
   "exports": "./typescript/src/mod.ts",
   "publish": {

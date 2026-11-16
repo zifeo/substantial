@@ -33,8 +33,22 @@ class _Machine:
     """A machine of the core, dropped with `sub_drop` by `close`."""
 
     def __init__(self, core: Core, kind: Kind, data: Message) -> None:
+        """An input the core refuses fails here, not at the first call."""
         self._core = core
         self._id: int | None = core.new_machine(kind, data.SerializeToString())
+        refused = core.refused(self._id)
+        if refused is None:
+            return
+        self.close()
+        # Every response has its CoreError as field 1: any of them decodes it.
+        response = agent.AgentResponse()
+        try:
+            response.ParseFromString(refused)
+        except DecodeError as e:
+            raise ProtocolError(f"undecodable refusal: {e}") from e
+        if response.WhichOneof("response") != "error":
+            raise ProtocolError(f"a refusal without its error: {response}")
+        raise core_error(response.error)
 
     def close(self) -> None:
         if self._id is not None:
@@ -74,15 +88,24 @@ class RunMachine(_Machine):
         request = run.RunRequest(call=run.RunRequest.MakeCall(call=call, now=now))
         return self._expect(request, run.RunResponse, "called")
 
-    def step_ended(self, call: int, attempt: int, outcome: run.Outcome, now: layout.Time) -> None:
-        ended = run.RunRequest.StepEnded(call=call, attempt=attempt, outcome=outcome, now=now)
+    def step_ended(
+        self,
+        call: int,
+        attempt: int,
+        outcome: run.Outcome,
+        charges: Sequence[layout.Amount],
+        now: layout.Time,
+    ) -> None:
+        ended = run.RunRequest.StepEnded(
+            call=call, attempt=attempt, outcome=outcome, charges=charges, now=now
+        )
         self._expect(run.RunRequest(step_ended=ended), run.RunResponse, "done")
 
     def satisfied(self, call: int) -> None:
         self._expect(run.RunRequest(satisfied=call), run.RunResponse, "done")
 
-    def arrived(self, messages: Sequence[run.InboxMessage]) -> None:
-        arrived = run.RunRequest.Arrived(messages=messages)
+    def arrived(self, messages: Sequence[run.InboxMessage], cost: layout.Cost) -> None:
+        arrived = run.RunRequest.Arrived(messages=messages, cost=cost)
         self._expect(run.RunRequest(arrived=arrived), run.RunResponse, "done")
 
     def next(self, now: layout.Time) -> run.Next:
@@ -120,8 +143,14 @@ class AgentMachine(_Machine):
     def wake(self) -> None:
         self._done(agent.AgentRequest(wake=boundary.Empty()))
 
+    def wake_workflow(self, workflow: str) -> None:
+        self._done(agent.AgentRequest(wake_workflow=workflow))
+
     def shutdown(self) -> None:
         self._done(agent.AgentRequest(shutdown=boundary.Empty()))
+
+    def drain(self, until: layout.Time) -> None:
+        self._done(agent.AgentRequest(drain=until))
 
 
 class PlanMachine(_Machine):

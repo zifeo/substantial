@@ -55,7 +55,7 @@ fn parent() -> Workflow<(u32, String, String, String)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_parent_awaits_its_children() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (parent(), double(), listener()))
             .start()
             .unwrap();
@@ -110,7 +110,7 @@ async fn a_loop_compresses_at_every_boundary() {
     });
     for ns in namespaces() {
         keys.lock().unwrap().clear();
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &counter)
             .set("continue_as_new_after", 0)
             .start()
@@ -142,7 +142,7 @@ async fn continue_as_new_by_hand() {
         Ok("liftoff".to_owned())
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &countdown).start().unwrap();
         let run = sub.start(&countdown, N { n: 3 }).await.unwrap();
         let value: String = run.result().timeout(LONG).await.unwrap();
@@ -168,7 +168,7 @@ fn waiter() -> Workflow<(bool, bool, u32)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_parent_waits_until_a_child_is_done() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (waiter(), double())).start().unwrap();
         let run = sub.start(&waiter(), ()).await.unwrap();
         let done = run.result().timeout(LONG).await.unwrap();
@@ -186,7 +186,7 @@ async fn a_loop_state_is_an_object() {
         Ok(matches!(looped, Err(Error::InvalidArgument(_))))
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &scalar).start().unwrap();
         let run = sub.start(&scalar, ()).await.unwrap();
         assert!(run.result().timeout(LONG).await.unwrap(), "{}", ns.name);
@@ -208,7 +208,7 @@ async fn a_child_id_taken_by_another_run_fails_the_child() {
         }
     });
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (w.clone(), double())).start().unwrap();
         let taken = sub.start(&double(), N { n: 1 }).id("taken").await.unwrap();
         assert_eq!(taken.result().timeout(LONG).await.unwrap(), 2);
@@ -239,7 +239,7 @@ fn naming() -> Workflow<(String, String, String)> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_knows_its_chain_through_its_continuations() {
     for ns in namespaces() {
-        let sub = internal::create(ns.store).partitions(1).await.unwrap();
+        let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (named(), naming())).start().unwrap();
         let run = sub.start(&named(), N { n: 2 }).await.unwrap();
         assert_eq!(run.result().timeout(LONG).await.unwrap(), run.chain());
