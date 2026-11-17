@@ -6,9 +6,7 @@
 
 use std::collections::VecDeque;
 use std::future::Future;
-#[cfg(test)]
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::task::{Poll, Waker};
 use std::time::Duration;
@@ -199,9 +197,9 @@ impl Drop for Tasks {
 #[derive(Clone)]
 pub(crate) enum Clock {
     Real,
-    /// The real clock ahead by this many milliseconds: a test's way to a wall-clock instant
+    /// The real clock ahead by the milliseconds the test sets: its way to a wall-clock instant
     /// sooner, such as the next minute of a cron, with every wait still a real one.
-    Shifted(i64),
+    Shifted(Arc<AtomicI64>),
     /// The real clock reading the time from the test, for replays driven by hand.
     #[cfg(test)]
     Fixed(Arc<AtomicI64>),
@@ -214,7 +212,7 @@ impl Clock {
         match self {
             Clock::Real => crate::time::now(),
             Clock::Shifted(ms) => Time {
-                ms: crate::time::now().ms + ms,
+                ms: crate::time::now().ms + ms.load(Ordering::SeqCst),
             },
             #[cfg(test)]
             Clock::Fixed(ms) => Time {

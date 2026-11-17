@@ -91,9 +91,13 @@ pub mod __internal {
         worker.wake();
     }
 
-    /// A worker whose clock is the real one ahead by `ms`.
-    pub fn shifted(mut builder: WorkerBuilder, ms: i64) -> WorkerBuilder {
-        builder.shift_ms = ms;
+    /// A worker whose clock is the real one ahead by the milliseconds `ms` holds, which the test
+    /// may change while it runs.
+    pub fn shifted(
+        mut builder: WorkerBuilder,
+        ms: Arc<std::sync::atomic::AtomicI64>,
+    ) -> WorkerBuilder {
+        builder.shift = Some(ms);
         builder
     }
 }

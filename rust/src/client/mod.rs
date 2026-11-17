@@ -5,6 +5,7 @@ mod run;
 mod runs;
 
 use std::future::IntoFuture;
+use std::sync::atomic::AtomicI64;
 use std::sync::{Arc, Mutex, Weak};
 
 use futures::future::BoxFuture;
@@ -71,7 +72,7 @@ impl Substantial {
             workflows: workflows.into_workflows(),
             preset: None,
             overrides: Vec::new(),
-            shift_ms: 0,
+            shift: None,
         }
     }
 
@@ -316,7 +317,7 @@ pub struct WorkerBuilder {
     preset: Option<Preset>,
     overrides: Vec<Override>,
     /// Set by the tests, through `__internal::shifted`: how far ahead of the real one its clock is.
-    pub(crate) shift_ms: i64,
+    pub(crate) shift: Option<Arc<AtomicI64>>,
 }
 
 struct Override {
@@ -375,15 +376,15 @@ impl WorkerBuilder {
     /// Starts the worker on the current tokio runtime; `shutdown` stops it.
     pub fn start(self) -> Result<Worker> {
         let settings = self.settings()?;
-        let (sub, workflows, shift_ms) = (self.sub, self.workflows, self.shift_ms);
+        let (sub, workflows, shift) = (self.sub, self.workflows, self.shift);
         let inner = &sub.0;
         #[cfg(feature = "testing")]
         let worker = match &inner.env {
             Some(env) => env.worker(workflows, settings)?,
-            None => real(&sub, workflows, settings, shift_ms)?,
+            None => real(&sub, workflows, settings, shift)?,
         };
         #[cfg(not(feature = "testing"))]
-        let worker = real(&sub, workflows, settings, shift_ms)?;
+        let worker = real(&sub, workflows, settings, shift)?;
         let mut workers = inner.workers.lock().expect("never poisoned");
         workers.retain(|w| w.strong_count() > 0);
         workers.push(Arc::downgrade(&worker.wakes()));
@@ -406,7 +407,7 @@ fn real(
     sub: &Substantial,
     workflows: Vec<Workflow<serde_json::Value>>,
     settings: Settings,
-    shift_ms: i64,
+    shift: Option<Arc<AtomicI64>>,
 ) -> Result<Worker> {
     let inner = &sub.0;
     let died = inner.died.clone();
@@ -414,9 +415,9 @@ fn real(
         died.send_replace(Some(Arc::new(e.again())));
     });
     let metering = inner.metering.clone();
-    let clock = match shift_ms {
-        0 => Clock::Real,
-        ms => Clock::Shifted(ms),
+    let clock = match shift {
+        None => Clock::Real,
+        Some(ms) => Clock::Shifted(ms),
     };
     Worker::start(
         inner.store.clone(),
