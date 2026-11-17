@@ -90,4 +90,10 @@ pub mod __internal {
     pub fn wake(worker: &Worker) {
         worker.wake();
     }
+
+    /// A worker whose clock is the real one ahead by `ms`.
+    pub fn shifted(mut builder: WorkerBuilder, ms: i64) -> WorkerBuilder {
+        builder.shift_ms = ms;
+        builder
+    }
 }

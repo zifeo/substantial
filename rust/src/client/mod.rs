@@ -19,6 +19,7 @@ pub use open::{Create, Open};
 pub use run::{HistoryEvent, ResultWait, RetryRun, Run, RunStatus, SendMessage};
 pub use runs::{RunInfo, WaitingOn};
 
+use crate::clock::Clock;
 use crate::core::Core;
 use crate::cost::Budget;
 use crate::error::{Error, Result};
@@ -70,6 +71,7 @@ impl Substantial {
             workflows: workflows.into_workflows(),
             preset: None,
             overrides: Vec::new(),
+            shift_ms: 0,
         }
     }
 
@@ -313,6 +315,8 @@ pub struct WorkerBuilder {
     workflows: Vec<Workflow<serde_json::Value>>,
     preset: Option<Preset>,
     overrides: Vec<Override>,
+    /// Set by the tests, through `__internal::shifted`: how far ahead of the real one its clock is.
+    pub(crate) shift_ms: i64,
 }
 
 struct Override {
@@ -371,15 +375,15 @@ impl WorkerBuilder {
     /// Starts the worker on the current tokio runtime; `shutdown` stops it.
     pub fn start(self) -> Result<Worker> {
         let settings = self.settings()?;
-        let (sub, workflows) = (self.sub, self.workflows);
+        let (sub, workflows, shift_ms) = (self.sub, self.workflows, self.shift_ms);
         let inner = &sub.0;
         #[cfg(feature = "testing")]
         let worker = match &inner.env {
             Some(env) => env.worker(workflows, settings)?,
-            None => real(&sub, workflows, settings)?,
+            None => real(&sub, workflows, settings, shift_ms)?,
         };
         #[cfg(not(feature = "testing"))]
-        let worker = real(&sub, workflows, settings)?;
+        let worker = real(&sub, workflows, settings, shift_ms)?;
         let mut workers = inner.workers.lock().expect("never poisoned");
         workers.retain(|w| w.strong_count() > 0);
         workers.push(Arc::downgrade(&worker.wakes()));
@@ -402,6 +406,7 @@ fn real(
     sub: &Substantial,
     workflows: Vec<Workflow<serde_json::Value>>,
     settings: Settings,
+    shift_ms: i64,
 ) -> Result<Worker> {
     let inner = &sub.0;
     let died = inner.died.clone();
@@ -409,5 +414,16 @@ fn real(
         died.send_replace(Some(Arc::new(e.again())));
     });
     let metering = inner.metering.clone();
-    Worker::start(inner.store.clone(), workflows, settings, died, metering)
+    let clock = match shift_ms {
+        0 => Clock::Real,
+        ms => Clock::Shifted(ms),
+    };
+    Worker::start(
+        inner.store.clone(),
+        workflows,
+        settings,
+        died,
+        metering,
+        clock,
+    )
 }

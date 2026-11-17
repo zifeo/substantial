@@ -19,7 +19,7 @@ use std::future::IntoFuture;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::{Counting, Hidden, Kind, LONG, Op, Tally, retry};
 use fake_h3::FakeH3;
@@ -1646,8 +1646,8 @@ async fn a_poll_not_ready() {
 }
 
 /// A fire of an every-minute schedule, from its timer to the next suspension: the plan step that
-/// finds it due, the body's step, and the plan step that finds the next one. It waits for the
-/// minute's end.
+/// finds it due, the body's step, and the plan step that finds the next one. The worker's clock is
+/// ahead of the real one so that its next minute starts `LEAD` from now, not up to a minute later.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_schedule_fire() {
     let b = bench().await;
@@ -1674,7 +1674,14 @@ async fn a_schedule_fire() {
             Ok(0)
         }
     });
-    let worker = b.started(b.worker(&wf)).await;
+    const LEAD: Duration = Duration::from_secs(4);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let at = now + LEAD.as_millis() as i64;
+    let shift = (at + 59_999) / 60_000 * 60_000 - at;
+    let worker = b.started(internal::shifted(b.worker(&wf), shift)).await;
     let every_minute = substantial::Cron::new("* * * * *", "UTC").unwrap();
     b.sub
         .schedule(&wf, "tick", Some(every_minute), 1)
@@ -1682,10 +1689,14 @@ async fn a_schedule_fire() {
         .unwrap();
     internal::wake(&worker);
     quiet(&b.workers).await;
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "the fire came before the count began: the setup took longer than {LEAD:?}"
+    );
     let mark = b.workers.mark();
     let started = Instant::now();
     while !fired.load(Ordering::SeqCst) {
-        assert!(started.elapsed() < Duration::from_secs(70), "no fire");
+        assert!(started.elapsed() < LEAD + LONG, "no fire");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let w = b.since(mark).await;

@@ -46,6 +46,7 @@ impl Worker {
         settings: Settings,
         died: OnDeath,
         metering: Metering,
+        clock: Clock,
     ) -> Result<Self> {
         settings.validate()?;
         let workflows = Workflows::new(workflows, settings.retention_min)?;
@@ -54,7 +55,7 @@ impl Worker {
             workflows: &workflows,
             settings: &settings,
             died,
-            clock: Clock::Real,
+            clock,
             id: hex::encode(rand::random::<[u8; 8]>()),
             seed: os_seed(),
             metering,
