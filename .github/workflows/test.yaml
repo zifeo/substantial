@@ -86,7 +86,7 @@ jobs:
       SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -119,7 +119,7 @@ jobs:
       SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm

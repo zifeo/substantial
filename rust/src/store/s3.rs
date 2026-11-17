@@ -157,7 +157,7 @@ impl S3Store {
             }
         };
         let config = config
-            .behavior_version(BehaviorVersion::v2026_01_12())
+            .behavior_version(BehaviorVersion::v2026_11_17())
             .endpoint_url(&location.endpoint)
             .region(Region::new(location.region))
             .force_path_style(true)
