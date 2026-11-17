@@ -19,7 +19,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+      # rust-cache keys a cache by job id, which `rust` of test.yaml shares: without a key of its
+      # own, whichever ends first saves a build the other cannot use, and the other never saves.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
@@ -51,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm

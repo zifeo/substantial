@@ -156,6 +156,8 @@ impl S3Store {
                 Some(refresh)
             }
         };
+        // Pinned, not the newest: a newer one needs a newer SDK than the floor this crate declares.
+        #[allow(deprecated)]
         let config = config
             .behavior_version(BehaviorVersion::v2026_01_12())
             .endpoint_url(&location.endpoint)

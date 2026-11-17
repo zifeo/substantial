@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use std::future::IntoFuture;
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::{Counting, Hidden, Kind, LONG, Op, Tally, retry};
 use fake_h3::FakeH3;
@@ -1646,8 +1646,9 @@ async fn a_poll_not_ready() {
 }
 
 /// A fire of an every-minute schedule, from its timer to the next suspension: the plan step that
-/// finds it due, the body's step, and the plan step that finds the next one. It waits for the
-/// minute's end.
+/// finds it due, the body's step, and the plan step that finds the next one. Once the setup is done,
+/// the worker's clock is moved ahead so that its next minute starts `LEAD` later, not up to a minute
+/// later: `LEAD` covers only the wakeup that plans the fire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_schedule_fire() {
     let b = bench().await;
@@ -1674,18 +1675,33 @@ async fn a_schedule_fire() {
             Ok(0)
         }
     });
-    let worker = b.started(b.worker(&wf)).await;
+    const LEAD: Duration = Duration::from_secs(3);
+    let shift = Arc::new(AtomicI64::new(0));
+    let worker = b
+        .started(internal::shifted(b.worker(&wf), shift.clone()))
+        .await;
     let every_minute = substantial::Cron::new("* * * * *", "UTC").unwrap();
     b.sub
         .schedule(&wf, "tick", Some(every_minute), 1)
         .await
         .unwrap();
+    // The client's schedule does not wake the worker: nothing plans the fire before this wake.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let at = now + LEAD.as_millis() as i64;
+    shift.store((at + 59_999) / 60_000 * 60_000 - at, Ordering::SeqCst);
     internal::wake(&worker);
     quiet(&b.workers).await;
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "the fire came before the count began: its planning wakeup took longer than {LEAD:?}"
+    );
     let mark = b.workers.mark();
     let started = Instant::now();
     while !fired.load(Ordering::SeqCst) {
-        assert!(started.elapsed() < Duration::from_secs(70), "no fire");
+        assert!(started.elapsed() < LEAD + LONG, "no fire");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let w = b.since(mark).await;

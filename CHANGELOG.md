@@ -8,6 +8,25 @@ Release notes are also published on [GitHub Releases](https://github.com/zifeo/s
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-17
+
+A new version, not compatible with 0.1.0: a Rust core in WebAssembly with Rust, Python and TypeScript hosts. See the [README](https://github.com/zifeo/substantial/blob/v0.2.0/README.md).
+
+### Added
+
+- Durable workflows over memory, file, S3 and Redis stores.
+- Live runs, history and retry.
+- Cost, charges and budgets.
+- Observe events.
+- Awaiting any chain, child cancel, receive with timeout, and polling.
+- Schedules with backfill, and draining workers.
+
+### Changed
+
+- The store layout 2 is not compatible with the namespaces of 0.2.0-beta.1 and 0.2.0-beta.2: drain them with the old version and start on a new namespace (see [docs/interfaces.md](https://github.com/zifeo/substantial/blob/v0.2.0/docs/interfaces.md)).
+
+[0.2.0]: https://github.com/zifeo/substantial/compare/v0.1.0...v0.2.0
+
 ## [0.2.0-beta.1] - 2026-11-02
 
 A new version, not compatible with 0.1.0, for Rust, Python and TypeScript. See the [README](https://github.com/zifeo/substantial/blob/v0.2.0-beta.1/README.md).
