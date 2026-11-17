@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["rust", "rust/macros"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+license = "MPL-2.0"
+repository = "https://github.com/zifeo/substantial"
+readme = "README.md"
+keywords = ["durable-execution", "workflow", "orchestration", "saga", "wasm"]
+categories = ["asynchronous", "concurrency"]
+
+# The core is compiled by Cranelift at load; unoptimized, that takes seconds in every test.
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+
+[profile.dev.package.regalloc2]
+opt-level = 3

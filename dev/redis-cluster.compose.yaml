@@ -1,0 +1,61 @@
+# A Valkey cluster for the Redis tests: three primaries and three replicas on 127.0.0.1:39531 to
+# 39536, AOF fsynced at every write.
+#
+#   docker compose -f dev/redis-cluster.compose.yaml up -d --wait
+#   SUBSTANTIAL_REDIS_CLUSTER_URL='redis+cluster://127.0.0.1:39531,127.0.0.1:39532/tests?replicas=all' uv run pytest
+#   docker compose -f dev/redis-cluster.compose.yaml down -v
+#
+# Every node shares the network namespace of `net` and announces 127.0.0.1, so nodes reach each
+# other, and the host reaches each node, at the address the cluster hands out. The failover tests
+# stop the container of a primary, substantial-cluster-<port>, and start it again.
+name: substantial-redis-cluster
+
+x-node: &node
+  image: valkey/valkey:8.1
+  network_mode: service:net
+  depends_on: [net]
+  healthcheck:
+    test: ["CMD-SHELL", "valkey-cli -p $$PORT cluster info | grep -q cluster_state:ok"]
+    interval: 1s
+    retries: 60
+  command:
+    - sh
+    - -c
+    - >-
+      exec valkey-server --port $$PORT --protected-mode no --cluster-enabled yes
+      --cluster-config-file /data/nodes.conf --cluster-node-timeout 2000
+      --cluster-announce-ip 127.0.0.1 --appendonly yes --appendfsync always
+      --maxmemory-policy noeviction
+
+services:
+  net:
+    image: valkey/valkey:8.1
+    container_name: substantial-cluster-net
+    init: true
+    command: ["sleep", "infinity"]
+    ports:
+      - "127.0.0.1:39531-39536:39531-39536"
+
+  node-39531: {<<: *node, container_name: substantial-cluster-39531, environment: {PORT: "39531"}}
+  node-39532: {<<: *node, container_name: substantial-cluster-39532, environment: {PORT: "39532"}}
+  node-39533: {<<: *node, container_name: substantial-cluster-39533, environment: {PORT: "39533"}}
+  node-39534: {<<: *node, container_name: substantial-cluster-39534, environment: {PORT: "39534"}}
+  node-39535: {<<: *node, container_name: substantial-cluster-39535, environment: {PORT: "39535"}}
+  node-39536: {<<: *node, container_name: substantial-cluster-39536, environment: {PORT: "39536"}}
+
+  create:
+    image: valkey/valkey:8.1
+    container_name: substantial-cluster-create
+    network_mode: service:net
+    depends_on: [node-39531, node-39532, node-39533, node-39534, node-39535, node-39536]
+    # A cluster made by an earlier `up` is kept.
+    command:
+      - sh
+      - -c
+      - |
+        for p in 39531 39532 39533 39534 39535 39536; do
+          until valkey-cli -p $$p ping >/dev/null 2>&1; do sleep 0.2; done
+        done
+        valkey-cli -p 39531 cluster info | grep -q cluster_known_nodes:6 && exit 0
+        exec valkey-cli --cluster create 127.0.0.1:39531 127.0.0.1:39532 127.0.0.1:39533 \
+          127.0.0.1:39534 127.0.0.1:39535 127.0.0.1:39536 --cluster-replicas 1 --cluster-yes

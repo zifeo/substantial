@@ -1,0 +1,13 @@
+# The code generated from proto/, committed in typescript/src/gen: `npm run gen` from the root.
+version: v2
+inputs:
+  - directory: proto
+clean: true
+plugins:
+  - local: protoc-gen-es
+    out: typescript/src/gen
+    opt:
+      - target=ts
+      - import_extension=ts
+      # Enums as objects, so that Node strips the types without transforming them.
+      - erasable_syntax=true

@@ -1,0 +1,245 @@
+"""Steps (I-6): the declared step, the step call, its attempts, and the step key."""
+
+from __future__ import annotations
+
+import asyncio
+import functools
+import inspect
+import json
+import weakref
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Protocol, overload
+
+from substantial._proto import json_value, layout, run
+from substantial.clock import Clock
+from substantial.cost import MAX
+from substantial.durations import millis
+from substantial.errors import InvalidArgument, NotInWorkflow, ValueTooLarge
+from substantial.names import check_step_name
+from substantial.scheduler import Shared, StepBody, StepSpec, UndoBody, decode_json
+from substantial.workflow import Permanent, Retry
+
+if TYPE_CHECKING:
+    from substantial.context import Context
+
+CURRENT: ContextVar[Context] = ContextVar("substantial.context")
+# The saga the steps called here belong to, set by `async with c.saga()`.
+SAGA: ContextVar[int | None] = ContextVar("substantial.saga", default=None)
+
+
+class LiveAttempt:
+    """The step attempt running: its step key, and what it charged so far, in call order."""
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        self.charges: list[layout.Amount] = []
+
+
+# A thread a sync step runs in copies the context, and with it the attempt.
+_ATTEMPT: ContextVar[LiveAttempt] = ContextVar("substantial.attempt")
+# The tasks whose step body runs in a thread, which cannot be interrupted: the testing environment
+# waits for them rather than cancelling them.
+THREADED: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
+
+
+def current() -> Context:
+    try:
+        return CURRENT.get()
+    except LookupError:
+        raise NotInWorkflow("a declared step is called outside a workflow") from None
+
+
+def step_key() -> str:
+    """`<run>/<step>/<occurrence>`, the same for every attempt and replay of the step running."""
+    try:
+        return _ATTEMPT.get().key
+    except LookupError:
+        raise NotInWorkflow("step_key is called inside a step") from None
+
+
+def charge(currency: str, nano: int) -> None:
+    """Adds `nano` nano-units of `currency` to the charges of the step attempt running, recorded
+    with its outcome and counted in the run's cost; a currency outside ISO 4217 fails the step at
+    once with `InvalidArgument`, once the attempt ended."""
+    try:
+        running = _ATTEMPT.get()
+    except LookupError:
+        raise NotInWorkflow("charge is called inside a step") from None
+    if not isinstance(currency, str):
+        raise InvalidArgument(f"a currency is a string, not {currency!r}")
+    if isinstance(nano, bool) or not isinstance(nano, int) or not 0 <= nano <= MAX:
+        raise InvalidArgument(f"a charge is an int from 0 to {MAX}, not {nano!r}")
+    running.charges.append(layout.Amount(currency=currency, nano=nano))
+
+
+def _is_async(fn: Callable[..., Any]) -> bool:
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(
+        getattr(fn, "__call__", None)  # noqa: B004
+    )
+
+
+def check_options(retry: Retry | None, timeout: timedelta | None, undo: object = None) -> None:
+    if retry is not None and not isinstance(retry, Retry):
+        raise InvalidArgument(f"retry is a Retry, not {retry!r}")
+    if timeout is not None:
+        millis(timeout)
+    if undo is not None and not callable(undo):
+        raise InvalidArgument(f"undo is a function, not {undo!r}")
+
+
+def body_of(fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> StepBody:
+    if _is_async(fn):
+        return functools.partial(fn, *args, **kwargs)
+    # Synchronous functions run in a thread, so a blocking call never stops the worker.
+    return functools.partial(_in_thread, fn, *args, **kwargs)
+
+
+async def _in_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    task = asyncio.current_task()
+    if task is not None:
+        THREADED.add(task)
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+def call_step(
+    shared: Shared,
+    name: str,
+    fn: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    retry: Retry | None,
+    timeout: timedelta | None,
+    undo: Callable[..., Any] | None = None,
+) -> asyncio.Future:
+    """Calls the step `name`: its occurrence is taken now, and its value comes from its attempts
+    or from the history."""
+    check_options(retry, timeout, undo)
+    options = run.StepOptions(
+        timeout_ms=shared.step_timeout_ms if timeout is None else millis(timeout)
+    )
+    if retry is not None:
+        options.retry.CopyFrom(retry.policy())
+    undo_spec: tuple[UndoBody, run.StepOptions] | None = None
+    if undo is not None:
+        u = undo
+        undo_options = run.StepOptions()
+        undo_options.CopyFrom(options)
+        undo_spec = (lambda value: body_of(u, (value, *args), kwargs), undo_options)
+        options.undo = True
+    saga = SAGA.get()
+    if saga is not None:
+        options.saga = saga
+    call = run.Call(step=run.Call.Step(name=name, options=options))
+    return shared.future(call, decode_json, StepSpec(body_of(fn, args, kwargs), undo_spec))
+
+
+class Step[**P, R]:
+    """A declared step: calling it inside a workflow returns the future of its value."""
+
+    def __init__(
+        self,
+        fn: Callable[P, Awaitable[R] | R],
+        *,
+        name: str | None = None,
+        retry: Retry | None = None,
+        timeout: timedelta | None = None,
+        undo: Callable[..., Any] | None = None,
+    ) -> None:
+        if not callable(fn):
+            raise InvalidArgument(f"a step is a function, not {fn!r}")
+        check_options(retry, timeout, undo)
+        self.fn = fn
+        self.name: str = check_step_name(fn.__name__ if name is None else name)
+        self.retry = retry
+        self.timeout = timeout
+        self.undo = undo
+        functools.update_wrapper(self, fn)
+
+    def __repr__(self) -> str:
+        return f"<step {self.name}>"
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> asyncio.Future[R]:
+        c = current()
+        return call_step(
+            c._shared, self.name, self.fn, args, kwargs, self.retry, self.timeout, self.undo
+        )
+
+
+# Overloads rather than one `Awaitable[R] | R`, which mypy solves as `Never`.
+class _StepDecorator(Protocol):
+    @overload
+    def __call__[**P, R](self, fn: Callable[P, Awaitable[R]], /) -> Step[P, R]: ...
+    @overload
+    def __call__[**P, R](self, fn: Callable[P, R], /) -> Step[P, R]: ...
+
+
+@overload
+def step[**P, R](fn: Callable[P, Awaitable[R]], /) -> Step[P, R]: ...
+@overload
+def step[**P, R](fn: Callable[P, R], /) -> Step[P, R]: ...
+@overload
+def step(
+    *,
+    name: str | None = None,
+    retry: Retry | None = None,
+    timeout: timedelta | None = None,
+    undo: Callable[..., Any] | None = None,
+) -> _StepDecorator: ...
+def step(
+    fn: Callable[..., Any] | None = None,
+    /,
+    *,
+    name: str | None = None,
+    retry: Retry | None = None,
+    timeout: timedelta | None = None,
+    undo: Callable[..., Any] | None = None,
+) -> Step[..., Any] | _StepDecorator:
+    """`@step` or `@step(name=, retry=, timeout=, undo=)`; `undo` takes the step's value then its
+    arguments.
+
+    An attempt the worker abandons, past its timeout or its worker's shutdown grace, is cancelled
+    at its `await` when `async`; a plain `def`, run in a thread, cannot be stopped and runs to its
+    end, its outcome dropped."""
+    if fn is not None:
+        return Step(fn)
+    return lambda f: Step(f, name=name, retry=retry, timeout=timeout, undo=undo)
+
+
+def _failure(type_: str, message: str, retryable: bool) -> run.Outcome:
+    return run.Outcome(error=layout.Failure(type=type_, message=message, retryable=retryable))
+
+
+async def attempt(
+    clock: Clock, name: str, body: StepBody, key: str, timeout_ms: int | None
+) -> tuple[run.Outcome, list[layout.Amount]]:
+    """Runs one attempt of a step with its step key, to its outcome and its charges; a
+    `Permanent` error is not retryable."""
+    running = LiveAttempt(key)
+    _ATTEMPT.set(running)
+    outcome = await clock.attempt(name, key, lambda: _outcome(body), timeout_ms)
+    if outcome is None:
+        outcome = _failure("StepTimeout", f"attempt past {timeout_ms} ms", True)
+    # A copy: an attempt left running in its thread charges on, past its end.
+    return outcome, list(running.charges)
+
+
+async def _outcome(body: StepBody) -> run.Outcome:
+    try:
+        value = await body()
+        # A sync function such as `lambda: charge(card)` may return a coroutine to await.
+        if inspect.isawaitable(value):
+            value = await value
+    except Permanent as e:
+        return _failure(type(e).__name__, str(e), False)
+    except Exception as e:
+        return _failure(type(e).__name__, str(e), True)
+    try:
+        data = json.dumps(value, allow_nan=False).encode()
+    except (TypeError, ValueError) as e:
+        return _failure("Json", str(e), False)
+    try:
+        return run.Outcome(value=json_value(data))
+    except ValueTooLarge as e:
+        return _failure(type(e).__name__, str(e), False)

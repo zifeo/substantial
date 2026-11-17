@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "lib": ["esnext", "dom"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "customConditions": ["substantial-source"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["typescript/src", "typescript/test", "typescript/examples"]
+}
