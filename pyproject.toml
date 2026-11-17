@@ -1,6 +1,6 @@
 [project]
 name = "substantial"
-version = "0.2.0"
+version = "0.2.1"
 description = "Brokerless durable execution: the Python host of the Substantial core"
 readme = "README.md"
 license = "MPL-2.0"
