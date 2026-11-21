@@ -110,7 +110,7 @@ def pair(cmds: dict[str, list[str]], client: str, worker: str, url: str, logs: P
         return failure + worker_log
     if ran.returncode != 0:
         return f"the client exited with {ran.returncode}\n{ran.stdout}{ran.stderr}{worker_log}"
-    # § sqbjc1adw@cxa2f
+    # § sqbjc1adw@2jweq
     expected = {
         "result": {
             "greeting": "hello ada",
@@ -138,7 +138,34 @@ def pair(cmds: dict[str, list[str]], client: str, worker: str, url: str, logs: P
         got = json.loads(ran.stdout.strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):
         got = None
-    # § one ap5tfnrja.d@pdy9f, bq8tt3bh7@pw6fj, eqpe8dchq@8h5wy, j2xzy4akb@5kd41, fkgsx3gvk.b@fan3r, dgn4hcfv0@45xtq  # noqa: E501
+    if not isinstance(got, dict):
+        return f"expected {json.dumps(expected)}\n     got {ran.stdout}{ran.stderr}{worker_log}"
+
+    def differs(field: str, want: object, have: object) -> str:
+        return (
+            f"{field}: expected {json.dumps(want)}\n     got {json.dumps(have)}\n"
+            f"{ran.stdout}{ran.stderr}{worker_log}"
+        )
+
+    history, over = got.get("history") or [], got.get("over") or {}
+    # § one ap5tfnrja.d@twvp3
+    if got.get("result") != expected["result"]:
+        return differs("result", expected["result"], got.get("result"))
+    # § one eqpe8dchq@qft03
+    if history[:3] != ["step", "timer", "fired"]:
+        return differs("the sleep", ["step", "timer", "fired"], history[:3])
+    # § one bq8tt3bh7@e62dh
+    if history != expected["history"]:
+        return differs("history", expected["history"], history)
+    # § one j2xzy4akb@484rf
+    if over.get("type") != "BudgetExceeded":
+        return differs("the budget's failure", "BudgetExceeded", over.get("type"))
+    # § one fkgsx3gvk.b@t5tar
+    if over != expected["over"]:
+        return differs("the budget's details", expected["over"], over)
+    # § one dgn4hcfv0@s18nb
+    if got.get("watched") != expected["watched"]:
+        return differs("watched", expected["watched"], got.get("watched"))
     if got != expected:
         return f"expected {json.dumps(expected)}\n     got {ran.stdout}{ran.stderr}{worker_log}"
     # § end sqbjc1adw
