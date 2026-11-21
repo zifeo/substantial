@@ -10,7 +10,7 @@ The Rust guest SDK, `rust/guest`, is a project of its own with the same block an
 
 | Notes | Laws | Carried by |
 |---|---|---|
-| `docs/decisions/*.md`, one note per topic from `promises.md` to `testing.md`, `guests.md` aside | 67 | the three hosts' code, `redis/*.lua` |
+| `docs/decisions/*.md`, one note per topic from `promises.md` to `testing.md`, `guests.md` aside | 68 | the three hosts' code, `redis/*.lua` |
 | `docs/decisions/guests.md`: the guest world, its runner and its Rust SDK | 14 | `wit/guest.wit`, the runner in `rust/src/guest`, the guest macros of `rust/macros`, and `rust/tests/guests.rs` |
 | `docs/decisions/core/*.md`: `commit`, `lifecycle`, `history`, `steps`, `messages`, `sagas`, `children`, `cost` | 58 | the conformance tests (`rust/tests`, `python/tests`, `typescript/test`, `dev/cross`) and the layout schema in `proto/` |
 
