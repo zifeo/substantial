@@ -34,3 +34,13 @@ repos:
       - id: protolint
         args:
           - -fix
+  # Silcrow's own hook: `silcrow install` leaves this file's pre-commit hook to pre-commit. Silcrow
+  # is not public yet, so a contributor without it skips the hook rather than being blocked.
+  - repo: local
+    hooks:
+      - id: silcrow
+        name: silcrow
+        entry: sh -c 'if command -v silcrow >/dev/null; then exec silcrow hook pre-commit; else echo "silcrow is not installed, skipped"; fi'
+        language: system
+        pass_filenames: false
+        always_run: true

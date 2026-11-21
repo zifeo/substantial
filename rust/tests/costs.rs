@@ -1237,22 +1237,25 @@ async fn start_during_and_after_the_tombstone() {
 async fn a_young_result_defers_its_collection() {
     let b = bench().await;
     let wf = steps();
-    let worker = b
-        .started(collecting(&b, &wf, "1h").set("retention", "100ms"))
-        .await;
+    // A window of 400 ms, with 200 ms on each side of the wakeup below for the time the result
+    // takes to reach the client: 100 ms gave 50, which a slow poll overran.
+    let collect = collecting(&b, &wf, "1h")
+        .hidden("retention_min", "400ms")
+        .set("retention", "400ms");
+    let worker = b.started(collect).await;
     let mark = b.workers.mark();
     let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
-    // Due 100 ms after the end, served while the result is younger than 200 ms: deferred until it
+    // Due 400 ms after the end, served while the result is younger than 800 ms: deferred until it
     // is that old, and served by the scan after.
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
     internal::wake(&worker);
     quiet(&b.workers).await;
     internal::wake(&worker);
     let w = b.since(mark).await;
     // The end, the deferral reading the run up to the result's age, then the collection.
-    // § yx9pxz6mr@vp21y
+    // § yx9pxz6mr@kqhb4
     let expected = [ops(4, 1, 2, 2, 9), ops(1, 3, 1, 1, 6), ops(2, 3, 1, 5, 11)];
     check_wakeups("a collection deferred by the result's age", &w, &expected);
     worker.shutdown().await.unwrap();
