@@ -5,11 +5,11 @@ import { createOn } from "../src/client.ts";
 import {
   type Context,
   InvalidArgument,
+  milliseconds,
   RunFailed,
   StepFailed,
   Substantial,
   ValueTooLarge,
-  milliseconds,
   workflow,
 } from "../src/mod.ts";
 import { MAX_VALUE } from "../src/proto.ts";
@@ -125,7 +125,7 @@ test("a value JSON cannot hold is refused, never written as another", async () =
 });
 
 test("a duration past the longest is refused", () => {
-  // § b60bm4szk@6k952
+  // § b60bm4szk@7n23r
   const longest = 2 ** 53 - 1;
   assert.equal(milliseconds(longest).ms, longest);
   assert.throws(() => milliseconds(longest + 1), InvalidArgument);
