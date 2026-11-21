@@ -3,17 +3,17 @@
 use std::sync::Arc;
 
 use wasmtime::component::{ComponentType, Lift, Linker, ResourceTable, ResourceType};
-use wasmtime::{Engine, Store};
+use wasmtime::{Engine, Store, StoreLimits};
 
 use super::{ATTEMPT, CONTEXT, Guest, PANICS, guest_value, trapped};
 use crate::error::Failure;
 use crate::workflow::scheduler::StepBody;
 
 /// What the instance of a step attempt holds: the table of the embedder's resources.
-#[derive(Default)]
 pub struct StepState {
     table: ResourceTable,
     panic: Option<String>,
+    memory: StoreLimits,
 }
 
 impl StepState {
@@ -82,14 +82,25 @@ impl Guest {
     }
 
     async fn attempt(&self, name: String, args: String) -> Result<Vec<u8>, Failure> {
-        // § sfd6dmd7t.b@xefzf
+        // § sfd6dmd7t.b@56y97
         // The store and its instance are this future's: an abandoned attempt drops them.
-        let mut store = Store::new(&self.0.engine, StepState::default());
+        let state = StepState {
+            table: ResourceTable::new(),
+            panic: None,
+            memory: self.0.memory.clone(),
+        };
+        let mut store = Store::new(&self.0.engine, state);
         // § end sfd6dmd7t.b
-        // § fqyh5tkhx@3j9g3
+        store.limiter(|s| &mut s.memory);
+        // § p9d3qccma.c@bmpve
+        let every_tick = 1;
+        store.set_epoch_deadline(every_tick);
+        store.epoch_deadline_async_yield_and_update(every_tick);
+        // § end p9d3qccma.c
+        // § fqyh5tkhx@5qmj7
         let instance = self.0.steps.instantiate_async(&mut store).await;
         // § end fqyh5tkhx
-        // § a3qbj1ttt.b@0gfph
+        // § a3qbj1ttt.b@f3xbx
         let trap = |store: &mut Store<StepState>, e: wasmtime::Error| {
             trapped(store.data_mut().panic.take(), &e)
         };
@@ -101,7 +112,7 @@ impl Guest {
                 &self.0.step,
             )
             .map_err(|e| trap(&mut store, e))?;
-        // § sfd6dmd7t@h8xmd
+        // § sfd6dmd7t@50r6h
         match step.call_async(&mut store, (name, args)).await {
             Ok((Ok(value),)) => guest_value(&value)
                 .and_then(|value| crate::workflow::to_json(&value))

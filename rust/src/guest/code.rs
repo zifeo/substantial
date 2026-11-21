@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::SecondsFormat;
 use futures::future::BoxFuture;
 use wasmtime::component::{ComponentType, Lift, Linker, Lower, Resource, ResourceTable};
-use wasmtime::{Engine, Store, StoreContextMut};
+use wasmtime::{AsContextMut, Engine, Store, StoreContextMut, StoreLimits};
 
 use super::{ATTEMPT, CONTEXT, Guest, PANICS, guest_value, trapped};
 use crate::error::{Error, Failure, Result};
@@ -102,6 +102,9 @@ pub(super) struct CodeState {
     /// The errors given to the code, for its run to end with one it returns.
     raised: Vec<Error>,
     panic: Option<String>,
+    memory: StoreLimits,
+    /// The code's time, in ticks.
+    code_ticks: u64,
 }
 
 /// The failure the code sees of an error: a `Cancelled`'s reason as its message.
@@ -166,13 +169,18 @@ impl Guest {
             table: ResourceTable::new(),
             raised: Vec::new(),
             panic: None,
+            memory: self.0.memory.clone(),
+            code_ticks: self.0.code_ticks,
         };
         let mut store = Store::new(&self.0.engine, state);
-        // § fqyh5tkhx@mcjyz
+        store.limiter(|s| &mut s.memory);
+        store.epoch_deadline_trap();
+        new_time(&mut store.as_context_mut());
+        // § fqyh5tkhx@zx341
         let instance = self.0.code.instantiate_async(&mut store).await;
         // § end fqyh5tkhx
         let trap = |store: &mut Store<CodeState>, e: wasmtime::Error| {
-            // § a3qbj1ttt.a@x86ed
+            // § a3qbj1ttt.a@5sg3v
             Error::Failed(trapped(store.data_mut().panic.take(), &e))
         };
         let instance = instance.map_err(|e| trap(&mut store, e))?;
@@ -183,7 +191,7 @@ impl Guest {
             )
             .map_err(|e| Error::ConfigError(format!("the guest's run: {e:#}")))?;
         let input = serde_json::to_string(&input)?;
-        // § one g1k3x3gg5@4fqfq
+        // § one g1k3x3gg5@55cds
         match run.call_async(&mut store, (input,)).await {
             Ok((Ok(output),)) => Ok(guest_value(&output)?),
             Ok((Err(End::Failed(f)),)) => Err(store.data_mut().ended_with(f)),
@@ -213,6 +221,13 @@ async fn start(
         },
     };
     Ok((store.data_mut().table.push(pending)?,))
+}
+
+/// Gives the code its time anew, from now.
+fn new_time(store: &mut StoreContextMut<'_, CodeState>) {
+    // § p9d3qccma.b@nmerr
+    let ticks = store.data().code_ticks;
+    store.set_epoch_deadline(ticks);
 }
 
 fn as_text(value: &impl serde::Serialize) -> Result<String> {
@@ -253,7 +268,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
                 if calls.is_empty() {
                     wasmtime::bail!("a wait on no call, which nothing would end");
                 }
-                // § em5h7z7cg@9kb89
+                // § em5h7z7cg@edbm8
                 let ended = std::future::poll_fn(|cx| {
                     let table = &mut store.data_mut().table;
                     let mut ended = Vec::new();
@@ -268,7 +283,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
                             pending.future = None;
                             pending.ended = Some(outcome);
                         }
-                        // § one em5h7z7cg.b@e7py9
+                        // § one em5h7z7cg.b@4mdsw
                         if pending.ended.is_some() {
                             ended.push(
                                 u32::try_from(i).expect("a wait names fewer than 2^32 calls"),
@@ -282,6 +297,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
                 })
                 .await?;
                 // § end em5h7z7cg
+                new_time(&mut store);
                 Ok((ended,))
             })
         },
@@ -412,7 +428,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
             store.data_mut().panic = Some(message);
             Ok(())
         })?;
-    // § h85pj12ap.a@233a4
+    // § h85pj12ap.a@c3pba
     linker.instance(ATTEMPT)?.func_wrap(
         "step-key",
         |_, (): ()| -> wasmtime::Result<(String,)> {

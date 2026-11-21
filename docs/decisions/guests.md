@@ -62,6 +62,18 @@ WebAssembly computes the same everywhere but for the bits of a NaN, relaxed SIMD
 
 **§ <a id="jgv9ssc51">jgv9ssc51</a> The host compiles every guest so that it computes the same on every worker: NaNs canonical, relaxed SIMD deterministic, and no threads.**
 
+## Bounds
+
+A guest that loops forever would hold its replay's task, and one that allocates without end the worker's memory. Fuel counts a guest's instructions, so a bound by fuel traps at the same point on every worker, but every instruction pays for its count. Epochs interrupt a guest once a clock thread ticks past its deadline, at a cost close to nothing, but by time: a replay near its bound may trap on a slow worker and not on a fast one. Epochs are taken, with the bound set well above what the code needs, so that a trap means a guest stuck. The embedder gives the bounds rather than the host choosing them, as the right ones depend on its guests.
+
+**§ <a id="p9d3qccma">p9d3qccma</a> A guest runs within the bounds its embedder gives when it loads it: a memory for each of its instances, and a time for its workflow code between two waits.**
+
+- (a) An instance whose memory would grow past its bound traps.
+
+- (b) The workflow code traps once it runs past its time without a wait, its time counted anew from each wait.
+
+- (c) A step attempt yields to its worker at each tick of the epoch clock, so that its timeout abandons it as it abandons any step.
+
 ## Values and ends
 
 Every value between a guest and the host is JSON text rather than WIT types of each workflow: the world stays the same for every workflow, as the values are stored as JSON anyway ([e1dc4dar4](values.md#e1dc4dar4)). The cost is one encoding on each side, and a guest's types are checked by its own SDK rather than by the component model.
@@ -89,5 +101,4 @@ A Rust guest is written as a workflow of the Rust host is, so that moving a work
 ## Open questions
 
 - Publishing without a deploy. A worker serves the workflow names it is given when it starts. Two ways serve a guest published later. Its run's input names the artifact's SHA-256, which the worker loads from the bucket, checks and caches: no worker API changes and a run always replays its own artifact, as its input is recorded, but every guest shares one workflow name, so one retention and one listing. Or a worker serves new names at run time, each guest its own name: a new worker API in every host, and every worker must learn the names from the store. The first is recommended.
-- Bounds. A guest that loops forever holds its replay's task. Fuel or epochs bound a guest's time, and a limit its memory; which bound, and what reaching it does to the run, is to decide.
 - What a guest does not have yet: children and chains, handlers and `wait_until`, sagas, polls, schedules and loops, charges and cost.

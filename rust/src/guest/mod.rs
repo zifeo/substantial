@@ -9,10 +9,11 @@ mod code;
 mod step;
 
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 pub use wasmtime;
 use wasmtime::component::{Component, ComponentExportIndex, InstancePre, Linker};
-use wasmtime::{Config, Engine};
+use wasmtime::{Config, Engine, StoreLimits, StoreLimitsBuilder};
 
 pub use self::step::StepState;
 use crate::error::{Error, Failure, Result};
@@ -22,6 +23,19 @@ const CONTEXT: &str = "substantial:guest/context@0.1.0";
 const ATTEMPT: &str = "substantial:guest/attempt@0.1.0";
 const PANICS: &str = "substantial:guest/panics@0.1.0";
 const WORKFLOW: &str = "substantial:guest/workflow@0.1.0";
+
+/// The period of the epoch clock that interrupts guests, the grain of a guest's time bound. A
+/// store of the engine that runs a guest's code needs an epoch deadline in these ticks.
+pub const TICK: Duration = Duration::from_millis(10);
+
+/// The bounds of a guest, which its instances trap past.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// The memory an instance may grow to, in bytes.
+    pub memory: usize,
+    /// How long the workflow code may run without a wait, at least a `TICK`.
+    pub code_time: Duration,
+}
 
 /// A guest loaded: its component compiled, its imports checked, and linked for its replays and
 /// its step attempts. Cheap to clone.
@@ -35,20 +49,39 @@ struct Loaded {
     steps: InstancePre<StepState>,
     run: ComponentExportIndex,
     step: ComponentExportIndex,
+    memory: StoreLimits,
+    /// The code's time, in ticks.
+    code_ticks: u64,
 }
 
 impl Guest {
     /// Compiles the component `wasm` and links it: Substantial's interfaces, and those `imports`
     /// adds to the linker of its steps, the only ones its steps may call. `ConfigError` for a
-    /// component that does not compile, exports no `workflow`, or imports anything else.
+    /// component that does not compile, exports no `workflow`, or imports anything else, and for
+    /// `limits` with no memory or a code time under a `TICK`.
     pub fn new(
         wasm: &[u8],
+        limits: Limits,
         imports: impl FnOnce(&mut Linker<StepState>) -> wasmtime::Result<()>,
     ) -> Result<Self> {
+        // § p9d3qccma@9m94r
+        if limits.memory == 0 || limits.code_time < TICK {
+            return Err(Error::ConfigError(format!(
+                "a guest's bounds hold some memory and a code time of a tick at least: {limits:?}"
+            )));
+        }
+        let code_ticks = u64::try_from(limits.code_time.as_nanos().div_ceil(TICK.as_nanos()))
+            .map_err(|_| Error::ConfigError(format!("a code time too long: {limits:?}")))?;
+        // § one p9d3qccma.a@emexy
+        let memory = StoreLimitsBuilder::new()
+            .memory_size(limits.memory)
+            .trap_on_grow_failure(true)
+            .build();
+        // § end p9d3qccma
         let engine = engine()?;
         let component = Component::new(&engine, wasm)
             .map_err(|e| Error::ConfigError(format!("the guest does not compile: {e:#}")))?;
-        // § symbbqcxc@f2e3g
+        // § symbbqcxc@y15v3
         let export = |instance: Option<&ComponentExportIndex>, name: &str| {
             component
                 .get_export_index(instance, name)
@@ -64,7 +97,7 @@ impl Guest {
         imports(&mut steps).map_err(|e| {
             Error::ConfigError(format!("the embedder's interfaces do not link: {e:#}"))
         })?;
-        // § dt9hm67zy@90dzr
+        // § dt9hm67zy@12msq
         let steps = steps.instantiate_pre(&component).map_err(|e| {
             Error::ConfigError(format!(
                 "the guest imports what neither Substantial nor the embedder gives: {e:#}"
@@ -72,7 +105,7 @@ impl Guest {
         })?;
         // § end dt9hm67zy
         let mut code = code::linker(&engine).map_err(linking)?;
-        // § h85pj12ap.a@sw020
+        // § h85pj12ap.a@62zq3
         // What is left are the embedder's interfaces, the step linker having refused any other.
         code.define_unknown_imports_as_traps(&component)
             .map_err(linking)?;
@@ -85,6 +118,8 @@ impl Guest {
             steps,
             run,
             step,
+            memory,
+            code_ticks,
         })))
     }
 
@@ -98,7 +133,8 @@ impl Guest {
         })
     }
 
-    /// The engine the guest is compiled for, for an embedder calling exports of its own.
+    /// The engine the guest is compiled for, for an embedder calling exports of its own. It
+    /// interrupts by epochs: a store of it traps at once unless given a deadline in `TICK`s.
     pub fn engine(&self) -> &Engine {
         &self.0.engine
     }
@@ -114,14 +150,26 @@ fn engine() -> Result<Engine> {
     static ENGINE: OnceLock<std::result::Result<Engine, String>> = OnceLock::new();
     ENGINE
         .get_or_init(|| {
-            // § jgv9ssc51@xd2mb
+            // § jgv9ssc51@2tfqr
             // Threads are not compiled in: a guest with shared memory does not compile.
             let mut config = Config::new();
             config
                 .cranelift_nan_canonicalization(true)
                 .relaxed_simd_deterministic(true);
             // § end jgv9ssc51
-            Engine::new(&config).map_err(|e| format!("{e:#}"))
+            config.epoch_interruption(true);
+            let engine = Engine::new(&config).map_err(|e| format!("{e:#}"))?;
+            let ticking = engine.clone();
+            std::thread::Builder::new()
+                .name("substantial-guest-epochs".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(TICK);
+                        ticking.increment_epoch();
+                    }
+                })
+                .map_err(|e| format!("the epoch clock does not start: {e}"))?;
+            Ok(engine)
         })
         .clone()
         .map_err(Error::Module)

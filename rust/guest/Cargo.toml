@@ -26,5 +26,9 @@ crate-type = ["cdylib"]
 name = "receive_with_timeout"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "bounds"
+crate-type = ["cdylib"]
+
 [dev-dependencies]
 wit-bindgen = { version = "0.51", default-features = false, features = ["macros", "realloc", "std"] }

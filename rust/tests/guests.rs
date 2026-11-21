@@ -7,12 +7,13 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use common::{LONG, namespaces, script};
 use substantial::__internal as internal;
 use substantial::guest::wasmtime::Store;
 use substantial::guest::wasmtime::component::Linker;
-use substantial::guest::{Guest, StepState};
+use substantial::guest::{Guest, Limits, StepState, TICK};
 use substantial::{Error, Observed};
 
 /// The component of the example guest `example`, built once per test process.
@@ -41,10 +42,17 @@ fn component(example: &str) -> Vec<u8> {
         .expect("the guest is made a component")
 }
 
+/// Bounds well above what the example guests need within them.
+const BOUNDS: Limits = Limits {
+    memory: 16 << 20,
+    code_time: Duration::from_secs(1),
+};
+
 /// The guest `sleep_then_step`, its embedder's counter linked to `bumps`.
 fn sleep_then_step(bumps: Arc<AtomicU32>) -> Guest {
     Guest::new(
         &component("sleep_then_step"),
+        BOUNDS,
         |linker: &mut Linker<StepState>| {
             linker
                 .instance("example:embedder/counter")?
@@ -97,7 +105,7 @@ async fn a_guest_sleeps_then_steps_replayed_from_its_history() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_guest_receives_a_message_or_its_timeout_passes() {
-    let guest = Guest::new(&component("receive_with_timeout"), |_| Ok(())).unwrap();
+    let guest = Guest::new(&component("receive_with_timeout"), BOUNDS, |_| Ok(())).unwrap();
     for ns in namespaces() {
         let sub = internal::create(ns.store).await.unwrap();
         let workflow = guest.workflow("receive_with_timeout");
@@ -117,8 +125,8 @@ async fn a_guest_receives_a_message_or_its_timeout_passes() {
 
 #[test]
 fn a_guest_importing_what_no_one_gives_is_refused() {
-    // § dt9hm67zy@0v4ah
-    let refused = Guest::new(&component("sleep_then_step"), |_| Ok(()));
+    // § dt9hm67zy@xrfmp
+    let refused = Guest::new(&component("sleep_then_step"), BOUNDS, |_| Ok(()));
     let Err(Error::ConfigError(message)) = refused else {
         panic!("a guest whose counter no one gives is loaded");
     };
@@ -129,12 +137,13 @@ fn a_guest_importing_what_no_one_gives_is_refused() {
 #[test]
 fn an_embedder_calls_an_export_of_its_own() {
     let guest = sleep_then_step(Arc::default());
-    // § symbbqcxc@8x94v
+    // § symbbqcxc@thk71
     let mut linker = Linker::new(guest.engine());
     linker
         .define_unknown_imports_as_traps(guest.component())
         .unwrap();
     let mut store = Store::new(guest.engine(), ());
+    store.set_epoch_deadline((LONG.as_millis() / TICK.as_millis()) as u64);
     let instance = linker.instantiate(&mut store, guest.component()).unwrap();
     let describe = instance
         .get_export_index(&mut store, None, "example:embedder/describe")
@@ -146,4 +155,60 @@ fn an_embedder_calls_an_export_of_its_own() {
     let (description,) = describe.call(&mut store, ()).unwrap();
     // § end symbbqcxc
     assert_eq!(description, "sleeps, then greets");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_past_its_bounds_traps_and_its_worker_goes_on() {
+    let guest = Guest::new(&component("bounds"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = guest.workflow("bounds");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        let start = |past: &'static str| {
+            let input = serde_json::json!({ "past": past });
+            sub.start(&workflow, input).id(past)
+        };
+        let code_time = start("code-time").await.unwrap();
+        let step_time = start("step-time").await.unwrap();
+        let step_memory = start("step-memory").await.unwrap();
+        let within = start("within").await.unwrap();
+        // § p9d3qccma.b@jpa34
+        let spun = code_time.result().timeout(LONG).await;
+        let Err(Error::RunFailed { error, .. }) = spun else {
+            panic!("{}: code past its time ended {spun:?}", ns.name);
+        };
+        assert_eq!(error.kind, "GuestTrap", "{}: {error:?}", ns.name);
+        // § end p9d3qccma.b
+        // § p9d3qccma.c@47hhc
+        let cause = step_time.result().timeout(LONG).await.unwrap();
+        assert_eq!(cause, "StepTimeout", "{}", ns.name);
+        // § end p9d3qccma.c
+        // § p9d3qccma.a@6wx15
+        let cause = step_memory.result().timeout(LONG).await.unwrap();
+        assert_eq!(cause, "GuestTrap", "{}", ns.name);
+        // § end p9d3qccma.a
+        let grown = within.result().timeout(LONG).await.unwrap();
+        assert_eq!(grown, (1 << 20).to_string(), "{}", ns.name);
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[test]
+fn bounds_with_no_memory_or_under_a_tick_are_refused() {
+    let wasm = component("receive_with_timeout");
+    // § p9d3qccma@qnvg1
+    for limits in [
+        Limits {
+            memory: 0,
+            ..BOUNDS
+        },
+        Limits {
+            code_time: TICK / 2,
+            ..BOUNDS
+        },
+    ] {
+        let refused = Guest::new(&wasm, limits, |_| Ok(()));
+        assert!(matches!(refused, Err(Error::ConfigError(_))), "{limits:?}");
+    }
+    // § end p9d3qccma
 }
