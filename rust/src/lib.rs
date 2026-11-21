@@ -11,6 +11,8 @@ mod clock;
 mod core;
 mod cost;
 mod error;
+#[cfg(feature = "guests")]
+pub mod guest;
 mod names;
 pub mod observe;
 mod plan;

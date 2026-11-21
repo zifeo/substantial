@@ -1,0 +1,110 @@
+// § g2h6bp5vq@06g4p
+// § g2h6bp5vq.a@z2t99
+package substantial:guest@0.1.0;
+// § end g2h6bp5vq.a
+
+/// The verbs a guest's workflow code calls, each recorded in its run's history. Every value is
+/// JSON text.
+interface context {
+    /// A failure, with the fields of every host's.
+    record failure {
+        kind: string,
+        message: string,
+        retryable: bool,
+        /// JSON.
+        details: option<string>,
+    }
+
+    /// An error a verb raised: its failure, and the failure of its last attempt for a `StepFailed`.
+    record raised {
+        failure: failure,
+        cause: option<failure>,
+    }
+
+    /// A call the code made, ended or not.
+    resource call {
+        /// Its value once it ended, its error once it failed, none before.
+        take: func() -> option<result<string, raised>>;
+    }
+
+    /// Blocks until one of `calls` at least has ended: the position of each that has, in order.
+    wait: func(calls: list<borrow<call>>) -> list<u32>;
+
+    record retry {
+        max-attempts: u32,
+        initial-ms: u64,
+        max-ms: u64,
+        multiplier: f64,
+    }
+
+    record step-options {
+        retry: option<retry>,
+        timeout-ms: option<u64>,
+    }
+
+    /// The step `name`, each attempt run by the export `step` with `args`.
+    step: func(name: string, args: string, options: step-options) -> call;
+    sleep: func(ms: u64) -> call;
+    /// Until `ms` milliseconds since the Unix epoch.
+    sleep-until: func(ms: s64) -> call;
+    /// The next message of `name`; with a timeout, `WaitTimeout` once it passed with none.
+    receive: func(name: string, timeout-ms: option<u64>) -> call;
+    send: func(chain: string, name: string, value: string, id: option<string>) -> call;
+    /// The time, an RFC 3339 string.
+    now: func() -> call;
+    /// A float in [0, 1).
+    random: func() -> call;
+    uuid: func() -> call;
+    publish: func(key: string, value: string) -> result<_, raised>;
+    chain: func() -> string;
+
+    enum level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Written only once the replay is live.
+    log: func(level: level, message: string);
+}
+
+/// What a step attempt calls.
+interface attempt {
+    /// `<run>/<step>/<occurrence>`, the same for every attempt and replay of the step.
+    step-key: func() -> string;
+}
+
+/// What the workflow code and the steps both call.
+interface panics {
+    /// The message of a panic, given before the guest traps, for the failure of its trap.
+    panicked: func(message: string);
+}
+
+/// What a guest exports for the host to call.
+interface workflow {
+    use context.{failure};
+
+    variant end {
+        failed(failure),
+        cancelled(string),
+    }
+
+    run: func(input: string) -> result<string, end>;
+
+    record step-error {
+        message: string,
+        permanent: bool,
+    }
+
+    /// One attempt of the step `name`.
+    step: func(name: string, args: string) -> result<string, step-error>;
+}
+
+world guest {
+    import context;
+    import attempt;
+    import panics;
+    export workflow;
+}

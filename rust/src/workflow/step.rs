@@ -181,6 +181,22 @@ impl Context {
             }
         })
     }
+
+    /// The step `name`, whose attempts run `body`, which gives its outcome as the run machine
+    /// takes it: a guest's step.
+    #[cfg(feature = "guests")]
+    pub(crate) fn step_of<T>(&self, name: &str, body: StepBody) -> Step<T> {
+        Step {
+            ctx: self.clone(),
+            name: name.to_owned(),
+            retry: None,
+            timeout: None,
+            body,
+            undo: None,
+            reserved: false,
+            value: PhantomData,
+        }
+    }
 }
 
 /// A step call, awaited to run it; `retry`, `timeout` and `undo` set its options first.

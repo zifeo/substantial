@@ -123,8 +123,8 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          for crate in substantial-macros substantial; do
-            # Both names start with "subs", hence the su/bs index path.
+          for crate in substantial-macros substantial-guest substantial; do
+            # Every name starts with "subs", hence the su/bs index path.
             if curl -sf "https://index.crates.io/su/bs/$crate" | jq -se --arg v "$version" 'any(.[]; .vers == $v)' >/dev/null; then
               echo "$crate $version is already on crates.io, skipping."
               continue

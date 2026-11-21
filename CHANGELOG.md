@@ -8,6 +8,10 @@ Release notes are also published on [GitHub Releases](https://github.com/zifeo/s
 
 ## [0.3.0] - Unreleased
 
+### Added
+
+- Wasm guest workflows: a workflow compiled to a WebAssembly component of the world `substantial:guest/guest` (`wit/guest.wit`) runs on a Rust worker loaded at run time, without a redeploy. The Rust crate's `guests` feature loads and replays it with wasmtime, and the new crate `substantial-guest` writes it in Rust with the API of the Rust host: `#[s::workflow]`, `#[s::step]`, `c.sleep`, `c.receive`, `c.send`. A guest has no network, clock or filesystem: its workflow code calls only Substantial's verbs, and its steps only the interfaces the embedder adds. An embedder may also call exports of its own beside the workflow.
+
 ### Changed
 
 - Every host refuses a value JSON cannot hold as it is instead of writing it as another value: Python a dict key that is not a string and a tuple, which it wrote as a list, TypeScript a `Date`, a `Map` or any object that is not plain, `undefined` inside an object or an array and a hole of a sparse array, before any `toJSON`, and Rust a NaN or an infinity.
