@@ -35,7 +35,7 @@ pub mod testing;
 #[cfg(not(target_family = "wasm"))]
 mod time;
 #[cfg(all(not(target_family = "wasm"), feature = "wasm-runner"))]
-// § one s9ynfgdqm.c@bbk2h
+// § one c7aw13gws.c@95tqq
 pub mod wasm;
 #[cfg(not(target_family = "wasm"))]
 mod worker;
@@ -58,7 +58,7 @@ pub use settings::Preset;
 #[cfg(not(target_family = "wasm"))]
 pub use store::{Credentials, Keys, Password};
 #[cfg(not(target_family = "wasm"))]
-// § one s9ynfgdqm@z6bqs
+// § one c7aw13gws@emtqy
 pub use substantial_macros::{export, step, workflow};
 #[cfg(not(target_family = "wasm"))]
 pub use time::{days, hours, minutes, seconds};
@@ -135,5 +135,5 @@ pub mod __internal {
 }
 
 #[cfg(target_family = "wasm")]
-// § one s9ynfgdqm.a@jspdm
+// § one c7aw13gws.a@y03m8
 pub use substantial_wasm_sdk::*;

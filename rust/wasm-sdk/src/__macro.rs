@@ -7,11 +7,12 @@ use std::sync::Once;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-pub use crate::__bindings::exports::substantial::wasm::workflow::{End, StepError};
+pub use crate::__bindings::exports::substantial::wasm::workflow::{End, StepError, StepFailure};
 use crate::__bindings::substantial::wasm::panics;
 use crate::context::Context;
 use crate::error::{Error, Permanent, Result};
 use crate::executor::block_on;
+use crate::json::to_text;
 
 pub use serde_json;
 
@@ -51,9 +52,12 @@ where
     report_panics();
     let ran = serde_json::from_str::<I>(&input)
         .map_err(Error::from)
-        .and_then(|input| block_on(f(Context::new(), input)))
-        .and_then(|output| Ok(serde_json::to_string(&output)?));
-    ran.map_err(Error::end)
+        .and_then(|input| block_on(f(Context::new(), input)));
+    // § one .:ea0fw6qrw.a@y4v0y
+    let text = ran.and_then(|output| {
+        to_text(&output).map_err(|e| Error::Json(format!("the result is not JSON: {e}")))
+    });
+    text.map_err(Error::end)
 }
 
 /// Runs a workflow that takes no input.
@@ -68,7 +72,9 @@ where
 
 /// The JSON of a step's arguments, an array of them in order.
 pub fn encode_arguments<T: Serialize>(args: &T) -> Result<String> {
-    Ok(serde_json::to_string(args)?)
+    // § one .:ea0fw6qrw.a@r7fw3
+    to_text(args)
+        .map_err(|e| Error::InvalidArgument(format!("the step's arguments are not JSON: {e}")))
 }
 
 pub type Attempt = Pin<Box<dyn Future<Output = std::result::Result<String, StepError>>>>;
@@ -81,9 +87,11 @@ pub struct StepEntry {
 
 /// The arguments of an attempt; ones that do not decode fail it at once.
 pub fn decode_arguments<T: DeserializeOwned>(args: &str) -> std::result::Result<T, StepError> {
-    serde_json::from_str(args).map_err(|e| StepError {
-        message: format!("the step's arguments do not decode: {e}"),
-        permanent: true,
+    serde_json::from_str(args).map_err(|e| {
+        StepError::Failed(StepFailure {
+            message: format!("the step's arguments do not decode: {e}"),
+            permanent: true,
+        })
     })
 }
 
@@ -96,16 +104,14 @@ where
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     match result {
-        Ok(value) => serde_json::to_string(&value).map_err(|e| StepError {
-            message: format!("the step's value does not encode: {e}"),
-            permanent: true,
-        }),
+        // § one .:ztt9a58wy.c@jn6ma
+        Ok(value) => to_text(&value).map_err(StepError::NotJson),
         Err(e) => {
             let e = e.into();
-            Err(StepError {
+            Err(StepError::Failed(StepFailure {
                 message: e.to_string(),
                 permanent: e.downcast_ref::<Permanent>().is_some(),
-            })
+            }))
         }
     }
 }
@@ -117,13 +123,13 @@ pub fn run_step(
     args: String,
 ) -> std::result::Result<String, StepError> {
     report_panics();
-    // § .:ztt9a58wy.a@2k5q2
+    // § .:ztt9a58wy.d@zemyz
     let Some(entry) = steps.iter().find(|s| s.name == name) else {
-        return Err(StepError {
+        return Err(StepError::Failed(StepFailure {
             message: format!("this Wasm workflow exports no step {name:?}: list it in export!"),
             permanent: true,
-        });
+        }));
     };
-    // § end .:ztt9a58wy.a
+    // § end .:ztt9a58wy.d
     block_on((entry.attempt)(args))
 }

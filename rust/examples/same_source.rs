@@ -11,7 +11,7 @@ pub struct Input {
 
 #[s::step]
 async fn greet(name: &str) -> Result<String, std::io::Error> {
-    Ok(format!("hello {name}"))
+    Ok(format!("hello {name}, step {}", s::step_key()))
 }
 
 #[s::workflow]

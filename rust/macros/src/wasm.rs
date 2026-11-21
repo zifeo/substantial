@@ -12,12 +12,14 @@ use syn::{Expr, FnArg, Ident, ItemFn, LitStr, Pat, Path, ReturnType, Token, Type
 use crate::names;
 
 pub fn workflow(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
+    // § c7aw13gws.d@e495s
     if !args.is_empty() {
         return Err(syn::Error::new(
             args.span(),
             "a Wasm workflow takes its name, version and settings from the worker serving it",
         ));
     }
+    // § end c7aw13gws.d
     let mut f: ItemFn = syn::parse2(item)?;
     let sig = &f.sig;
     if sig.asyncness.is_none() {
@@ -101,6 +103,7 @@ pub fn step(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
         } else if meta.path.is_ident("name") {
             o.name = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("undo") {
+            // § one c7aw13gws.d@bt9f5
             return Err(meta.error("a Wasm workflow's step has no undo yet"));
         } else {
             return Err(meta.error("expected `name`, `retry` or `timeout`"));

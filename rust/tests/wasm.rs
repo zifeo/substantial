@@ -14,15 +14,17 @@ use std::time::Duration;
 
 use common::{LONG, eventually, namespaces, script};
 use substantial::__internal as internal;
+use substantial::wasm::wasmtime;
 use substantial::wasm::wasmtime::Store;
 use substantial::wasm::wasmtime::component::Linker;
 use substantial::wasm::{Limits, Module, StepState, TICK};
 use substantial::{Error, Observed, RunStatus};
 
 /// The Wasm workflows of `substantial`'s examples: the others are native programs.
-const EXAMPLES: [&str; 6] = [
+const EXAMPLES: [&str; 7] = [
     "bounds",
     "edges",
+    "failures",
     "receive_with_timeout",
     "same_source",
     "sleep_then_step",
@@ -151,7 +153,7 @@ async fn one_source_runs_natively_and_as_a_wasm_workflow_alike() {
     let module = Module::new(&component("same_source"), BOUNDS, |_| Ok(())).unwrap();
     for ns in namespaces() {
         let sub = internal::create(ns.store).await.unwrap();
-        // § s9ynfgdqm@8ancy
+        // § c7aw13gws@qk0kq
         let wasm = module.workflow("greeting-wasm");
         let worker = script(&sub, (same_source::greeting, wasm.clone()))
             .start()
@@ -164,10 +166,14 @@ async fn one_source_runs_natively_and_as_a_wasm_workflow_alike() {
         let wasm = sub.start(&wasm, input).await.unwrap();
         let from_native = native.result().timeout(LONG).await.unwrap();
         let from_wasm = wasm.result().timeout(LONG).await.unwrap();
-        assert_eq!(from_native, "hello both", "{}", ns.name);
+        let greeted = |run: &str| format!("hello both, step {run}/greet/0");
+        assert_eq!(from_native, greeted(native.chain()), "{}", ns.name);
+        assert_eq!(from_wasm, greeted(wasm.chain()), "{}", ns.name);
+        // The values hold each run's own chain.
+        let from_wasm = format!("{:?}", events(&wasm).await).replace(wasm.chain(), "<run>");
+        let from_native = format!("{:?}", events(&native).await).replace(native.chain(), "<run>");
         assert_eq!(from_wasm, from_native, "{}", ns.name);
-        assert_eq!(events(&wasm).await, events(&native).await, "{}", ns.name);
-        // § end s9ynfgdqm
+        // § end c7aw13gws
         worker.shutdown().await.unwrap();
     }
 }
@@ -194,7 +200,7 @@ async fn a_wasm_workflow_receives_a_message_or_its_timeout_passes() {
 
 #[test]
 fn a_wasm_workflow_importing_what_no_one_gives_is_refused() {
-    // § de970qkh4@4p1wt
+    // § de970qkh4@ep5a9
     let refused = Module::new(&component("sleep_then_step"), BOUNDS, |_| Ok(()));
     let Err(Error::ConfigError(message)) = refused else {
         panic!("a module whose counter no one gives is loaded");
@@ -240,22 +246,37 @@ async fn a_wasm_workflow_past_its_bounds_traps_and_its_worker_goes_on() {
         let code_time = start("code-time").await.unwrap();
         let step_time = start("step-time").await.unwrap();
         let step_memory = start("step-memory").await.unwrap();
+        let code_memory = start("code-memory").await.unwrap();
         let within = start("within").await.unwrap();
-        // § jrg0gw7y7.b@6v7b0
+        // § byxbyrk1c.b@1c5sx
         let spun = code_time.result().timeout(LONG).await;
         let Err(Error::RunFailed { error, .. }) = spun else {
             panic!("{}: code past its time ended {spun:?}", ns.name);
         };
         assert_eq!(error.kind, "WasmTrap", "{}: {error:?}", ns.name);
-        // § end jrg0gw7y7.b
-        // § jrg0gw7y7.c@gcyg4
+        // § end byxbyrk1c.b
+        // § byxbyrk1c.c@280xr
         let cause = step_time.result().timeout(LONG).await.unwrap();
         assert_eq!(cause, "StepTimeout", "{}", ns.name);
-        // § end jrg0gw7y7.c
-        // § jrg0gw7y7.a@6cbty
+        // § end byxbyrk1c.c
+        // § byxbyrk1c.a@19wgm
         let cause = step_memory.result().timeout(LONG).await.unwrap();
         assert_eq!(cause, "WasmTrap", "{}", ns.name);
-        // § end jrg0gw7y7.a
+        let grown = code_memory.result().timeout(LONG).await;
+        let Err(Error::RunFailed { error, .. }) = grown else {
+            panic!("{}: code past its memory ended {grown:?}", ns.name);
+        };
+        assert_eq!(error.kind, "WasmTrap", "{}: {error:?}", ns.name);
+        // § end byxbyrk1c.a
+        // § cy53pm5cn.b@0qqrc
+        // A step tried thrice if it failed retryably.
+        let kinds = kinds(&step_memory).await;
+        assert!(
+            !kinds.contains(&"step_retry".to_owned()),
+            "{}: {kinds:?}",
+            ns.name
+        );
+        // § end cy53pm5cn.b
         let grown = within.result().timeout(LONG).await.unwrap();
         assert_eq!(grown, (1 << 20).to_string(), "{}", ns.name);
         worker.shutdown().await.unwrap();
@@ -265,7 +286,7 @@ async fn a_wasm_workflow_past_its_bounds_traps_and_its_worker_goes_on() {
 #[test]
 fn bounds_with_no_memory_or_under_a_tick_are_refused() {
     let wasm = component("receive_with_timeout");
-    // § jrg0gw7y7@nrp7w
+    // § byxbyrk1c.d@4ymwm
     for limits in [
         Limits {
             memory: 0,
@@ -279,7 +300,7 @@ fn bounds_with_no_memory_or_under_a_tick_are_refused() {
         let refused = Module::new(&wasm, limits, |_| Ok(()));
         assert!(matches!(refused, Err(Error::ConfigError(_))), "{limits:?}");
     }
-    // § end jrg0gw7y7
+    // § end byxbyrk1c.d
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -308,8 +329,8 @@ async fn a_wasm_workflow_duration_past_the_longest_fails_its_run_and_the_worker_
         let sub = internal::create(ns.store).await.unwrap();
         let workflow = module.workflow("edges");
         let worker = script(&sub, workflow.clone()).start().unwrap();
-        // § b60bm4szk@as9a9
-        for edge in ["huge-sleep", "huge-receive"] {
+        // § b60bm4szk@11ddm
+        for edge in ["huge-sleep", "huge-receive", "max-sleep"] {
             let input = serde_json::json!({ "edge": edge });
             let run = sub.start(&workflow, input).id(edge).await.unwrap();
             let ended = run.result().timeout(LONG).await;
@@ -394,7 +415,7 @@ async fn a_workflow_of_the_embedder_runs_the_wasm_workflows_its_runs_name() {
         let shelf = Shelf::default();
         let workflow = by_name(shelf.clone());
         let worker = script(&sub, workflow.clone()).start().unwrap();
-        // § c53nbqaa7@mh4b8
+        // § c53nbqaa7@hyj8g
         // Loaded once the worker serves: what a Wasm workflow published later is.
         let bumps = Arc::new(AtomicU32::new(0));
         let greeter = sleep_then_step(bumps.clone());
@@ -454,6 +475,7 @@ async fn a_wasm_run_ends_on_another_worker_that_loads_its_module_anew() {
         })
         .await;
         worker.shutdown().await.unwrap();
+        // § c53nbqaa7.a@sw8sd
         // Another process: its own module, loaded anew from the same bytes.
         let greeter = sleep_then_step(bumps_second.clone());
         (second.lock().unwrap()).insert("sleep_then_step".into(), greeter);
@@ -462,6 +484,7 @@ async fn a_wasm_run_ends_on_another_worker_that_loads_its_module_anew() {
         assert_eq!(greeting, "hello wasm, greeting 1", "{}", ns.name);
         assert_eq!(bumps_first.load(Ordering::SeqCst), 0, "{}", ns.name);
         assert_eq!(bumps_second.load(Ordering::SeqCst), 1, "{}", ns.name);
+        // § end c53nbqaa7.a
         worker.shutdown().await.unwrap();
     }
 }
@@ -586,4 +609,368 @@ async fn measure_a_verb_through_a_wasm_workflow_and_natively() {
         wasm_verb.saturating_sub(native_verb),
         wasm_none.saturating_sub(native_none)
     );
+}
+
+/// The kinds of `run`'s history, in order.
+async fn kinds<O>(run: &substantial::Run<O>) -> Vec<String> {
+    (run.history().await.unwrap().into_iter())
+        .map(|e| e.kind)
+        .collect()
+}
+
+/// The failure `run` ended with, which fails the test unless it failed.
+async fn failed<O: std::fmt::Debug + serde::de::DeserializeOwned + Send + 'static>(
+    run: &substantial::Run<O>,
+) -> (substantial::Failure, Option<substantial::Failure>) {
+    match run.result().timeout(LONG).await {
+        Err(Error::RunFailed { error, cause, .. }) => (*error, cause.map(|c| *c)),
+        other => panic!("{}: ended {other:?}", run.chain()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_time_of_the_code_counts_anew_from_each_verb_it_calls() {
+    // Each segment far within the code's time, the same work in one segment past it. The bound
+    // counts wall time, which a loaded worker stretches: the runner's property, on the memory store.
+    let limits = Limits {
+        code_time: Duration::from_millis(100),
+        ..BOUNDS
+    };
+    let module = Module::new(&component("bounds"), limits, |_| Ok(())).unwrap();
+    let ns = (namespaces().into_iter())
+        .find(|ns| ns.name == "memory")
+        .unwrap();
+    let sub = internal::create(ns.store).await.unwrap();
+    let workflow = module.workflow("bounds");
+    let worker = script(&sub, workflow.clone()).start().unwrap();
+    // § byxbyrk1c.b@4735f
+    let segments = serde_json::json!({"past": "segments", "spins": 50_000, "segments": 600});
+    let segments = sub.start(&workflow, segments).id("segments").await.unwrap();
+    let whole = serde_json::json!({"past": "segments", "spins": 30_000_000, "segments": 1});
+    let whole = sub.start(&workflow, whole).id("whole").await.unwrap();
+    let ended = segments.result().timeout(LONG).await.unwrap();
+    assert_eq!(ended, "600 segments");
+    assert_eq!(failed(&whole).await.0.kind, "WasmTrap");
+    // § end byxbyrk1c.b
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wasm_workflow_runs_its_branches_at_once_in_the_order_it_calls() {
+    let module = Module::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = module.workflow("edges");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        let input = serde_json::json!({ "edge": "parallel" });
+        let run = sub.start(&workflow, input).id("parallel").await.unwrap();
+        assert_eq!(
+            run.result().timeout(LONG).await.unwrap(),
+            "both",
+            "{}",
+            ns.name
+        );
+        let history = run.history().await.unwrap();
+        // § gtezqzzdn@8c24v
+        // Both timers taken before either fired: the branches ran at once.
+        let kinds: Vec<&str> = history.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            ["timer", "timer", "fired", "fired", "completed"],
+            "{}",
+            ns.name
+        );
+        // § end gtezqzzdn
+        // § gtezqzzdn.a@gzjkm
+        // The longer sleep, called first, is the first timer.
+        let timers: Vec<_> = (history.iter())
+            .filter(|e| e.kind == "timer")
+            .map(|e| (e.data["occurrence"].clone(), e.data["until"].to_string()))
+            .collect();
+        assert!(timers[0].1 > timers[1].1, "{}: {timers:?}", ns.name);
+        // § end gtezqzzdn.a
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wait_that_nothing_would_end_traps() {
+    let module = Module::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = module.workflow("edges");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        // § gtezqzzdn.c@p7866
+        for edge in ["wait-none", "wait-taken"] {
+            let input = serde_json::json!({ "edge": edge });
+            let run = sub.start(&workflow, input).id(edge).await.unwrap();
+            assert_eq!(failed(&run).await.0.kind, "WasmTrap", "{}: {edge}", ns.name);
+        }
+        // § end gtezqzzdn.c
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_replay_and_every_attempt_runs_in_an_instance_of_its_own() {
+    let module = Module::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = module.workflow("edges");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        let input = serde_json::json!({ "edge": "fresh" });
+        let run = sub.start(&workflow, input).id("fresh").await.unwrap();
+        // § s3vk5gvsj@3250e
+        // Each count starts from zero: no replay or attempt saw another's memory.
+        assert_eq!(
+            run.result().timeout(LONG).await.unwrap(),
+            "1,1,1",
+            "{}",
+            ns.name
+        );
+        // § end s3vk5gvsj
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_code_calling_what_a_step_calls_and_a_step_calling_a_verb_trap() {
+    let edges = Module::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    let greeter = sleep_then_step(Arc::default());
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let (edges, greeter) = (edges.workflow("edges"), greeter.workflow("sleep_then_step"));
+        let worker = script(&sub, (edges.clone(), greeter.clone()))
+            .start()
+            .unwrap();
+        // § mry4d64zv.a@d3hcj
+        let input = serde_json::json!({ "edge": "code-step-key" });
+        let keyed = sub.start(&edges, input).id("code-step-key").await.unwrap();
+        assert_eq!(failed(&keyed).await.0.kind, "WasmTrap", "{}", ns.name);
+        let input = serde_json::json!({ "name": "bump-in-code" });
+        let bumped = sub.start(&greeter, input).id("bump-in-code").await.unwrap();
+        assert_eq!(failed(&bumped).await.0.kind, "WasmTrap", "{}", ns.name);
+        let input = serde_json::json!({ "edge": "step-verb" });
+        let verb = sub.start(&edges, input).id("step-verb").await.unwrap();
+        assert_eq!(
+            verb.result().timeout(LONG).await.unwrap(),
+            "WasmTrap",
+            "{}",
+            ns.name
+        );
+        // § end mry4d64zv.a
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_step_that_export_does_not_list_fails_not_retryable() {
+    let module = Module::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = module.workflow("edges");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        let input = serde_json::json!({ "edge": "unlisted" });
+        let run = sub.start(&workflow, input).id("unlisted").await.unwrap();
+        // § ztt9a58wy.d@9ttcv
+        assert_eq!(
+            run.result().timeout(LONG).await.unwrap(),
+            "Error false",
+            "{}",
+            ns.name
+        );
+        // § end ztt9a58wy.d
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wasm_workflow_refuses_what_json_cannot_hold_and_fails_as_its_steps_say() {
+    let module = Module::new(&component("failures"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = module.workflow("failures");
+        let native = substantial::Workflow::without_input("native", |_c| async move {
+            Err::<(), _>(Error::Failed(substantial::Failure {
+                kind: "Mine".into(),
+                message: "mine".into(),
+                retryable: false,
+                details: Some(serde_json::json!({ "why": "mine" })),
+            }))
+        });
+        let worker = script(&sub, (workflow.clone(), native.clone()))
+            .start()
+            .unwrap();
+        let native_run = sub.start(&native, ()).id("native").await.unwrap();
+        let start = |failure: &'static str| {
+            let input = serde_json::json!({ "failure": failure });
+            sub.start(&workflow, input).id(failure)
+        };
+        // § ea0fw6qrw.a@fc1gk
+        for (failure, kind) in [
+            ("nan-result", "Json"),
+            ("nan-message", "InvalidArgument"),
+            ("huge-published", "InvalidArgument"),
+            ("nan-arguments", "InvalidArgument"),
+        ] {
+            let run = start(failure).await.unwrap();
+            assert_eq!(failed(&run).await.0.kind, kind, "{}: {failure}", ns.name);
+        }
+        // § end ea0fw6qrw.a
+        // § ztt9a58wy.c@f9evh
+        for (failure, cause, retried) in [
+            ("nan-value", ("Json", false), false),
+            ("step-error", ("Error", true), true),
+            ("step-permanent", ("Error", false), false),
+        ] {
+            let run = start(failure).await.unwrap();
+            let (error, of) = failed(&run).await;
+            assert_eq!(error.kind, "StepFailed", "{}: {failure}", ns.name);
+            let of = of.unwrap_or_else(|| panic!("{}: {failure} has no cause", ns.name));
+            assert_eq!(
+                (of.kind.as_str(), of.retryable),
+                cause,
+                "{}: {failure}",
+                ns.name
+            );
+            let kinds = kinds(&run).await;
+            let was_retried = kinds.contains(&"step_retry".to_owned());
+            assert_eq!(was_retried, retried, "{}: {failure} {kinds:?}", ns.name);
+        }
+        // § end ztt9a58wy.c
+        // § q2x1ma914@8w937
+        let run = start("own-failure").await.unwrap();
+        let native = native_run.result().timeout(LONG).await;
+        let Err(Error::RunFailed { error: native, .. }) = native else {
+            panic!("{}: the native failure ended {native:?}", ns.name);
+        };
+        let (error, _) = failed(&run).await;
+        assert_eq!(error, *native, "{}", ns.name);
+        assert_eq!(error.kind, "Mine", "{}", ns.name);
+        // § end q2x1ma914
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_abandoned_attempt_stops_at_once_and_a_host_error_traps_its_attempt() {
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let bumps = Arc::new(AtomicU32::new(0));
+        let spinning = sleep_then_step(bumps.clone()).workflow("sleep_then_step");
+        let failing = Module::new(
+            &component("sleep_then_step"),
+            BOUNDS,
+            |linker: &mut Linker<StepState>| {
+                linker.instance("example:embedder/counter")?.func_wrap(
+                    "bump",
+                    |_, (): ()| -> wasmtime::Result<(u32,)> {
+                        Err(wasmtime::format_err!("the counter is down"))
+                    },
+                )
+            },
+        )
+        .unwrap()
+        .workflow("failing");
+        let worker = script(&sub, (spinning.clone(), failing.clone()))
+            .start()
+            .unwrap();
+        // § ztt9a58wy.b@bf5v5
+        let input = serde_json::json!({ "name": "spin" });
+        let spun = sub.start(&spinning, input).id("spin").await.unwrap();
+        assert_eq!(
+            spun.result().timeout(LONG).await.unwrap(),
+            "StepTimeout",
+            "{}",
+            ns.name
+        );
+        let after = bumps.load(Ordering::SeqCst);
+        assert!(after > 0, "{}: the step never bumped", ns.name);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(bumps.load(Ordering::SeqCst), after, "{}", ns.name);
+        // § end ztt9a58wy.b
+        // § cy53pm5cn.c@xm316
+        let input = serde_json::json!({ "name": "wasm" });
+        let down = sub.start(&failing, input).id("down").await.unwrap();
+        let (error, cause) = failed(&down).await;
+        assert_eq!(error.kind, "StepFailed", "{}", ns.name);
+        let cause = cause.unwrap_or_else(|| panic!("{}: no cause", ns.name));
+        assert_eq!(
+            (cause.kind.as_str(), cause.retryable),
+            ("WasmTrap", false),
+            "{}",
+            ns.name
+        );
+        assert!(
+            cause.message.contains("the counter is down"),
+            "{}: {cause:?}",
+            ns.name
+        );
+        // § end cy53pm5cn.c
+        worker.shutdown().await.unwrap();
+    }
+}
+
+/// The component of the text `wat`.
+fn wat(wat: &str) -> Vec<u8> {
+    ::wat::parse_str(wat).expect("the text is a component")
+}
+
+#[test]
+fn a_module_with_threads_does_not_compile() {
+    // § ad2tnbnvg@ancsc
+    let shared = wat("(component (core module (memory 1 1 shared)))");
+    let Err(Error::ConfigError(message)) = Module::new(&shared, BOUNDS, |_| Ok(())) else {
+        panic!("a module with a shared memory loaded");
+    };
+    assert!(message.contains("does not compile"), "{message}");
+    // § end ad2tnbnvg
+}
+
+#[test]
+fn a_module_of_another_minor_version_of_the_world_is_refused() {
+    let importing = |version: &str| {
+        wat(&format!(
+            r#"(component (import "substantial:wasm/context@{version}"
+                (instance (export "chain" (func (result string))))))"#
+        ))
+    };
+    // § j67tqxstm.a@kn513
+    let Err(Error::ConfigError(message)) = Module::new(&importing("0.2.0"), BOUNDS, |_| Ok(()))
+    else {
+        panic!("a module of the world 0.2.0 loaded");
+    };
+    assert!(message.contains("imports what neither"), "{message}");
+    // A patch version links: what refuses this one is its missing export.
+    let Err(Error::ConfigError(message)) = Module::new(&importing("0.1.1"), BOUNDS, |_| Ok(()))
+    else {
+        panic!("a module with no export loaded");
+    };
+    assert!(message.contains("exports no"), "{message}");
+    // § end j67tqxstm.a
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_module_whose_workflow_has_other_types_loads_then_fails_its_runs() {
+    let other = wat(r#"(component
+            (core module $m (func (export "f")))
+            (core instance $i (instantiate $m))
+            (func $f (canon lift (core func $i "f")))
+            (instance $w (export "run" (func $f)) (export "step" (func $f)))
+            (export "substantial:wasm/workflow@0.1.0" (instance $w)))"#);
+    // § jf9zy7nf7.a@t6csz
+    let module = Module::new(&other, BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = module.workflow("other");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        let run = sub
+            .start(&workflow, serde_json::json!({}))
+            .id("other")
+            .await
+            .unwrap();
+        assert_eq!(failed(&run).await.0.kind, "ConfigError", "{}", ns.name);
+        worker.shutdown().await.unwrap();
+    }
+    // § end jf9zy7nf7.a
 }

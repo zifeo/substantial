@@ -157,12 +157,14 @@ impl CodeState {
 }
 
 impl Module {
-    // § c53nbqaa7@s0ewp
+    // § c53nbqaa7@5kbt7
     /// One replay of the module's workflow code within the run of `ctx`, given `input`: what the
     /// workflow of [`Module::workflow`] runs. A workflow of the embedder's own calls it to serve
     /// a Wasm workflow loaded after its worker started, such as the one its input names by digest: every
     /// replay of the run must find the same module under that name.
     pub async fn run(&self, ctx: Context, input: serde_json::Value) -> Result<serde_json::Value> {
+        // § c53nbqaa7.a@4xcm4
+        // The run's history names no module: the one given replays its code against it.
         let state = CodeState {
             ctx,
             module: self.clone(),
@@ -184,6 +186,7 @@ impl Module {
             Error::Failed(trapped(store.data_mut().panic.take(), &e))
         };
         let instance = instance.map_err(|e| trap(&mut store, e))?;
+        // § one jf9zy7nf7.a@fb36d
         let run = instance
             .get_typed_func::<(String,), (std::result::Result<String, End>,)>(
                 &mut store,
@@ -220,12 +223,17 @@ async fn start(
             ended: None,
         },
     };
+    // § byxbyrk1c.b@63sjq
+    // From the return to the code: the runner's own time in the call is not the code's.
+    // silcrow:follow
+    new_time(store);
+    // § end byxbyrk1c.b
     Ok((store.data_mut().table.push(pending)?,))
 }
 
 /// Gives the code its time anew, from now.
 fn new_time(store: &mut StoreContextMut<'_, CodeState>) {
-    // § jrg0gw7y7.b@54psx
+    // § byxbyrk1c.b@tsz0h
     let ticks = store.data().code_ticks;
     store.set_epoch_deadline(ticks);
 }
@@ -265,25 +273,34 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
         "wait",
         |mut store, (calls,): (Vec<Resource<ModuleCall>>,)| {
             Box::new(async move {
+                // § gtezqzzdn.c@ggp93
                 if calls.is_empty() {
                     wasmtime::bail!("a wait on no call, which nothing would end");
                 }
-                // § gtezqzzdn@vkhyg
+                // § end gtezqzzdn.c
+                // § gtezqzzdn@y1wg2
                 let ended = std::future::poll_fn(|cx| {
                     let table = &mut store.data_mut().table;
                     let mut ended = Vec::new();
                     for (i, call) in calls.iter().enumerate() {
                         let pending = match table.get_mut(call) {
                             Ok(pending) => pending,
-                            Err(e) => return Poll::Ready(Err(e)),
+                            Err(e) => return Poll::Ready(Err(wasmtime::Error::from(e))),
                         };
+                        // § gtezqzzdn.c@t9j83
+                        if pending.future.is_none() && pending.ended.is_none() {
+                            return Poll::Ready(Err(wasmtime::format_err!(
+                                "a wait on a call already taken, which nothing would end"
+                            )));
+                        }
+                        // § end gtezqzzdn.c
                         if let Some(future) = pending.future.as_mut()
                             && let Poll::Ready(outcome) = future.as_mut().poll(cx)
                         {
                             pending.future = None;
                             pending.ended = Some(outcome);
                         }
-                        // § one gtezqzzdn.b@geb6y
+                        // § one gtezqzzdn.b@tg1cd
                         if pending.ended.is_some() {
                             ended.push(
                                 u32::try_from(i).expect("a wait names fewer than 2^32 calls"),
@@ -308,11 +325,14 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
             let (ctx, module) = (store.data().ctx.clone(), store.data().module.clone());
             Box::new(async move {
                 // The arguments cross to the step's instance: checked here, as every value is.
-                // § ks041gbgm@kerry
+                // § ea0fw6qrw@08ex5
                 if let Err(e) = module_value(&args) {
-                    return start(&mut store, async move { Err(Error::Json(e)) }).await;
+                    // § one ea0fw6qrw.a@5wjx0
+                    let refused =
+                        Error::InvalidArgument(format!("the step's arguments are not JSON: {e}"));
+                    return start(&mut store, async move { Err(refused) }).await;
                 }
-                // § end ks041gbgm
+                // § end ea0fw6qrw
                 let body = module.attempts(name.clone(), args);
                 let mut step = ctx.step_of::<serde_json::Value>(&name, body);
                 if let Some(r) = options.retry {
@@ -376,7 +396,11 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
             let ctx = store.data().ctx.clone();
             Box::new(async move {
                 start(&mut store, async move {
-                    let mut send = ctx.send(&chain, &name, module_value(&value)?);
+                    // § one ea0fw6qrw.a@jmqbj
+                    let value = module_value(&value).map_err(|e| {
+                        Error::InvalidArgument(format!("the message is not JSON: {e}"))
+                    })?;
+                    let mut send = ctx.send(&chain, &name, value);
                     if let Some(id) = &id {
                         send = send.id(id);
                     }
@@ -408,9 +432,11 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
         Box::new(async move { start(&mut store, async move { as_text(&ctx.uuid().await?) }).await })
     })?;
     i.func_wrap("publish", |mut store, (key, value): (String, String)| {
+        new_time(&mut store);
         let state = store.data_mut();
+        // § one ea0fw6qrw.a@5dk86
         let published = module_value(&value)
-            .map_err(Error::from)
+            .map_err(|e| Error::InvalidArgument(format!("the published value is not JSON: {e}")))
             .and_then(|value| state.ctx.publish(&key, value));
         Ok((published.map_err(|e| state.raise(e)),))
     })?;
@@ -434,7 +460,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
             store.data_mut().panic = Some(message);
             Ok(())
         })?;
-    // § mry4d64zv.a@gm1vp
+    // § mry4d64zv.a@e0yhe
     linker.instance(ATTEMPT)?.func_wrap(
         "step-key",
         |_, (): ()| -> wasmtime::Result<(String,)> {

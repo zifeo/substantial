@@ -14,7 +14,7 @@ use std::time::Duration;
 
 pub use wasmtime;
 use wasmtime::component::{Component, ComponentExportIndex, InstancePre, Linker};
-use wasmtime::{Config, Engine, ResourceLimiter};
+use wasmtime::{Config, Engine, ResourceLimiter, WasmFeatures};
 
 pub use self::step::StepState;
 use crate::error::{Error, Failure, Result};
@@ -50,7 +50,7 @@ const TABLE_ELEMENT: usize = std::mem::size_of::<usize>();
 
 impl Held {
     fn take(&mut self, bytes: usize) -> wasmtime::Result<bool> {
-        // § jrg0gw7y7.a@5fkpm
+        // § byxbyrk1c.a@8p5g6
         match self.left.checked_sub(bytes) {
             Some(left) => {
                 self.left = left;
@@ -120,7 +120,8 @@ impl Module {
         limits: Limits,
         imports: impl FnOnce(&mut Linker<StepState>) -> wasmtime::Result<()>,
     ) -> Result<Self> {
-        // § jrg0gw7y7@qwscd
+        // § byxbyrk1c@8nrna
+        // § byxbyrk1c.d@x4tq1
         if limits.memory == 0 || limits.code_time < TICK {
             return Err(Error::ConfigError(format!(
                 "a Wasm workflow's bounds hold some memory and a code time of a tick at least: {limits:?}"
@@ -132,14 +133,26 @@ impl Module {
             .ok()
             .and_then(|ticks| ticks.checked_add(1))
             .ok_or_else(|| Error::ConfigError(format!("a code time too long: {limits:?}")))?;
+        // § end byxbyrk1c.d
         let memory = Held {
             left: limits.memory,
         };
-        // § end jrg0gw7y7
+        // § end byxbyrk1c
         let engine = engine()?;
         let component = Component::new(&engine, wasm)
             .map_err(|e| Error::ConfigError(format!("the module does not compile: {e:#}")))?;
-        // § jf9zy7nf7@md6g1
+        let mut steps = step::linker(&engine).map_err(linking)?;
+        imports(&mut steps).map_err(|e| {
+            Error::ConfigError(format!("the embedder's interfaces do not link: {e:#}"))
+        })?;
+        // § de970qkh4@hhw58
+        let steps = steps.instantiate_pre(&component).map_err(|e| {
+            Error::ConfigError(format!(
+                "the module imports what neither Substantial nor the embedder gives: {e:#}"
+            ))
+        })?;
+        // § end de970qkh4
+        // § jf9zy7nf7@he4v3
         let export = |instance: Option<&ComponentExportIndex>, name: &str| {
             component
                 .get_export_index(instance, name)
@@ -151,19 +164,8 @@ impl Module {
             export(Some(&workflow), "step")?,
         );
         // § end jf9zy7nf7
-        let mut steps = step::linker(&engine).map_err(linking)?;
-        imports(&mut steps).map_err(|e| {
-            Error::ConfigError(format!("the embedder's interfaces do not link: {e:#}"))
-        })?;
-        // § de970qkh4@cxvfm
-        let steps = steps.instantiate_pre(&component).map_err(|e| {
-            Error::ConfigError(format!(
-                "the module imports what neither Substantial nor the embedder gives: {e:#}"
-            ))
-        })?;
-        // § end de970qkh4
         let mut code = code::linker(&engine).map_err(linking)?;
-        // § mry4d64zv.a@yg67a
+        // § mry4d64zv.a@s2fav
         // What is left are the embedder's interfaces, the step linker having refused any other.
         code.define_unknown_imports_as_traps(&component)
             .map_err(linking)?;
@@ -208,12 +210,16 @@ fn engine() -> Result<Engine> {
     static ENGINE: OnceLock<std::result::Result<Engine, String>> = OnceLock::new();
     ENGINE
         .get_or_init(|| {
-            // § ad2tnbnvg@a1b3z
-            // Threads are not compiled in: a module with shared memory does not compile.
+            // § ad2tnbnvg@6tm2c
+            // Off by name: an embedder's own wasmtime with default features compiles threads in.
             let mut config = Config::new();
             config
                 .cranelift_nan_canonicalization(true)
-                .relaxed_simd_deterministic(true);
+                .relaxed_simd_deterministic(true)
+                .wasm_features(
+                    WasmFeatures::THREADS | WasmFeatures::SHARED_EVERYTHING_THREADS,
+                    false,
+                );
             // § end ad2tnbnvg
             config.epoch_interruption(true);
             let engine = Engine::new(&config).map_err(|e| format!("{e:#}"))?;
@@ -254,9 +260,9 @@ fn trapped(panic: Option<String>, e: &wasmtime::Error) -> Failure {
 
 /// A module's JSON, checked as a value of the host's own code.
 fn module_value(json: &str) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    // § ks041gbgm@4a9zw
+    // § ea0fw6qrw@77hye
     let value: serde_json::Value = serde_json::from_str(json)?;
     crate::workflow::to_json(&value)?;
     Ok(value)
-    // § end ks041gbgm
+    // § end ea0fw6qrw
 }

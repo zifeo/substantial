@@ -518,18 +518,27 @@ async fn a_duration_past_the_longest_fails_its_run_and_the_worker_goes_on() {
             c.sleep(Duration::from_millis(ms)).await?;
             Ok(ms)
         });
-        let worker = script(&sub, wf.clone()).start().unwrap();
-        // § b60bm4szk@1d8j8
+        // Past u64 milliseconds too, which a call cannot carry at all.
+        let max = Workflow::without_input("max-sleeper", |c: Context| async move {
+            c.sleep(Duration::MAX).await
+        });
+        let worker = script(&sub, (wf.clone(), max.clone())).start().unwrap();
+        // § b60bm4szk@b5hxq
         let long = sub
             .start(&wf, Sleep { long: true })
             .id("long")
             .await
             .unwrap();
-        let ended = long.result().timeout(LONG).await;
-        let Err(Error::RunFailed { error, .. }) = ended else {
-            panic!("{}: a sleep past the longest ended {ended:?}", ns.name);
-        };
-        assert_eq!(error.kind, "InvalidArgument", "{}: {error:?}", ns.name);
+        let max = sub.start(&max, ()).id("max").await.unwrap();
+        for ended in [
+            long.result().timeout(LONG).await.map(drop),
+            max.result().timeout(LONG).await,
+        ] {
+            let Err(Error::RunFailed { error, .. }) = ended else {
+                panic!("{}: a sleep past the longest ended {ended:?}", ns.name);
+            };
+            assert_eq!(error.kind, "InvalidArgument", "{}: {error:?}", ns.name);
+        }
         // § end b60bm4szk
         let short = sub
             .start(&wf, Sleep { long: false })

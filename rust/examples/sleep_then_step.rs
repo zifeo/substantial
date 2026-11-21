@@ -1,6 +1,7 @@
 //! A Wasm workflow that sleeps, then runs a step: its run is replayed from its history at its wakeup.
 //! Its step bumps a counter of the embedder's, and it exports a description of its own, as an
-//! embedder's Wasm workflow would.
+//! embedder's Wasm workflow would. The name `spin` runs a step that bumps until its timeout
+//! abandons it, and `bump-in-code` bumps from the workflow code, which may not.
 
 // A native link would miss the host's imports, so a native build holds nothing.
 #![cfg(target_family = "wasm")]
@@ -50,10 +51,33 @@ async fn greet(name: &str) -> Result<String, std::io::Error> {
     Ok(format!("hello {name}, greeting {n}"))
 }
 
-#[s::workflow]
-async fn sleep_then_step(c: s::Context, input: Input) -> s::Result<String> {
-    c.sleep(s::seconds(1)).await?;
-    greet(&input.name).await
+const ONCE: s::Retry = s::Retry {
+    max_attempts: 1,
+    initial: std::time::Duration::from_secs(1),
+    max: std::time::Duration::from_secs(1),
+    multiplier: 1.0,
+};
+
+#[s::step(retry = ONCE, timeout = std::time::Duration::from_millis(200))]
+async fn bump_forever() -> Result<(), std::io::Error> {
+    loop {
+        embedder::example::embedder::counter::bump();
+    }
 }
 
-s::export!(sleep_then_step, steps = [greet]);
+#[s::workflow]
+async fn sleep_then_step(c: s::Context, input: Input) -> s::Result<String> {
+    match input.name.as_str() {
+        "spin" => match bump_forever().await {
+            Err(s::Error::StepFailed { cause, .. }) => Ok(cause.kind),
+            other => other.map(|()| "bumped".to_owned()),
+        },
+        "bump-in-code" => Ok(embedder::example::embedder::counter::bump().to_string()),
+        name => {
+            c.sleep(s::seconds(1)).await?;
+            greet(name).await
+        }
+    }
+}
+
+s::export!(sleep_then_step, steps = [greet, bump_forever]);

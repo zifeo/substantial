@@ -9,10 +9,11 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::__bindings::substantial::wasm::context as wit;
+use crate::__bindings::substantial::wasm::{attempt, context as wit};
 use crate::durations::whole_millis;
 use crate::error::{Error, Result};
 use crate::executor::Calling;
+use crate::json::to_text;
 
 type LocalFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 
@@ -73,14 +74,18 @@ impl Context {
         SendFromWorkflow {
             run: run.to_owned(),
             name: name.to_owned(),
-            value: serde_json::to_string(&value).map_err(Error::from),
+            // § one .:ea0fw6qrw.a@ez8bk
+            value: to_text(&value)
+                .map_err(|e| Error::InvalidArgument(format!("the message is not JSON: {e}"))),
             id: None,
         }
     }
 
     /// Makes `value` the last one published under `key` by the chain.
     pub fn publish(&self, key: &str, value: impl Serialize) -> Result<()> {
-        let value = serde_json::to_string(&value)?;
+        // § one .:ea0fw6qrw.a@9jjeq
+        let value = to_text(&value)
+            .map_err(|e| Error::InvalidArgument(format!("the published value is not JSON: {e}")))?;
         wit::publish(key, &value).map_err(Error::from)
     }
 
@@ -109,6 +114,15 @@ impl Context {
             output: PhantomData,
         }
     }
+}
+
+/// `<run>/<step>/<occurrence>`, the same for every attempt and replay of the step running.
+///
+/// # Panics
+///
+/// Outside a step attempt: the workflow code calling it traps, a bug of the code.
+pub fn step_key() -> String {
+    attempt::step_key()
 }
 
 fn answer<T: DeserializeOwned>(ended: std::result::Result<String, wit::Raised>) -> Result<T> {

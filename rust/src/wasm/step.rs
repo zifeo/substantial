@@ -24,9 +24,18 @@ impl StepState {
 
 #[derive(ComponentType, Lift)]
 #[component(record)]
-struct StepError {
+struct StepFailure {
     message: String,
     permanent: bool,
+}
+
+#[derive(ComponentType, Lift)]
+#[component(variant)]
+enum StepError {
+    #[component(name = "failed")]
+    Failed(StepFailure),
+    #[component(name = "not-json")]
+    NotJson(String),
 }
 
 /// The verbs of the workflow code, which trap in a step.
@@ -61,7 +70,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<StepState>> {
     let mut context = linker.instance(CONTEXT)?;
     // A call of the context cannot exist in a step: its resource is never made there.
     context.resource("call", ResourceType::host::<()>(), |_, _| Ok(()))?;
-    // § mry4d64zv.a@dz04a
+    // § mry4d64zv.a@98765
     for verb in VERBS {
         context.func_new(verb, move |_, _, _, _| {
             wasmtime::bail!("a step called {verb}, a verb of the workflow code")
@@ -92,11 +101,11 @@ impl Module {
         let mut store = Store::new(&self.0.engine, state);
         // § end ztt9a58wy.b
         store.limiter(|s| &mut s.memory);
-        // § jrg0gw7y7.c@hxv95
+        // § byxbyrk1c.c@wzr4j
         let every_tick = 1;
         store.set_epoch_deadline(every_tick);
         store.epoch_deadline_async_yield_and_update(every_tick);
-        // § end jrg0gw7y7.c
+        // § end byxbyrk1c.c
         // § s3vk5gvsj@x1ckk
         let instance = self.0.steps.instantiate_async(&mut store).await;
         // § end s3vk5gvsj
@@ -112,9 +121,9 @@ impl Module {
                 &self.0.step,
             )
             .map_err(|e| trap(&mut store, e))?;
-        // § ztt9a58wy@8bskw
+        // § ztt9a58wy@cvtx9
         match step.call_async(&mut store, (name, args)).await {
-            // § ztt9a58wy.c@9xsma
+            // § ztt9a58wy.c@8f9wc
             Ok((Ok(value),)) => module_value(&value)
                 .and_then(|value| crate::workflow::to_json(&value))
                 .map_err(|e| Failure {
@@ -123,13 +132,20 @@ impl Module {
                     retryable: false,
                     details: None,
                 }),
-            Ok((Err(StepError { message, permanent }),)) => Err(Failure {
+            Ok((Err(StepError::Failed(StepFailure { message, permanent })),)) => Err(Failure {
                 kind: "Error".into(),
                 message,
                 retryable: !permanent,
                 details: None,
             }),
+            Ok((Err(StepError::NotJson(message)),)) => Err(Failure {
+                kind: "Json".into(),
+                message,
+                retryable: false,
+                details: None,
+            }),
             // § end ztt9a58wy.c
+            // § one cy53pm5cn.c@cdtds
             Err(e) => Err(trap(&mut store, e)),
         }
         // § end ztt9a58wy

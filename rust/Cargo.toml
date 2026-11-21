@@ -61,6 +61,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tempfile = "3"
+wat = "1"
 wit-component = "0.244"
 tokio = { version = "1.49", features = ["full", "test-util"] }
 
@@ -91,6 +92,10 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "same_source"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "failures"
 crate-type = ["cdylib"]
 
 [[test]]

@@ -1,11 +1,12 @@
-// § j67tqxstm@vz5y7
-// § j67tqxstm.a@5e6bn
+// § j67tqxstm@qdad0
+// § j67tqxstm.a@efxfv
 package substantial:wasm@0.1.0;
 // § end j67tqxstm.a
 
 /// The verbs a Wasm workflow's code calls, each recorded in its run's history. Every value is
-/// JSON text, which the host checks: one that is not JSON raises `Json`. A duration in
-/// milliseconds is at most 2^53 - 1, and a longer one raises `InvalidArgument`.
+/// JSON text, which the host checks: a message, a published value or a step's arguments that is
+/// not JSON raises `InvalidArgument`. A duration in milliseconds is at most 2^53 - 1, and a longer
+/// one raises `InvalidArgument`.
 interface context {
     /// A failure, with the fields of every host's. A `Cancelled` carries the reason of the
     /// cancellation as its message.
@@ -101,14 +102,20 @@ interface workflow {
 
     run: func(input: string) -> result<string, end>;
 
-    record step-error {
+    record step-failure {
         message: string,
         permanent: bool,
     }
 
+    variant step-error {
+        /// The step's own error: `Error`, retryable unless `permanent`.
+        failed(step-failure),
+        /// Its value, which JSON cannot hold: `Json`, not retryable.
+        not-json(string),
+    }
+
     /// One attempt of the step `name`. Its value is JSON text; one that is not fails the attempt
-    /// with `Json`, not retryable, and a `step-error` fails it with `Error`, retryable unless
-    /// `permanent`.
+    /// with `Json`, not retryable.
     step: func(name: string, args: string) -> result<string, step-error>;
 }
 

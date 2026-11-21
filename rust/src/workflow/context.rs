@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use crate::names::check_name;
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
 use crate::proto::layout::v1::{self as layout, Time, Value};
-use crate::time::millis;
+use crate::time::call_millis;
 
 /// What workflow code calls; one per replay, cheap to clone.
 #[derive(Clone)]
@@ -65,7 +65,7 @@ impl Context {
     }
 
     pub async fn sleep(&self, d: Duration) -> Result<()> {
-        self.resolved(Call::SleepMs(millis(d))).await.map(drop)
+        self.resolved(Call::SleepMs(call_millis(d))).await.map(drop)
     }
 
     /// Sleeps until `t`; a time that has passed fires at once.
@@ -271,7 +271,7 @@ impl IntoFuture for WaitUntil {
 
     fn into_future(self) -> Self::IntoFuture {
         let call = Call::Wait(b::call::Wait {
-            timeout_ms: self.timeout.map(millis),
+            timeout_ms: self.timeout.map(call_millis),
         });
         let shared = self.ctx.shared.clone();
         Box::pin(async move {

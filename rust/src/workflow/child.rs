@@ -17,7 +17,7 @@ use crate::cost::Budget;
 use crate::error::{Error, Result};
 use crate::names::{check_key, check_sent_name};
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
-use crate::time::millis;
+use crate::time::call_millis;
 
 /// A run started by this one, whose result is an `O`.
 pub struct Child<O> {
@@ -109,7 +109,7 @@ impl<T: DeserializeOwned + 'static> IntoFuture for ChainResult<T> {
             check_key("run id", &self.chain)?;
             let call = b::call::ChainResult {
                 chain: self.chain.clone(),
-                timeout_ms: self.timeout.map(millis),
+                timeout_ms: self.timeout.map(call_millis),
             };
             let resolved = self.ctx.resolved(Call::ChainResult(call)).await;
             failure_read(&self.ctx, &self.chain, &resolved);

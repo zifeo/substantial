@@ -813,7 +813,7 @@ await sub.worker([nightly, report], { preset: "script" }).drain({ within: s.minu
 
 ### Wasm workflows
 
-A Rust worker also serves workflows compiled to WebAssembly, which it loads from their bytes when it starts or later: a workflow's code changes without a rebuild of the worker, and runs isolated from it. A Wasm workflow is written with the crate `substantial` itself, as a `cdylib`, and the same source also builds as a native workflow:
+A Rust worker also serves workflows compiled to WebAssembly, which it loads from their bytes when it starts or later: a workflow's code changes without a rebuild of the worker, and runs isolated from it. A Wasm workflow is written with the crate `substantial` itself, as a `cdylib`, and the same source also builds as a native workflow, as long as its `#[workflow]` takes no option, since the worker gives a Wasm workflow its name and settings:
 
 ```rust
 use serde::Deserialize;
@@ -845,7 +845,7 @@ cargo build --release --target wasm32-unknown-unknown
 wasm-tools component new target/wasm32-unknown-unknown/release/greeting.wasm -o greeting.wasm
 ```
 
-A worker with the `wasm-runner` feature loads it and serves it as any workflow, within the memory and the time between two waits it is given:
+A worker with the `wasm-runner` feature loads it and serves it as any workflow, within the memory and the time between two verbs it is given:
 
 ```rust
 use substantial::wasm::{Limits, Module};
@@ -859,7 +859,7 @@ sub.start(&greeting, serde_json::json!({ "name": "Ada" })).await?;
 
 A module loaded after its worker started runs within a workflow of the worker's own, which calls `Module::run` with the run's context, for instance on the module its input names by digest.
 
-A Wasm workflow has no network, clock or filesystem: its workflow code calls only Substantial's verbs, each recorded, and its steps only the interfaces the worker adds with the closure of `Module::new`, a wasmtime linker, whose functions may be async. Each replay and each step attempt runs in an instance of its own, and a module that traps or passes its bounds fails with `WasmTrap` while the worker goes on. Its workflow code calls steps, with their retry and timeout, `sleep`, `sleep_until`, `receive`, with its timeout, `send`, `publish`, `now`, `random`, `uuid` and `c.log`. The decisions are in [the Wasm workflow notes](docs/decisions/wasm-workflows.md).
+A Wasm workflow has no network, clock or filesystem: its workflow code calls only Substantial's verbs, each recorded, and its steps only the interfaces the worker adds with the closure of `Module::new`, a wasmtime linker, whose functions may be async. Each replay and each step attempt runs in an instance of its own, and a module that traps, or passes its memory or its code's time, fails what it ran with `WasmTrap` while the worker goes on: a step past its timeout fails with `StepTimeout` as any step, and an error of the worker's own interface traps its step, so a failure that may pass comes back as a value of that interface. Its workflow code calls steps, with their retry and timeout, `sleep`, `sleep_until`, `receive`, with its timeout, `send`, `publish`, `now`, `random`, `uuid` and `c.log`, and a step calls `s::step_key()`. A value JSON cannot hold, such as a NaN, is refused before it leaves the module, as in every host. The decisions are in [the Wasm workflow notes](docs/decisions/wasm-workflows.md).
 
 ## How it works
 

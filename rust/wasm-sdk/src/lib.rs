@@ -28,6 +28,7 @@ mod context;
 mod durations;
 mod error;
 mod executor;
+mod json;
 
 #[doc(hidden)]
 pub mod __macro;
@@ -47,10 +48,10 @@ pub mod __bindings {
 #[doc(hidden)]
 pub use wit_bindgen as __wit_bindgen;
 
-// § one .:s9ynfgdqm@x7b3p
-pub use context::{Context, Log, Receive, SendFromWorkflow, Step};
+// § one .:c7aw13gws@z2hp8
+pub use context::{Context, Log, Receive, SendFromWorkflow, Step, step_key};
 pub use error::{Error, Failure, Permanent, Raised, Result};
-// § one .:s9ynfgdqm@d4rc5
+// § one .:c7aw13gws@vrm5w
 pub use durations::{days, hours, minutes, seconds};
 pub use substantial_macros::{wasm_export as export, wasm_step as step, wasm_workflow as workflow};
 

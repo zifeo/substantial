@@ -30,6 +30,12 @@ pub(crate) fn millis(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).expect("duration fits in u64 milliseconds")
 }
 
+/// The milliseconds of a duration the code gives a verb. One past u64 is past the longest a call
+/// carries, so it saturates to a value the scheduler refuses with `InvalidArgument`.
+pub(crate) fn call_millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// How far `at` lies ahead of `now`, zero when it has passed.
 pub(crate) fn until(at: &Time, now: &Time) -> Duration {
     Duration::from_millis(u64::try_from(at.ms - now.ms).unwrap_or(0))

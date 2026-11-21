@@ -36,7 +36,7 @@ pub fn step(args: TokenStream, item: TokenStream) -> TokenStream {
 /// it only checks that the workflow and its steps exist, so that the same source builds both ways.
 #[proc_macro]
 pub fn export(item: TokenStream) -> TokenStream {
-    // § s9ynfgdqm.b@33es5
+    // § c7aw13gws.b@vbtc4
     wasm::checked(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -46,7 +46,7 @@ pub fn export(item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn wasm_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
-    // § s9ynfgdqm@bn49k
+    // § c7aw13gws@ncede
     wasm::workflow(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -56,7 +56,7 @@ pub fn wasm_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn wasm_step(args: TokenStream, item: TokenStream) -> TokenStream {
-    // § s9ynfgdqm@8khst
+    // § c7aw13gws@dnszs
     wasm::step(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -66,7 +66,7 @@ pub fn wasm_step(args: TokenStream, item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn wasm_export(item: TokenStream) -> TokenStream {
-    // § s9ynfgdqm.b@4xvyh
+    // § c7aw13gws.b@r4vqe
     wasm::export(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()

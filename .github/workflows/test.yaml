@@ -23,7 +23,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p substantial-wasm-sdk --target wasm32-unknown-unknown --all-targets -- -D warnings
       # The crate for wasm32 and its Wasm workflows: its other examples are native programs.
-      - run: cargo clippy -p substantial --target wasm32-unknown-unknown --lib --example bounds --example edges --example receive_with_timeout --example same_source --example sleep_then_step --example verbs -- -D warnings
+      - run: cargo clippy -p substantial --target wasm32-unknown-unknown --lib --example bounds --example edges --example failures --example receive_with_timeout --example same_source --example sleep_then_step --example verbs -- -D warnings
       - run: cargo package --workspace
 
   rust:

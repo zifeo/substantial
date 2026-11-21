@@ -17,7 +17,7 @@ use crate::error::{Error, Failure, Result};
 use crate::names::check_step_name;
 use crate::proto::boundary::v1::{self as b, call::Call};
 use crate::proto::layout::v1::Amount;
-use crate::time::millis;
+use crate::time::call_millis;
 
 /// The step attempt running: its step key, and what it charged so far.
 #[derive(Clone)]
@@ -162,7 +162,7 @@ impl Context {
         self.step(name, move || {
             let f = f.clone();
             async move {
-                // § v4n6ja42e.b@hxb6g
+                // § v4n6ja42e.b@yavew
                 #[cfg(feature = "testing")]
                 crate::testing::threaded();
                 // The thread runs outside the attempt's task: it takes the attempt along, for
@@ -280,12 +280,12 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
         }
         let retry = self.retry.map(|r| b::RetryPolicy {
             max_attempts: r.max_attempts,
-            initial_ms: millis(r.initial),
-            max_ms: millis(r.max),
+            initial_ms: call_millis(r.initial),
+            max_ms: call_millis(r.max),
             multiplier: r.multiplier,
         });
-        // § aym52h8ch@c5z6g
-        let timeout = millis(self.timeout.unwrap_or(self.ctx.shared.step_timeout()));
+        // § aym52h8ch@9h2g0
+        let timeout = call_millis(self.timeout.unwrap_or(self.ctx.shared.step_timeout()));
         // § end aym52h8ch
         let options = b::StepOptions {
             retry,
@@ -302,7 +302,7 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
             body: self.body,
             undo: self.undo.map(|u| (u, retry, timeout)),
         };
-        // § vjy5p3exq@njmrs
+        // § vjy5p3exq@ykcs0
         let future = CallFuture::new(self.ctx.shared.clone(), call, Some(spec));
         Box::pin(async move { decode(value(future.await?)?) })
         // § end vjy5p3exq
