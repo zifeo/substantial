@@ -2367,7 +2367,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "substantial"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "aws-credential-types",
@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "substantial-macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "substantial-wasm-sdk"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "serde",

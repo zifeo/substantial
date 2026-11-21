@@ -1,6 +1,6 @@
 [package]
 name = "substantial"
-version = "0.3.0"
+version = "0.3.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -24,11 +24,11 @@ wasm-runner = ["wasmtime/component-model", "wasmtime/async"]
 [dependencies]
 serde = { version = "1.0.60", features = ["derive"] }
 serde_json = "1"
-substantial-macros = { version = "0.3.0", path = "macros" }
+substantial-macros = { version = "0.3.1", path = "macros" }
 
 # Built for wasm32, the crate is the API of a Wasm workflow, which the Wasm runner loads.
 [target.'cfg(target_family = "wasm")'.dependencies]
-substantial-wasm-sdk = { version = "0.3.0", path = "wasm-sdk" }
+substantial-wasm-sdk = { version = "0.3.1", path = "wasm-sdk" }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 anyhow = "1.0.49"
