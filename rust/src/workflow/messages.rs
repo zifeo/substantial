@@ -17,7 +17,7 @@ where
     T: DeserializeOwned,
     F: FnMut(T) + Send + 'static,
 {
-    // § aeby9bgqd.a@24ben
+    // § aeby9bgqd.a@03e35
     Box::new(move |m: &b::Message| {
         let failed = |why: String| {
             failure(

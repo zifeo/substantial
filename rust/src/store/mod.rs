@@ -97,7 +97,7 @@ pub trait Store: Send + Sync {
 
 /// Opens the adapter a URL names (I-16); the scheme alone picks it, nothing is detected.
 pub fn open(url: &str, credentials: &Credentials, retry: StoreRetry) -> Result<Arc<dyn Store>> {
-    // § e9ern38bz@t19r5
+    // § e9ern38bz@mhpw4
     retry.validate()?;
     if let Some(ns) = url.strip_prefix("memory://") {
         refuse_query(url, ns)?;

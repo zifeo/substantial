@@ -1,12 +1,12 @@
-//! A guest that sleeps, then runs a step: its run is replayed from its history at its wakeup.
+//! A Wasm workflow that sleeps, then runs a step: its run is replayed from its history at its wakeup.
 //! Its step bumps a counter of the embedder's, and it exports a description of its own, as an
-//! embedder's guest would.
+//! embedder's Wasm workflow would.
 
 // A native link would miss the host's imports, so a native build holds nothing.
 #![cfg(target_family = "wasm")]
 
 use serde::Deserialize;
-use substantial_guest as s;
+use substantial as s;
 
 mod embedder {
     wit_bindgen::generate!({

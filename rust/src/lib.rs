@@ -1,42 +1,70 @@
-//! The Rust host of Substantial: loads the core and drives it against a store.
+//! Substantial, brokerless durable execution. Natively, the Rust host: it loads the core and
+//! drives it against a store. Built for wasm32, the API of a Wasm workflow, which a worker with the
+//! feature `wasm-runner` loads: the same macros and verbs, recorded by the worker that runs it.
 //!
-//! Threading: the core module is compiled once per process; each [`Worker`] instantiates it once,
+//! Natively, threading: the core module is compiled once per process; each [`Worker`] instantiates it once,
 //! and its agent machine and the run machines of all its replays share that instance behind a
 //! mutex, held only for the length of one synchronous boundary call. The agent loop is one tokio
 //! task; each replay is another, which polls the workflow future itself (I-24) and spawns step
 //! attempts as tasks of their own on the runtime.
 
+#[cfg(not(target_family = "wasm"))]
 mod client;
+#[cfg(not(target_family = "wasm"))]
 mod clock;
+#[cfg(not(target_family = "wasm"))]
 mod core;
+#[cfg(not(target_family = "wasm"))]
 mod cost;
+#[cfg(not(target_family = "wasm"))]
 mod error;
-#[cfg(feature = "guests")]
-pub mod guest;
+#[cfg(not(target_family = "wasm"))]
 mod names;
+#[cfg(not(target_family = "wasm"))]
 pub mod observe;
+#[cfg(not(target_family = "wasm"))]
 mod plan;
+#[cfg(not(target_family = "wasm"))]
 mod proto;
+#[cfg(not(target_family = "wasm"))]
 mod settings;
+#[cfg(not(target_family = "wasm"))]
 mod store;
-#[cfg(feature = "testing")]
+#[cfg(all(not(target_family = "wasm"), feature = "testing"))]
 pub mod testing;
+#[cfg(not(target_family = "wasm"))]
 mod time;
+#[cfg(all(not(target_family = "wasm"), feature = "wasm-runner"))]
+// § one s9ynfgdqm.c@bbk2h
+pub mod wasm;
+#[cfg(not(target_family = "wasm"))]
 mod worker;
+#[cfg(not(target_family = "wasm"))]
 mod workflow;
 
+#[cfg(not(target_family = "wasm"))]
 pub use client::{
     Create, HistoryEvent, Open, ResultWait, RetryRun, Run, RunInfo, RunStatus, ScheduleRun,
     SendMessage, StartRun, Substantial, WaitingOn, WorkerBuilder,
 };
+#[cfg(not(target_family = "wasm"))]
 pub use cost::{Amount, Budget, Cost, Meters, Prices};
+#[cfg(not(target_family = "wasm"))]
 pub use error::{Continuation, Error, Failure, Result};
+#[cfg(not(target_family = "wasm"))]
 pub use observe::Observed;
+#[cfg(not(target_family = "wasm"))]
 pub use settings::Preset;
+#[cfg(not(target_family = "wasm"))]
 pub use store::{Credentials, Keys, Password};
-pub use substantial_macros::{step, workflow};
+#[cfg(not(target_family = "wasm"))]
+// § one s9ynfgdqm@z6bqs
+pub use substantial_macros::{export, step, workflow};
+#[cfg(not(target_family = "wasm"))]
 pub use time::{days, hours, minutes, seconds};
+#[cfg(not(target_family = "wasm"))]
 pub use worker::Worker;
+#[cfg(not(target_family = "wasm"))]
 pub use workflow::{
     AsWorkflow, ChainResult, Child, Context, Cron, Handlers, IntoWorkflows, Log, Permanent, Poll,
     Receive, Retry, SendFromWorkflow, StartChild, Step, Var, WaitUntil, Workflow, charge, step_key,
@@ -44,10 +72,12 @@ pub use workflow::{
 
 /// What the code `#[workflow]` and `#[step]` generate refers to; not an API.
 #[doc(hidden)]
+#[cfg(not(target_family = "wasm"))]
 pub mod __macro;
 
 /// What the tests reach beyond the API: store objects, every setting, waking a worker. Not an API.
 #[doc(hidden)]
+#[cfg(not(target_family = "wasm"))]
 pub mod __internal {
     use std::sync::Arc;
 
@@ -103,3 +133,7 @@ pub mod __internal {
         builder
     }
 }
+
+#[cfg(target_family = "wasm")]
+// § one s9ynfgdqm.a@jspdm
+pub use substantial_wasm_sdk::*;

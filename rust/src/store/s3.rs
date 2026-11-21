@@ -266,7 +266,7 @@ impl S3Store {
         self.fresh().await?;
         let mut keys = Vec::new();
         let mut after = start_after.map(|s| self.full(s));
-        // § dfd6vt90h.c@v3zeq
+        // § dfd6vt90h.c@xpz7x
         while (keys.len() as u32) < max_keys {
             let page = (max_keys - keys.len() as u32).min(PAGE);
             let out = self
@@ -297,7 +297,7 @@ impl S3Store {
         max_keys: u32,
         wait: &ListWait,
     ) -> Result<Listing, Fault> {
-        // § gvqb04830.c@cvqyc
+        // § gvqb04830.c@4g0yw
         self.fresh().await?;
         let page = self.page(prefix, start_after.map(|s| self.full(s)), max_keys);
         let (list, answer) = h3::wait(page.customize(), max_keys, wait)?;

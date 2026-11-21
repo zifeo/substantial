@@ -7,8 +7,8 @@ use std::sync::Once;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-pub use crate::__bindings::exports::substantial::guest::workflow::{End, StepError};
-use crate::__bindings::substantial::guest::panics;
+pub use crate::__bindings::exports::substantial::wasm::workflow::{End, StepError};
+use crate::__bindings::substantial::wasm::panics;
 use crate::context::Context;
 use crate::error::{Error, Permanent, Result};
 use crate::executor::block_on;
@@ -34,7 +34,7 @@ pub fn current_context() -> Result<Context> {
     Ok(Context::new())
 }
 
-/// Hands the host a panic's message before the guest traps, for the failure of its trap.
+/// Hands the host a panic's message before the module traps, for the failure of its trap.
 fn report_panics() {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| std::panic::set_hook(Box::new(|info| panics::panicked(&info.to_string()))));
@@ -73,7 +73,7 @@ pub fn encode_arguments<T: Serialize>(args: &T) -> Result<String> {
 
 pub type Attempt = Pin<Box<dyn Future<Output = std::result::Result<String, StepError>>>>;
 
-/// A step of the guest, as `#[step]` declares it: its name and what an attempt runs.
+/// A step of the Wasm workflow, as `#[step]` declares it: its name and what an attempt runs.
 pub struct StepEntry {
     pub name: &'static str,
     pub attempt: fn(String) -> Attempt,
@@ -117,13 +117,13 @@ pub fn run_step(
     args: String,
 ) -> std::result::Result<String, StepError> {
     report_panics();
-    // § .:sfd6dmd7t.a@2cd65
+    // § .:ztt9a58wy.a@2k5q2
     let Some(entry) = steps.iter().find(|s| s.name == name) else {
         return Err(StepError {
-            message: format!("this guest exports no step {name:?}: list it in export!"),
+            message: format!("this Wasm workflow exports no step {name:?}: list it in export!"),
             permanent: true,
         });
     };
-    // § end .:sfd6dmd7t.a
+    // § end .:ztt9a58wy.a
     block_on((entry.attempt)(args))
 }

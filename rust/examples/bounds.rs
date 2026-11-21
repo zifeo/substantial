@@ -1,11 +1,11 @@
-//! A guest that runs past the bound its input names: its code's time, a step's time, or a step's
+//! A Wasm workflow that runs past the bound its input names: its code's time, a step's time, or a step's
 //! memory. Its steps' failures come back as their causes' kinds.
 
 // A native link would miss the host's imports, so a native build holds nothing.
 #![cfg(target_family = "wasm")]
 
 use serde::Deserialize;
-use substantial_guest as s;
+use substantial as s;
 
 #[derive(Deserialize)]
 struct Input {

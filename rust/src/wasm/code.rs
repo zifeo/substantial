@@ -1,4 +1,4 @@
-//! The instance of a replay, which runs a guest's workflow code with Substantial's verbs.
+//! The instance of a replay, which runs a Wasm workflow's code with Substantial's verbs.
 
 use std::future::Future;
 use std::task::Poll;
@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use wasmtime::component::{ComponentType, Lift, Linker, Lower, Resource, ResourceTable};
 use wasmtime::{AsContextMut, Engine, Store, StoreContextMut};
 
-use super::{ATTEMPT, CONTEXT, Guest, PANICS, guest_value, trapped};
+use super::{ATTEMPT, CONTEXT, Module, PANICS, module_value, trapped};
 use crate::error::{Error, Failure, Result};
 use crate::workflow::{Context, Retry, failure_of};
 
@@ -61,7 +61,7 @@ struct StepOptions {
     timeout_ms: Option<u64>,
 }
 
-// Built by wasmtime alone, as it lifts a guest's level.
+// Built by wasmtime alone, as it lifts a module's level.
 #[allow(dead_code)]
 #[derive(ComponentType, Lift, Clone, Copy)]
 #[component(enum)]
@@ -89,7 +89,7 @@ pub(super) enum End {
 }
 
 /// A call of the code: its future until it ends, then its outcome until the code takes it.
-pub(super) struct GuestCall {
+pub(super) struct ModuleCall {
     future: Option<BoxFuture<'static, Result<String>>>,
     ended: Option<Result<String>>,
 }
@@ -97,7 +97,7 @@ pub(super) struct GuestCall {
 /// What the instance of a replay holds.
 pub(super) struct CodeState {
     ctx: Context,
-    guest: Guest,
+    module: Module,
     table: ResourceTable,
     /// The errors given to the code, for its run to end with one it returns.
     raised: Vec<Error>,
@@ -137,7 +137,7 @@ impl CodeState {
     /// The error a run ends with for a failure its code returned: the one given to the code
     /// with that failure, else the failure itself.
     fn ended_with(&mut self, f: WitFailure) -> Error {
-        // § kn3j2hh9y@211mv
+        // § q2x1ma914@xv5nk
         let found = (self.raised.iter()).rposition(|e| WitFailure::from(&visible(e)) == f);
         if let Some(i) = found {
             return self.raised.remove(i);
@@ -152,20 +152,20 @@ impl CodeState {
             retryable: f.retryable,
             details,
         })
-        // § end kn3j2hh9y
+        // § end q2x1ma914
     }
 }
 
-impl Guest {
-    // § xvn8jfd26@cv0br
-    /// One replay of the guest's workflow code within the run of `ctx`, given `input`: what the
-    /// workflow of [`Guest::workflow`] runs. A workflow of the embedder's own calls it to serve
-    /// a guest loaded after its worker started, such as the one its input names by digest: every
-    /// replay of the run must find the same guest under that name.
+impl Module {
+    // § c53nbqaa7@s0ewp
+    /// One replay of the module's workflow code within the run of `ctx`, given `input`: what the
+    /// workflow of [`Module::workflow`] runs. A workflow of the embedder's own calls it to serve
+    /// a Wasm workflow loaded after its worker started, such as the one its input names by digest: every
+    /// replay of the run must find the same module under that name.
     pub async fn run(&self, ctx: Context, input: serde_json::Value) -> Result<serde_json::Value> {
         let state = CodeState {
             ctx,
-            guest: self.clone(),
+            module: self.clone(),
             table: ResourceTable::new(),
             raised: Vec::new(),
             panic: None,
@@ -176,11 +176,11 @@ impl Guest {
         store.limiter(|s| &mut s.memory);
         store.epoch_deadline_trap();
         new_time(&mut store.as_context_mut());
-        // § fqyh5tkhx@zx341
+        // § s3vk5gvsj@57e7s
         let instance = self.0.code.instantiate_async(&mut store).await;
-        // § end fqyh5tkhx
+        // § end s3vk5gvsj
         let trap = |store: &mut Store<CodeState>, e: wasmtime::Error| {
-            // § a3qbj1ttt.a@5sg3v
+            // § cy53pm5cn.a@ebmja
             Error::Failed(trapped(store.data_mut().panic.take(), &e))
         };
         let instance = instance.map_err(|e| trap(&mut store, e))?;
@@ -189,11 +189,11 @@ impl Guest {
                 &mut store,
                 &self.0.run,
             )
-            .map_err(|e| Error::ConfigError(format!("the guest's run: {e:#}")))?;
+            .map_err(|e| Error::ConfigError(format!("the module's run: {e:#}")))?;
         let input = serde_json::to_string(&input)?;
-        // § one g1k3x3gg5@55cds
+        // § one gmrzmgpca@vje8x
         match run.call_async(&mut store, (input,)).await {
-            Ok((Ok(output),)) => Ok(guest_value(&output)?),
+            Ok((Ok(output),)) => Ok(module_value(&output)?),
             Ok((Err(End::Failed(f)),)) => Err(store.data_mut().ended_with(f)),
             Ok((Err(End::Cancelled(reason)),)) => Err(Error::Cancelled(reason)),
             Err(e) => Err(trap(&mut store, e)),
@@ -205,17 +205,17 @@ impl Guest {
 async fn start(
     store: &mut StoreContextMut<'_, CodeState>,
     future: impl Future<Output = Result<String>> + Send + 'static,
-) -> wasmtime::Result<(Resource<GuestCall>,)> {
+) -> wasmtime::Result<(Resource<ModuleCall>,)> {
     let mut future: BoxFuture<'static, Result<String>> = Box::pin(future);
-    // § em5h7z7cg.a@0nq28
+    // § gtezqzzdn.a@0fqca
     let first = std::future::poll_fn(|cx| Poll::Ready(future.as_mut().poll(cx))).await;
-    // § end em5h7z7cg.a
+    // § end gtezqzzdn.a
     let pending = match first {
-        Poll::Ready(ended) => GuestCall {
+        Poll::Ready(ended) => ModuleCall {
             future: None,
             ended: Some(ended),
         },
-        Poll::Pending => GuestCall {
+        Poll::Pending => ModuleCall {
             future: Some(future),
             ended: None,
         },
@@ -225,7 +225,7 @@ async fn start(
 
 /// Gives the code its time anew, from now.
 fn new_time(store: &mut StoreContextMut<'_, CodeState>) {
-    // § p9d3qccma.b@nmerr
+    // § jrg0gw7y7.b@54psx
     let ticks = store.data().code_ticks;
     store.set_epoch_deadline(ticks);
 }
@@ -240,18 +240,18 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
     let mut i = linker.instance(CONTEXT)?;
     i.resource(
         "call",
-        wasmtime::component::ResourceType::host::<GuestCall>(),
+        wasmtime::component::ResourceType::host::<ModuleCall>(),
         |mut store, rep| {
             store
                 .data_mut()
                 .table
-                .delete(Resource::<GuestCall>::new_own(rep))?;
+                .delete(Resource::<ModuleCall>::new_own(rep))?;
             Ok(())
         },
     )?;
     i.func_wrap(
         "[method]call.take",
-        |mut store, (call,): (Resource<GuestCall>,)| {
+        |mut store, (call,): (Resource<ModuleCall>,)| {
             let state = store.data_mut();
             let taken = match state.table.get_mut(&call)?.ended.take() {
                 None => None,
@@ -263,12 +263,12 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
     )?;
     i.func_wrap_async(
         "wait",
-        |mut store, (calls,): (Vec<Resource<GuestCall>>,)| {
+        |mut store, (calls,): (Vec<Resource<ModuleCall>>,)| {
             Box::new(async move {
                 if calls.is_empty() {
                     wasmtime::bail!("a wait on no call, which nothing would end");
                 }
-                // § em5h7z7cg@13nma
+                // § gtezqzzdn@vkhyg
                 let ended = std::future::poll_fn(|cx| {
                     let table = &mut store.data_mut().table;
                     let mut ended = Vec::new();
@@ -283,7 +283,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
                             pending.future = None;
                             pending.ended = Some(outcome);
                         }
-                        // § one em5h7z7cg.b@h1vv4
+                        // § one gtezqzzdn.b@geb6y
                         if pending.ended.is_some() {
                             ended.push(
                                 u32::try_from(i).expect("a wait names fewer than 2^32 calls"),
@@ -296,7 +296,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
                     }
                 })
                 .await?;
-                // § end em5h7z7cg
+                // § end gtezqzzdn
                 new_time(&mut store);
                 Ok((ended,))
             })
@@ -305,15 +305,15 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
     i.func_wrap_async(
         "step",
         |mut store, (name, args, options): (String, String, StepOptions)| {
-            let (ctx, guest) = (store.data().ctx.clone(), store.data().guest.clone());
+            let (ctx, module) = (store.data().ctx.clone(), store.data().module.clone());
             Box::new(async move {
                 // The arguments cross to the step's instance: checked here, as every value is.
-                // § c0mcah841@e03xp
-                if let Err(e) = guest_value(&args) {
+                // § ks041gbgm@kerry
+                if let Err(e) = module_value(&args) {
                     return start(&mut store, async move { Err(Error::Json(e)) }).await;
                 }
-                // § end c0mcah841
-                let body = guest.attempts(name.clone(), args);
+                // § end ks041gbgm
+                let body = module.attempts(name.clone(), args);
                 let mut step = ctx.step_of::<serde_json::Value>(&name, body);
                 if let Some(r) = options.retry {
                     step = step.retry(Retry {
@@ -376,7 +376,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
             let ctx = store.data().ctx.clone();
             Box::new(async move {
                 start(&mut store, async move {
-                    let mut send = ctx.send(&chain, &name, guest_value(&value)?);
+                    let mut send = ctx.send(&chain, &name, module_value(&value)?);
                     if let Some(id) = &id {
                         send = send.id(id);
                     }
@@ -409,7 +409,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
     })?;
     i.func_wrap("publish", |mut store, (key, value): (String, String)| {
         let state = store.data_mut();
-        let published = guest_value(&value)
+        let published = module_value(&value)
             .map_err(Error::from)
             .and_then(|value| state.ctx.publish(&key, value));
         Ok((published.map_err(|e| state.raise(e)),))
@@ -434,13 +434,13 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
             store.data_mut().panic = Some(message);
             Ok(())
         })?;
-    // § h85pj12ap.a@r8f5h
+    // § mry4d64zv.a@gm1vp
     linker.instance(ATTEMPT)?.func_wrap(
         "step-key",
         |_, (): ()| -> wasmtime::Result<(String,)> {
             wasmtime::bail!("the workflow code called step-key, which a step calls")
         },
     )?;
-    // § end h85pj12ap.a
+    // § end mry4d64zv.a
     Ok(linker)
 }

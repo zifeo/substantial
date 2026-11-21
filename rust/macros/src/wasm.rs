@@ -1,4 +1,5 @@
-//! The macros of the guest SDK, `substantial_guest`: they expand to its `__macro` module.
+//! The macros of a Wasm workflow, which `substantial` re-exports for wasm32: they expand to the
+//! `__macro` module of `substantial-wasm-sdk`, which `substantial` re-exports there.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
@@ -14,7 +15,7 @@ pub fn workflow(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream
     if !args.is_empty() {
         return Err(syn::Error::new(
             args.span(),
-            "a guest's workflow takes its name, version and settings from the worker serving it",
+            "a Wasm workflow takes its name, version and settings from the worker serving it",
         ));
     }
     let mut f: ItemFn = syn::parse2(item)?;
@@ -71,13 +72,13 @@ pub fn workflow(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream
         #[derive(Clone, Copy, Debug)]
         #vis struct #ident;
 
-        impl ::substantial_guest::__macro::Workflow for #ident {
+        impl ::substantial::__macro::Workflow for #ident {
             fn run(
                 &self,
                 input: ::std::string::String,
-            ) -> ::core::result::Result<::std::string::String, ::substantial_guest::__macro::End> {
+            ) -> ::core::result::Result<::std::string::String, ::substantial::__macro::End> {
                 #f
-                ::substantial_guest::__macro::#runner(input, #body)
+                ::substantial::__macro::#runner(input, #body)
             }
         }
     })
@@ -100,7 +101,7 @@ pub fn step(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
         } else if meta.path.is_ident("name") {
             o.name = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("undo") {
-            return Err(meta.error("a guest's step has no undo yet"));
+            return Err(meta.error("a Wasm workflow's step has no undo yet"));
         } else {
             return Err(meta.error("expected `name`, `retry` or `timeout`"));
         }
@@ -181,18 +182,17 @@ pub fn step(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     f.attrs = attrs;
     f.vis = syn::Visibility::Inherited;
     f.sig.ident = body.clone();
-    let output =
-        quote_spanned!(ret.span()=> <#ret as ::substantial_guest::__macro::Returns>::Value);
+    let output = quote_spanned!(ret.span()=> <#ret as ::substantial::__macro::Returns>::Value);
     Ok(quote! {
         #(#docs)*
         #vis fn #ident(#(#args: #types),*) -> impl ::core::future::Future<
-            Output = ::substantial_guest::Result<#output>,
+            Output = ::substantial::Result<#output>,
         > + use<> {
-            // § sfd6dmd7t.a@fv0rw
-            let __args = ::substantial_guest::__macro::encode_arguments(&(#(&#args,)*));
-            // § end sfd6dmd7t.a
+            // § ztt9a58wy.a@8e0jn
+            let __args = ::substantial::__macro::encode_arguments(&(#(&#args,)*));
+            // § end ztt9a58wy.a
             async move {
-                ::substantial_guest::__macro::current_context()?
+                ::substantial::__macro::current_context()?
                     .__step::<#output>(#name, __args)
                     #retry
                     #timeout
@@ -202,23 +202,23 @@ pub fn step(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
 
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        #vis fn #entry() -> ::substantial_guest::__macro::StepEntry {
+        #vis fn #entry() -> ::substantial::__macro::StepEntry {
             #f
-            ::substantial_guest::__macro::StepEntry {
+            ::substantial::__macro::StepEntry {
                 name: #name,
-                // § sfd6dmd7t@7jkhg
+                // § ztt9a58wy@neq09
                 attempt: |__args| ::std::boxed::Box::pin(async move {
-                    let (#(#args,)*): (#(#owned,)*) = ::substantial_guest::__macro::decode_arguments(&__args)?;
-                    ::substantial_guest::__macro::step_outcome(#body(#(#lent),*).await)
+                    let (#(#args,)*): (#(#owned,)*) = ::substantial::__macro::decode_arguments(&__args)?;
+                    ::substantial::__macro::step_outcome(#body(#(#lent),*).await)
                 }),
-                // § end sfd6dmd7t
+                // § end ztt9a58wy
             }
         }
     })
 }
 
 fn entry_name(step: &Ident) -> Ident {
-    format_ident!("__substantial_guest_step_{}", step.unraw())
+    format_ident!("__substantial_wasm_step_{}", step.unraw())
 }
 
 /// `export!(workflow, steps = [a, b])`.
@@ -248,6 +248,17 @@ impl Parse for Export {
     }
 }
 
+pub fn checked(item: TokenStream) -> syn::Result<TokenStream> {
+    let Export { workflow, steps } = syn::parse2(item)?;
+    Ok(quote! {
+        const _: () = {
+            const fn workflow<W: ::substantial::AsWorkflow>(_: &W) {}
+            workflow(&#workflow);
+            #(let _ = #steps;)*
+        };
+    })
+}
+
 pub fn export(item: TokenStream) -> syn::Result<TokenStream> {
     let Export { workflow, steps } = syn::parse2(item)?;
     let entries = steps.iter().map(|s| {
@@ -258,26 +269,26 @@ pub fn export(item: TokenStream) -> syn::Result<TokenStream> {
     });
     Ok(quote! {
         const _: () = {
-            struct __SubstantialGuest;
+            struct __SubstantialModule;
 
-            impl ::substantial_guest::__bindings::exports::substantial::guest::workflow::Guest
-                for __SubstantialGuest
+            impl ::substantial::__bindings::exports::substantial::wasm::workflow::Guest
+                for __SubstantialModule
             {
                 fn run(
                     input: ::std::string::String,
-                ) -> ::core::result::Result<::std::string::String, ::substantial_guest::__macro::End> {
-                    ::substantial_guest::__macro::Workflow::run(&#workflow, input)
+                ) -> ::core::result::Result<::std::string::String, ::substantial::__macro::End> {
+                    ::substantial::__macro::Workflow::run(&#workflow, input)
                 }
 
                 fn step(
                     name: ::std::string::String,
                     args: ::std::string::String,
-                ) -> ::core::result::Result<::std::string::String, ::substantial_guest::__macro::StepError> {
-                    ::substantial_guest::__macro::run_step(&[#(#entries),*], &name, args)
+                ) -> ::core::result::Result<::std::string::String, ::substantial::__macro::StepError> {
+                    ::substantial::__macro::run_step(&[#(#entries),*], &name, args)
                 }
             }
 
-            ::substantial_guest::__bindings::__export_guest!(__SubstantialGuest);
+            ::substantial::__bindings::__export_module!(__SubstantialModule);
         };
     })
 }

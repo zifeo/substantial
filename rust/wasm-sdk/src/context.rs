@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::__bindings::substantial::guest::context as wit;
+use crate::__bindings::substantial::wasm::context as wit;
 use crate::durations::whole_millis;
 use crate::error::{Error, Result};
 use crate::executor::Calling;

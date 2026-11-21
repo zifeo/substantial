@@ -1,4 +1,4 @@
-//! A guest at the edges its input names: calls awaited through combinators that poll only the
+//! A Wasm workflow at the edges its input names: calls awaited through combinators that poll only the
 //! futures they were woken for, and durations longer than the longest.
 
 // A native link would miss the host's imports, so a native build holds nothing.
@@ -7,7 +7,7 @@
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use serde::Deserialize;
-use substantial_guest as s;
+use substantial as s;
 
 #[derive(Deserialize)]
 struct Input {

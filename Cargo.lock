@@ -2391,25 +2391,15 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "substantial-macros",
+ "substantial-wasm-sdk",
  "tempfile",
  "thiserror",
  "tokio",
  "tracing",
  "url",
  "wasmtime",
- "wit-component 0.244.0",
-]
-
-[[package]]
-name = "substantial-guest"
-version = "0.3.0"
-dependencies = [
- "chrono",
- "futures",
- "serde",
- "serde_json",
- "substantial-macros",
  "wit-bindgen",
+ "wit-component 0.244.0",
 ]
 
 [[package]]
@@ -2419,6 +2409,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "substantial-wasm-sdk"
+version = "0.3.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "substantial-macros",
+ "wit-bindgen",
 ]
 
 [[package]]

@@ -203,7 +203,7 @@ impl<T: DeserializeOwned + 'static> IntoFuture for Receive<T> {
             if !claim() {
                 ctx.wait_until(claim).timeout(timeout).await?;
             }
-            // § p6tzbmjaq@5xkmx
+            // § p6tzbmjaq@bk30n
             if !claimed.load(Ordering::Relaxed) {
                 return Err(Error::WaitTimeout);
             }

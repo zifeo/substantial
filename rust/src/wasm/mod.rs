@@ -1,7 +1,8 @@
-//! Guests: workflows compiled to WebAssembly components of the world `substantial:guest/guest`
-//! (`wit/guest.wit`), loaded at run time and replayed against the core as the host's own code.
+//! The Wasm runner: Wasm workflows, compiled to WebAssembly components of the world
+//! `substantial:wasm/module` (`wit/workflow.wit`), loaded at run time and replayed against the core
+//! as the host's own code.
 //!
-//! A guest runs in two kinds of instance, each made anew: one per replay runs its workflow code,
+//! A Wasm workflow runs in two kinds of instance, each made anew: one per replay runs its workflow code,
 //! with Substantial's verbs, and one per step attempt runs a step, with the interfaces the
 //! embedder adds. The embedder's host functions are wasmtime's, so this module re-exports it.
 
@@ -19,16 +20,16 @@ pub use self::step::StepState;
 use crate::error::{Error, Failure, Result};
 use crate::workflow::{Context, Workflow};
 
-const CONTEXT: &str = "substantial:guest/context@0.1.0";
-const ATTEMPT: &str = "substantial:guest/attempt@0.1.0";
-const PANICS: &str = "substantial:guest/panics@0.1.0";
-const WORKFLOW: &str = "substantial:guest/workflow@0.1.0";
+const CONTEXT: &str = "substantial:wasm/context@0.1.0";
+const ATTEMPT: &str = "substantial:wasm/attempt@0.1.0";
+const PANICS: &str = "substantial:wasm/panics@0.1.0";
+const WORKFLOW: &str = "substantial:wasm/workflow@0.1.0";
 
-/// The period of the epoch clock that interrupts guests, the grain of a guest's time bound. A
-/// store of the engine that runs a guest's code needs an epoch deadline in these ticks.
+/// The period of the epoch clock that interrupts Wasm workflows, the grain of their time bound. A
+/// store of the engine that runs a module's code needs an epoch deadline in these ticks.
 pub const TICK: Duration = Duration::from_millis(10);
 
-/// The bounds of a guest, which its instances trap past.
+/// The bounds of a Wasm workflow, which its instances trap past.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// The memory an instance may grow to, in bytes.
@@ -49,7 +50,7 @@ const TABLE_ELEMENT: usize = std::mem::size_of::<usize>();
 
 impl Held {
     fn take(&mut self, bytes: usize) -> wasmtime::Result<bool> {
-        // § p9d3qccma.a@tzd89
+        // § jrg0gw7y7.a@5fkpm
         match self.left.checked_sub(bytes) {
             Some(left) => {
                 self.left = left;
@@ -92,10 +93,10 @@ impl ResourceLimiter for Held {
     }
 }
 
-/// A guest loaded: its component compiled, its imports checked, and linked for its replays and
+/// A Wasm workflow loaded: its component compiled, its imports checked, and linked for its replays and
 /// its step attempts. Cheap to clone.
 #[derive(Clone)]
-pub struct Guest(Arc<Loaded>);
+pub struct Module(Arc<Loaded>);
 
 struct Loaded {
     engine: Engine,
@@ -109,7 +110,7 @@ struct Loaded {
     code_ticks: u64,
 }
 
-impl Guest {
+impl Module {
     /// Compiles the component `wasm` and links it: Substantial's interfaces, and those `imports`
     /// adds to the linker of its steps, the only ones its steps may call. `ConfigError` for a
     /// component that does not compile, exports no `workflow`, or imports anything else, and for
@@ -119,10 +120,10 @@ impl Guest {
         limits: Limits,
         imports: impl FnOnce(&mut Linker<StepState>) -> wasmtime::Result<()>,
     ) -> Result<Self> {
-        // § p9d3qccma@3fnb4
+        // § jrg0gw7y7@qwscd
         if limits.memory == 0 || limits.code_time < TICK {
             return Err(Error::ConfigError(format!(
-                "a guest's bounds hold some memory and a code time of a tick at least: {limits:?}"
+                "a Wasm workflow's bounds hold some memory and a code time of a tick at least: {limits:?}"
             )));
         }
         // A deadline of n ticks passes after (n - 1) to n of them, the current one partly gone: one
@@ -134,39 +135,39 @@ impl Guest {
         let memory = Held {
             left: limits.memory,
         };
-        // § end p9d3qccma
+        // § end jrg0gw7y7
         let engine = engine()?;
         let component = Component::new(&engine, wasm)
-            .map_err(|e| Error::ConfigError(format!("the guest does not compile: {e:#}")))?;
-        // § symbbqcxc@qt0az
+            .map_err(|e| Error::ConfigError(format!("the module does not compile: {e:#}")))?;
+        // § jf9zy7nf7@md6g1
         let export = |instance: Option<&ComponentExportIndex>, name: &str| {
             component
                 .get_export_index(instance, name)
-                .ok_or_else(|| Error::ConfigError(format!("the guest exports no {name}")))
+                .ok_or_else(|| Error::ConfigError(format!("the module exports no {name}")))
         };
         let workflow = export(None, WORKFLOW)?;
         let (run, step) = (
             export(Some(&workflow), "run")?,
             export(Some(&workflow), "step")?,
         );
-        // § end symbbqcxc
+        // § end jf9zy7nf7
         let mut steps = step::linker(&engine).map_err(linking)?;
         imports(&mut steps).map_err(|e| {
             Error::ConfigError(format!("the embedder's interfaces do not link: {e:#}"))
         })?;
-        // § dt9hm67zy@kb0fc
+        // § de970qkh4@cxvfm
         let steps = steps.instantiate_pre(&component).map_err(|e| {
             Error::ConfigError(format!(
-                "the guest imports what neither Substantial nor the embedder gives: {e:#}"
+                "the module imports what neither Substantial nor the embedder gives: {e:#}"
             ))
         })?;
-        // § end dt9hm67zy
+        // § end de970qkh4
         let mut code = code::linker(&engine).map_err(linking)?;
-        // § h85pj12ap.a@pqgdc
+        // § mry4d64zv.a@yg67a
         // What is left are the embedder's interfaces, the step linker having refused any other.
         code.define_unknown_imports_as_traps(&component)
             .map_err(linking)?;
-        // § end h85pj12ap.a
+        // § end mry4d64zv.a
         let code = code.instantiate_pre(&component).map_err(linking)?;
         Ok(Self(Arc::new(Loaded {
             engine,
@@ -180,17 +181,17 @@ impl Guest {
         })))
     }
 
-    /// The guest's workflow, served under `name`: give it to a worker as any workflow, and set its
+    /// The module's workflow, served under `name`: give it to a worker as any workflow, and set its
     /// version, step timeout, retention or budget on it.
     pub fn workflow(&self, name: &str) -> Workflow<serde_json::Value> {
-        let guest = self.clone();
+        let module = self.clone();
         Workflow::new(name, move |c: Context, input: serde_json::Value| {
-            let guest = guest.clone();
-            async move { guest.run(c, input).await }
+            let module = module.clone();
+            async move { module.run(c, input).await }
         })
     }
 
-    /// The engine the guest is compiled for, for an embedder calling exports of its own. It
+    /// The engine the module is compiled for, for an embedder calling exports of its own. It
     /// interrupts by epochs: a store of it traps at once unless given a deadline in `TICK`s.
     pub fn engine(&self) -> &Engine {
         &self.0.engine
@@ -202,23 +203,23 @@ impl Guest {
     }
 }
 
-/// The engine of every guest of the process.
+/// The engine of every Wasm workflow of the process.
 fn engine() -> Result<Engine> {
     static ENGINE: OnceLock<std::result::Result<Engine, String>> = OnceLock::new();
     ENGINE
         .get_or_init(|| {
-            // § jgv9ssc51@r445s
-            // Threads are not compiled in: a guest with shared memory does not compile.
+            // § ad2tnbnvg@a1b3z
+            // Threads are not compiled in: a module with shared memory does not compile.
             let mut config = Config::new();
             config
                 .cranelift_nan_canonicalization(true)
                 .relaxed_simd_deterministic(true);
-            // § end jgv9ssc51
+            // § end ad2tnbnvg
             config.epoch_interruption(true);
             let engine = Engine::new(&config).map_err(|e| format!("{e:#}"))?;
             let ticking = engine.clone();
             std::thread::Builder::new()
-                .name("substantial-guest-epochs".into())
+                .name("substantial-wasm-epochs".into())
                 .spawn(move || {
                     loop {
                         std::thread::sleep(TICK);
@@ -233,14 +234,14 @@ fn engine() -> Result<Engine> {
 }
 
 fn linking(e: wasmtime::Error) -> Error {
-    Error::ConfigError(format!("the guest does not link: {e:#}"))
+    Error::ConfigError(format!("the module does not link: {e:#}"))
 }
 
-/// The failure of a guest's trap, with its panic's message when it panicked.
+/// The failure of a module's trap, with its panic's message when it panicked.
 fn trapped(panic: Option<String>, e: &wasmtime::Error) -> Failure {
-    // § a3qbj1ttt@8npew
+    // § cy53pm5cn@amvjh
     Failure {
-        kind: "GuestTrap".into(),
+        kind: "WasmTrap".into(),
         message: match panic {
             Some(message) => format!("{message} ({e})"),
             None => format!("{e:#}"),
@@ -248,14 +249,14 @@ fn trapped(panic: Option<String>, e: &wasmtime::Error) -> Failure {
         retryable: false,
         details: None,
     }
-    // § end a3qbj1ttt
+    // § end cy53pm5cn
 }
 
-/// A guest's JSON, checked as a value of the host's own code.
-fn guest_value(json: &str) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    // § c0mcah841@wjfsx
+/// A module's JSON, checked as a value of the host's own code.
+fn module_value(json: &str) -> std::result::Result<serde_json::Value, serde_json::Error> {
+    // § ks041gbgm@4a9zw
     let value: serde_json::Value = serde_json::from_str(json)?;
     crate::workflow::to_json(&value)?;
     Ok(value)
-    // § end c0mcah841
+    // § end ks041gbgm
 }

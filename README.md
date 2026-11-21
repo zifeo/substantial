@@ -191,7 +191,7 @@ cargo add serde --features derive
 cargo add anyhow
 ```
 
-Redis stores need the `redis` feature: `cargo add substantial --features redis`, and [guest workflows](#guest-workflows) the `guests` feature.
+Redis stores need the `redis` feature: `cargo add substantial --features redis`, and the [Wasm runner](#wasm-workflows) the `wasm-runner` feature.
 
 TypeScript, on Node 24 or later, or Deno, from [JSR](https://jsr.io/@substantial/substantial):
 
@@ -811,13 +811,13 @@ await sub.worker([nightly, report], { preset: "script" }).drain({ within: s.minu
 
 `drain` serves every run due now or within 2 minutes, takes over the runs of crashed workers whose claims expire by then, and returns once nothing is due within that horizon and nothing is in flight; between two jobs no worker lists the store. A schedule it serves needs a `backfill` of at least the job's period divided by the cron's. More in [I-18] and the [integration] guide.
 
-### Guest workflows
+### Wasm workflows
 
-A Rust worker also serves workflows compiled to WebAssembly, guests, which it loads from files when it starts: a workflow's code changes without a rebuild of the worker, and runs isolated from it. A guest is written with the Rust API, from the crate `substantial-guest`, as a `cdylib`:
+A Rust worker also serves workflows compiled to WebAssembly, which it loads from their bytes when it starts or later: a workflow's code changes without a rebuild of the worker, and runs isolated from it. A Wasm workflow is written with the crate `substantial` itself, as a `cdylib`, and the same source also builds as a native workflow:
 
 ```rust
 use serde::Deserialize;
-use substantial_guest as s;
+use substantial as s;
 
 #[derive(Deserialize)]
 struct Input {
@@ -838,26 +838,28 @@ async fn greeting(c: s::Context, input: Input) -> s::Result<String> {
 s::export!(greeting, steps = [greet]);
 ```
 
-It is compiled for `wasm32-unknown-unknown`, then made a component of the world in [`wit/guest.wit`](wit/guest.wit):
+It is compiled for `wasm32-unknown-unknown`, then made a component of the world in [`wit/workflow.wit`](wit/workflow.wit):
 
 ```sh
 cargo build --release --target wasm32-unknown-unknown
 wasm-tools component new target/wasm32-unknown-unknown/release/greeting.wasm -o greeting.wasm
 ```
 
-A worker with the `guests` feature loads it and serves it as any workflow, within the memory and the time between two waits it is given:
+A worker with the `wasm-runner` feature loads it and serves it as any workflow, within the memory and the time between two waits it is given:
 
 ```rust
-use substantial::guest::{Guest, Limits};
+use substantial::wasm::{Limits, Module};
 
 let limits = Limits { memory: 64 << 20, code_time: s::seconds(1) };
-let guest = Guest::new(&std::fs::read("greeting.wasm")?, limits, |_| Ok(()))?;
-let greeting = guest.workflow("greeting");
+let module = Module::new(&std::fs::read("greeting.wasm")?, limits, |_| Ok(()))?;
+let greeting = module.workflow("greeting");
 let worker = sub.worker(greeting.clone()).preset(s::Preset::Service).start()?;
 sub.start(&greeting, serde_json::json!({ "name": "Ada" })).await?;
 ```
 
-A guest has no network, clock or filesystem: its workflow code calls only Substantial's verbs, each recorded, and its steps only the interfaces the worker adds with the closure of `Guest::new`, a wasmtime linker. Each replay and each step attempt runs in an instance of its own, and a guest that traps or passes its bounds fails with `GuestTrap` while the worker goes on. A guest's workflow code calls steps, with their retry and timeout, `sleep`, `sleep_until`, `receive`, with its timeout, `send`, `publish`, `now`, `random`, `uuid` and `c.log`. The decisions are in [the guest notes](docs/decisions/guests.md).
+A module loaded after its worker started runs within a workflow of the worker's own, which calls `Module::run` with the run's context, for instance on the module its input names by digest.
+
+A Wasm workflow has no network, clock or filesystem: its workflow code calls only Substantial's verbs, each recorded, and its steps only the interfaces the worker adds with the closure of `Module::new`, a wasmtime linker, whose functions may be async. Each replay and each step attempt runs in an instance of its own, and a module that traps or passes its bounds fails with `WasmTrap` while the worker goes on. Its workflow code calls steps, with their retry and timeout, `sleep`, `sleep_until`, `receive`, with its timeout, `send`, `publish`, `now`, `random`, `uuid` and `c.log`. The decisions are in [the Wasm workflow notes](docs/decisions/wasm-workflows.md).
 
 ## How it works
 

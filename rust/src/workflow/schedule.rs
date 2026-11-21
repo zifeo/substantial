@@ -545,7 +545,7 @@ impl Context {
                     move || !lock(&c).is_empty()
                 };
                 let Some(cron) = st.cron.clone() else {
-                    // § vnykycs34.c@sddg6
+                    // § vnykycs34.c@h7fc2
                     self.wait_until(any(&configs)).await?;
                     continue;
                 };
@@ -556,7 +556,7 @@ impl Context {
                         "a schedule state with a cron and without its tz, after or backfill".into(),
                     ));
                 };
-                // § vnykycs34.a@9177j
+                // § vnykycs34.a@5eb4c
                 let now = self.now().await?.timestamp_millis();
                 let fires: Plan = self
                     .step(RESERVED_STEP, move || {
@@ -582,7 +582,7 @@ impl Context {
                 let changed = st.next.as_ref() != Some(&fires.next);
                 st.next = Some(fires.next);
                 if st.pending.is_empty() {
-                    // § ey8zhz0kq.d@hrkbh
+                    // § ey8zhz0kq.d@r5j4k
                     if changed {
                         self.publish(MESSAGE, published(&st))?;
                     }
@@ -593,7 +593,7 @@ impl Context {
                     self.wait_until(any(&configs)).timeout(wait).await?;
                 }
             }
-            // § vnykycs34@g831j
+            // § vnykycs34@sfdew
             let at = st.pending.remove(0);
             st.last = Some(at.clone());
             // § ey8zhz0kq.d@8z2qf
@@ -663,7 +663,7 @@ impl Context {
         st.revision = revision;
         st.backfill = Some(backfill);
         if (&expr, &tz) != (&st.cron, &st.tz) {
-            // § vnykycs34.c@ktc77
+            // § vnykycs34.c@mzjqk
             // Another cron starts from now: it fires nothing it would have fired before.
             (st.cron, st.tz, st.next) = (expr, tz, None);
             st.pending.clear();

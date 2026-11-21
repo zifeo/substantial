@@ -10,11 +10,11 @@ Release notes are also published on [GitHub Releases](https://github.com/zifeo/s
 
 ## [0.3.0] - 2026-11-21
 
-Wasm guest workflows on the Rust worker, and every host refusing what another would read otherwise. See the [README](https://github.com/zifeo/substantial/blob/v0.3.0/README.md).
+Wasm workflows on the Rust worker, and every host refusing what another would read otherwise. See the [README](https://github.com/zifeo/substantial/blob/v0.3.0/README.md).
 
 ### Added
 
-- Wasm guest workflows: a workflow compiled to a WebAssembly component of the world `substantial:guest/guest` (`wit/guest.wit`) runs on a Rust worker, which loads it from its bytes when it starts, so its code ships without a rebuild of the worker. The Rust crate's `guests` feature loads and replays it with wasmtime, and the new crate `substantial-guest` writes it in Rust with the API of the Rust host: `#[s::workflow]`, `#[s::step]`, `c.sleep`, `c.receive`, `c.send`. A guest has no network, clock or filesystem: its workflow code calls only Substantial's verbs, and its steps only the interfaces the embedder adds. An embedder may also call exports of its own beside the workflow, and gives each guest its bounds: a memory per instance and a time for its workflow code between two waits, past which it traps.
+- Wasm workflows: a workflow compiled to a WebAssembly component of the world `substantial:wasm/module` (`wit/workflow.wit`) runs on a Rust worker, which loads it from its bytes, when it starts or later, so its code ships without a rebuild of the worker. The Rust crate's `wasm-runner` feature loads and replays it with wasmtime, under `substantial::wasm`, and the crate `substantial` itself, built for `wasm32-unknown-unknown`, writes it with the API of the Rust host: `#[s::workflow]`, `#[s::step]`, `s::export!`, `c.sleep`, `c.receive`, `c.send`, so one source builds both as a native workflow and as a Wasm workflow. A Wasm workflow has no network, clock or filesystem: its workflow code calls only Substantial's verbs, and its steps only the interfaces the embedder adds, sync or async. An embedder may also call exports of its own beside the workflow, run a module its own workflow chooses with `Module::run`, and gives each module its bounds: a memory per instance and a time for its workflow code between two waits, past which it traps with `WasmTrap`.
 
 ### Changed
 

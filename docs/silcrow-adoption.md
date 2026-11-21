@@ -6,12 +6,12 @@ This tree adopts [Silcrow](https://github.com/zifeo/silcrow): the decisions of S
 
 The root Silcrow project, declared in `AGENTS.md` with `decisions="docs/decisions/**/*.md"`, `code="**/*"` and `docs=""`.
 
-The Rust guest SDK, `rust/guest`, is a project of its own with the same block and no notes. A pin reads every declaration of its project, so the SDK, which offers the Rust host's API under the same names (`Context`, `seconds`), would otherwise make the host's pins drift. Its code marks the root's laws qualified with `.:`, which pays no duty: the root's own markers, at the guest macros of `rust/macros` and at the runner, pay it.
+The Wasm workflow SDK, `rust/wasm-sdk`, which `substantial` re-exports for wasm32, is a project of its own with the same block and no notes. A pin reads every declaration of its project, so the SDK, which offers the Rust host's API under the same names (`Context`, `seconds`), would otherwise make the host's pins drift. Its code marks the root's laws qualified with `.:`, which pays no duty: the root's own markers, at the Wasm macros of `rust/macros` and at the runner, pay it.
 
 | Notes | Laws | Carried by |
 |---|---|---|
-| `docs/decisions/*.md`, one note per topic from `promises.md` to `testing.md`, `guests.md` aside | 68 | the three hosts' code, `redis/*.lua` |
-| `docs/decisions/guests.md`: the guest world, its runner and its Rust SDK | 14 | `wit/guest.wit`, the runner in `rust/src/guest`, the guest macros of `rust/macros`, and `rust/tests/guests.rs` |
+| `docs/decisions/*.md`, one note per topic from `promises.md` to `testing.md`, `wasm-workflows.md` aside | 68 | the three hosts' code, `redis/*.lua` |
+| `docs/decisions/wasm-workflows.md`: the world of a Wasm workflow, its runner and the crate's wasm32 side | 15 | `wit/workflow.wit`, the runner in `rust/src/wasm`, the Wasm macros of `rust/macros`, the crate's root `rust/src/lib.rs`, and `rust/tests/wasm.rs` |
 | `docs/decisions/core/*.md`: `commit`, `lifecycle`, `history`, `steps`, `messages`, `sagas`, `children`, `cost` | 58 | the conformance tests (`rust/tests`, `python/tests`, `typescript/test`, `dev/cross`) and the layout schema in `proto/` |
 
 `promises` states the headline promises in the users' words, each with its source, and names the law whose sentence states it: a finished step never runs again, steps run at least once, durable when it returns, idempotent under the caller's ids, ordered messages, waiting holds no process, no broker, deterministic replay, versions through a deploy, the platforms, one core in three languages, a known cost, every run ends and is collected, tests run the real protocol. A note is named by its topic, and the reading order is the one the last section of `promises` links: the architecture (`store`, `hosts`, then the core's notes), a run's life (`lifecycle`), the programming model (`clients` to `schedules`), operating (`observing` to `errors`) and testing (`testing`). Cancellation, which held no law, is a section of `workflows`, beside the ends it shares.

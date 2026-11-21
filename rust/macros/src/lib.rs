@@ -1,9 +1,9 @@
 //! The attribute macros of Substantial, re-exported by the `substantial` crate: use them from
 //! there. They expand to its explicit API (`Workflow::new`, `Context::step`).
 
-mod guest;
 mod names;
 mod step;
+mod wasm;
 mod workflow;
 
 use proc_macro::TokenStream;
@@ -32,32 +32,42 @@ pub fn step(args: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
-/// `#[workflow]` of the guest SDK, which re-exports it: use it from there.
-#[doc(hidden)]
-#[proc_macro_attribute]
-pub fn guest_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
-    // § b4j0mc19d@wjekw
-    guest::workflow(args.into(), item.into())
+/// `export!(workflow, steps = [a, b])` makes a Wasm workflow of a source built for wasm32: natively,
+/// it only checks that the workflow and its steps exist, so that the same source builds both ways.
+#[proc_macro]
+pub fn export(item: TokenStream) -> TokenStream {
+    // § s9ynfgdqm.b@33es5
+    wasm::checked(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-/// `#[step]` of the guest SDK, which re-exports it: use it from there.
+/// `#[workflow]` of a Wasm workflow, which `substantial` re-exports for wasm32: use it from there.
 #[doc(hidden)]
 #[proc_macro_attribute]
-pub fn guest_step(args: TokenStream, item: TokenStream) -> TokenStream {
-    // § b4j0mc19d@0qatr
-    guest::step(args.into(), item.into())
+pub fn wasm_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § s9ynfgdqm@bn49k
+    wasm::workflow(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-/// `export!` of the guest SDK, which re-exports it: use it from there.
+/// `#[step]` of a Wasm workflow, which `substantial` re-exports for wasm32: use it from there.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn wasm_step(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § s9ynfgdqm@8khst
+    wasm::step(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `export!` of a Wasm workflow, which `substantial` re-exports for wasm32: use it from there.
 #[doc(hidden)]
 #[proc_macro]
-pub fn guest_export(item: TokenStream) -> TokenStream {
-    // § b4j0mc19d@1ykqy
-    guest::export(item.into())
+pub fn wasm_export(item: TokenStream) -> TokenStream {
+    // § s9ynfgdqm.b@4xvyh
+    wasm::export(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

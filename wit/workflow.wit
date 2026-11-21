@@ -1,9 +1,9 @@
-// § g2h6bp5vq@gxws0
-// § g2h6bp5vq.a@z2t99
-package substantial:guest@0.1.0;
-// § end g2h6bp5vq.a
+// § j67tqxstm@vz5y7
+// § j67tqxstm.a@5e6bn
+package substantial:wasm@0.1.0;
+// § end j67tqxstm.a
 
-/// The verbs a guest's workflow code calls, each recorded in its run's history. Every value is
+/// The verbs a Wasm workflow's code calls, each recorded in its run's history. Every value is
 /// JSON text, which the host checks: one that is not JSON raises `Json`. A duration in
 /// milliseconds is at most 2^53 - 1, and a longer one raises `InvalidArgument`.
 interface context {
@@ -83,11 +83,11 @@ interface attempt {
 
 /// What the workflow code and the steps both call.
 interface panics {
-    /// The message of a panic, given before the guest traps, for the failure of its trap.
+    /// The message of a panic, given before the module traps, for the failure of its trap.
     panicked: func(message: string);
 }
 
-/// What a guest exports for the host to call.
+/// What a Wasm workflow exports for the runner to call.
 interface workflow {
     use context.{failure};
 
@@ -112,7 +112,7 @@ interface workflow {
     step: func(name: string, args: string) -> result<string, step-error>;
 }
 
-world guest {
+world module {
     import context;
     import attempt;
     import panics;

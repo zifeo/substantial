@@ -1,4 +1,4 @@
-# AGENTS, the Rust guest SDK
+# AGENTS, the Wasm workflow SDK
 
 <silcrow decisions="docs/decisions/**/*.md" published="main" code="**/*" docs="">
 This repo follows [Silcrow](https://github.com/zifeo/silcrow).
@@ -13,4 +13,4 @@ Engineering principles:
 - Order: make it work, then make it right, then make it fast only when a measured need or a law demands it.
 </silcrow>
 
-The crate `substantial-guest`, which writes a Substantial guest workflow in Rust. Its notes hold the SDK's own laws. The world it binds and the host that runs it are the laws of the repository's root project, which its code marks qualified with `.:`.
+The crate `substantial-wasm-sdk`, which writes a Substantial Wasm workflow in Rust, and which `substantial` re-exports for wasm32. Its notes hold the SDK's own laws. The world it binds and the host that runs it are the laws of the repository's root project, which its code marks qualified with `.:`.

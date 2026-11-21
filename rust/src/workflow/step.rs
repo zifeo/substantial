@@ -162,7 +162,7 @@ impl Context {
         self.step(name, move || {
             let f = f.clone();
             async move {
-                // § v4n6ja42e.b@zp6wv
+                // § v4n6ja42e.b@hxb6g
                 #[cfg(feature = "testing")]
                 crate::testing::threaded();
                 // The thread runs outside the attempt's task: it takes the attempt along, for
@@ -183,8 +183,8 @@ impl Context {
     }
 
     /// The step `name`, whose attempts run `body`, which gives its outcome as the run machine
-    /// takes it: a guest's step.
-    #[cfg(feature = "guests")]
+    /// takes it: a Wasm workflow's step.
+    #[cfg(feature = "wasm-runner")]
     pub(crate) fn step_of<T>(&self, name: &str, body: StepBody) -> Step<T> {
         Step {
             ctx: self.clone(),
@@ -302,7 +302,7 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
             body: self.body,
             undo: self.undo.map(|u| (u, retry, timeout)),
         };
-        // § vjy5p3exq@xregv
+        // § vjy5p3exq@njmrs
         let future = CallFuture::new(self.ctx.shared.clone(), call, Some(spec));
         Box::pin(async move { decode(value(future.await?)?) })
         // § end vjy5p3exq

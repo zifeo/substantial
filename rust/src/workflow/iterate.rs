@@ -43,7 +43,7 @@ impl Context {
     /// A loop's boundary: past the threshold, the error that continues the run as new with the
     /// chain's input and `state`.
     pub(super) fn boundary<S: Serialize>(&self, state: &S) -> Result<()> {
-        // § hy3f1z5jj@mq7kf
+        // § hy3f1z5jj@wd05c
         if self.past_threshold()? {
             // § hy3f1z5jj.b@dfh56
             return Err(Error::ContinuedAsNew(Continuation {

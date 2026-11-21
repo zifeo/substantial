@@ -435,7 +435,7 @@ const LONGEST_MS: u64 = (1 << 53) - 1;
 /// `InvalidArgument` for a call carrying a duration past `LONGEST_MS`.
 fn check_durations(call: &b::call::Call) -> Result<()> {
     use b::call::Call;
-    // § b60bm4szk@csn8j
+    // § b60bm4szk@kk5w0
     let durations: Vec<u64> = match call {
         Call::SleepMs(ms) => vec![*ms],
         Call::Wait(w) => w.timeout_ms.into_iter().collect(),

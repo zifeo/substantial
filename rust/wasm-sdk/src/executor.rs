@@ -1,4 +1,4 @@
-//! The guest's executor: it polls the workflow, then waits on every call still pending, as the
+//! The executor of a Wasm workflow: it polls the workflow, then waits on every call still pending, as the
 //! Rust host polls its own code to quiescence.
 
 use std::cell::{Cell, RefCell};
@@ -8,7 +8,7 @@ use std::pin::{Pin, pin};
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
-use crate::__bindings::substantial::guest::context as wit;
+use crate::__bindings::substantial::wasm::context as wit;
 
 /// A call made and not yet taken, with the waker of the future awaiting it.
 struct Live {
@@ -45,12 +45,12 @@ impl Future for Calling {
     type Output = Result<String, wit::Raised>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // § .:em5h7z7cg.a@327as
+        // § .:gtezqzzdn.a@n8na3
         if let Some(make) = self.make.take() {
             let id = NEXT.with(|n| n.replace(n.get() + 1));
             self.call = Some((id, Rc::new(make())));
         }
-        // § end .:em5h7z7cg.a
+        // § end .:gtezqzzdn.a
         let (id, call) = self.call.clone().expect("a call polled after it ended");
         match call.take() {
             Some(ended) => {
@@ -112,7 +112,7 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
             "the code awaits something other than a call of its context, which nothing would end"
         );
         let calls: Vec<&wit::Call> = pending.iter().map(|(_, call)| &**call).collect();
-        // § .:em5h7z7cg@mawfx
+        // § .:gtezqzzdn@5yhtv
         for i in wit::wait(&calls) {
             let id = pending[i as usize].0;
             // Woken once the registry is released: a waker may poll or drop a call re-entrantly.
@@ -126,6 +126,6 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
                 waker.wake();
             }
         }
-        // § end .:em5h7z7cg
+        // § end .:gtezqzzdn
     }
 }

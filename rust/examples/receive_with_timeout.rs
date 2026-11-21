@@ -1,10 +1,10 @@
-//! A guest that waits for a message, or for its timeout to pass.
+//! A Wasm workflow that waits for a message, or for its timeout to pass.
 
 // A native link would miss the host's imports, so a native build holds nothing.
 #![cfg(target_family = "wasm")]
 
 use serde::Deserialize;
-use substantial_guest as s;
+use substantial as s;
 
 #[derive(Deserialize)]
 struct Input {

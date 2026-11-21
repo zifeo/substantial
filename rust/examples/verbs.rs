@@ -1,10 +1,10 @@
-//! A guest that calls a verb as many times as its input says, for measuring what a verb costs.
+//! A Wasm workflow that calls a verb as many times as its input says, for measuring what a verb costs.
 
 // A native link would miss the host's imports, so a native build holds nothing.
 #![cfg(target_family = "wasm")]
 
 use serde::Deserialize;
-use substantial_guest as s;
+use substantial as s;
 
 #[derive(Deserialize)]
 struct Input {

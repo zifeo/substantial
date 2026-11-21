@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::fmt;
 
-use crate::__bindings::exports::substantial::guest::workflow::End;
-use crate::__bindings::substantial::guest::context as wit;
+use crate::__bindings::exports::substantial::wasm::workflow::End;
+use crate::__bindings::substantial::wasm::context as wit;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -31,7 +31,7 @@ impl Raised {
     }
 }
 
-/// The errors of a guest's workflow code, named as the Rust host's. One a verb raised keeps the
+/// The errors of a Wasm workflow's code, named as the Rust host's. One a verb raised keeps the
 /// failure the host gave, so that returning it ends the run as the host's own code would.
 #[derive(Debug)]
 #[non_exhaustive]
