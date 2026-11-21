@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Concatenate, Protocol, overload
 
-from substantial._proto import checked, run
+from substantial._proto import checked, dumps, run
 from substantial.cost import budget_proto
 from substantial.durations import millis
 from substantial.errors import ConfigError, Failed, Failure, InvalidArgument
@@ -108,9 +108,11 @@ class Workflow[**P, R]:
             raise InvalidArgument(f"an input is a JSON object, not {fields!r}")
         value = await self.fn(c, **fields)
         try:
-            data = json.dumps(value, allow_nan=False).encode()
+            data = dumps(value)
         except (TypeError, ValueError) as e:
+            # § g039jvy6k.a@pbht3
             raise Failed(Failure("Json", f"the value of {self.name}: {e}")) from None
+        # § one h8wg39cct.d@yvpe4
         return checked(data)
 
 
@@ -176,9 +178,11 @@ class Workflows:
         for (name, _), w in self.by_key.items():
             if w.retention is not None:
                 check_retention(w.retention, retention_min, f"the retention of workflow {name!r}")
+            # § one pn928919v.a@5hqwm
             if self.retentions.setdefault(name, w.retention) != w.retention:
                 raise ConfigError(f"the versions of workflow {name!r} give different retentions")
 
+    # § one pjrbw31h4@2676x
     def get(self, name: str, version: int | None) -> Workflow[..., Any] | None:
         return self.by_key.get((name, version))
 

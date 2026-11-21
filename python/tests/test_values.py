@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pytest
@@ -10,10 +11,13 @@ from test_replay import Harness
 
 from substantial import (
     Context,
+    InvalidArgument,
     RunFailed,
     StepFailed,
     Substantial,
     ValueTooLarge,
+    _proto,
+    child,
     step,
     workflow,
 )
@@ -102,6 +106,36 @@ async def test_a_state_past_the_cap_fails_the_compression() -> None:
     assert failed.value.error.type == "ValueTooLarge"
 
 
+async def test_the_core_refuses_a_value_past_the_cap_and_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The host's own check left out, so the value reaches the core, which checks it again.
+    monkeypatch.setattr(_proto, "checked", lambda data: data)
+    monkeypatch.setattr(child, "checked", lambda data: data)
+
+    @workflow
+    async def large(c: Context) -> str:
+        try:
+            c.publish("k", LARGE)
+        except ValueTooLarge as e:
+            message = str(e)
+        else:
+            raise AssertionError("published")
+        c.publish("k", "fits")
+        return message
+
+    sub = await Substantial.create("memory://values-core")
+    async with script(sub, [large]):
+        run = await sub.start(large)
+        message = await run.result(timeout=LONG)
+    # § w5rs0gck0@wanp2
+    assert str(len(LARGE) + 2) in message and str(MAX_VALUE) in message, message
+    published = [e.data for e in await run.history() if e.kind == "published"]
+    assert [p["value"] for p in published] == ["fits"], published
+    assert await run.read("k") == "fits"
+    # § end w5rs0gck0
+
+
 async def test_a_client_refuses_a_value_past_the_cap_before_the_store() -> None:
     @workflow
     async def waiting(c: Context) -> str:
@@ -132,3 +166,46 @@ async def test_a_run_whose_result_is_past_the_cap_fails() -> None:
         with pytest.raises(RunFailed) as failed:
             await run.result(timeout=LONG)
     assert failed.value.error.type == "ValueTooLarge"
+
+
+# What `json` would write as another value: a key that is not a string, a NaN, a tuple, an
+# integer a JavaScript reader rounds.
+NOT_JSON = [
+    {1: "a"},
+    [{"ok": {None: 1}}],
+    (math.nan,),
+    {"x": math.inf},
+    ("a", 1),
+    {"t": [(1, 2)]},
+    [2**53],
+    {"n": -(2**53)},
+]
+
+
+async def test_a_value_json_cannot_hold_is_refused_never_written_as_another() -> None:
+    @workflow
+    async def holding(c: Context, i: int) -> object:
+        try:
+            c.publish("k", NOT_JSON[i])
+        except InvalidArgument:
+            pass
+        else:
+            raise AssertionError("published")
+        try:
+            await c.step("value", lambda: NOT_JSON[i])
+        except StepFailed as e:
+            assert e.cause.type == "Json", e.cause
+        else:
+            raise AssertionError("stepped")
+        return NOT_JSON[i]
+
+    sub = await Substantial.create("memory://values-not-json")
+    run = await sub.start(holding, {"i": 0})
+    for bad in NOT_JSON:
+        with pytest.raises(InvalidArgument, match="is not JSON"):
+            await run.send("note", bad)
+    async with script(sub, [holding]):
+        for i in range(len(NOT_JSON)):
+            with pytest.raises(RunFailed) as failed:
+                await (await sub.start(holding, {"i": i})).result(timeout=LONG)
+            assert failed.value.error.type == "Json", failed.value

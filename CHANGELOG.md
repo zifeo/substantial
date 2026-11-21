@@ -8,6 +8,20 @@ Release notes are also published on [GitHub Releases](https://github.com/zifeo/s
 
 ## [Unreleased]
 
+### Changed
+
+- Every host refuses a value JSON cannot hold as it is instead of writing it as another value: Python a dict key that is not a string and a tuple, which it wrote as a list, TypeScript a `Date`, a `Map` or any object that is not plain, `undefined` inside an object or an array and a hole of a sparse array, before any `toJSON`, and Rust a NaN or an infinity.
+- A client's `send` refuses a message name starting with `substantial.`, as a workflow's does, and every host refuses a step name starting with `substantial.`.
+- `sub.schedule` sends its config with the id `schedule-<revision>-<digest>`, and a run that receives two configs of one revision fails with `ConfigError` instead of dropping the second.
+- Rust fails a run whose message handler panics with `MessageDecode`, as Python and TypeScript do for a handler that raises.
+- TypeScript stops a diverged replay's attempts, as Rust and Python do, and prints its end warning without a `substantial: ` prefix.
+- Rust's ULIDs carry past the random bits of a millisecond into its time, as Python's and TypeScript's do, instead of panicking.
+- Substantial runs on Linux and macOS, and on Windows through WSL. The Rust crate no longer compiles for native Windows, as a worker listens to SIGTERM.
+- Python and Rust refuse an integer past 2^53 - 1 in every value, as in inputs, since TypeScript would read it rounded.
+- Rust raises `InvalidArgument` for a message or a published value JSON cannot hold, and fails a run whose loop state does not serialize with the new `NotCompressible` variant, as Python and TypeScript do.
+- `receive` and `handle` refuse a message name outside the naming rules with `InvalidArgument` stating the rule, in every host, and Rust checks an inline step's name against the full rule.
+- A Python message handler that returns an awaitable fails the run with `MessageDecode`, as a TypeScript one returning a promise does.
+
 ## [0.2.0] - 2026-11-17
 
 A new version, not compatible with 0.1.0: a Rust core in WebAssembly with Rust, Python and TypeScript hosts. See the [README](https://github.com/zifeo/substantial/blob/v0.2.0/README.md).

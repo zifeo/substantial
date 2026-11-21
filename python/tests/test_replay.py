@@ -283,6 +283,7 @@ async def test_parallel_steps_replay_the_same() -> None:
         return x + y
 
     h = Harness(parallel)
+    # § twravbm6m.d@nsxrc
     assert (await h.replay(1_000)).next_wake() == 2_000
     assert (await h.replay(2_000)).completed() == 3
     assert len(a_runs) + len(b_runs) == 2
@@ -312,6 +313,7 @@ async def test_a_lost_commit_drops_the_replay() -> None:
 
     h = Harness(loser)
     replayed = await h.replay(1_000, won=False)
+    # § czkkbyhe0.a@qke86
     assert replayed.end.WhichOneof("end") == "dropped"
     assert h.history == []
 

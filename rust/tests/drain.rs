@@ -69,6 +69,7 @@ async fn drain_serves_a_run_due_within_its_horizon() {
 async fn drain_leaves_a_run_due_after_its_horizon_for_later() {
     let env = Env::open(t0()).await.unwrap();
     let run = env.start(order(), input("o1", 120)).await.unwrap();
+    // § d0pe2x8ey.c@ypeh2
     let script = || env.worker(order()).preset(Preset::Script);
     script().drain(minutes(1)).await.unwrap();
     assert_eq!(env.now(), t0());
@@ -88,6 +89,7 @@ async fn drain_waits_for_a_crashed_workers_claim_expiring_within_its_horizon() {
     env.settle().await.unwrap();
     assert_eq!(held.held(), 1);
     crashed.crash();
+    // § d0pe2x8ey.a@0m2gz
     let script = env.worker(order()).preset(Preset::Script);
     script.drain(minutes(1)).await.unwrap();
     assert_eq!(run.result().await.unwrap(), "shipped o1");

@@ -57,6 +57,7 @@ export function outcomeOf<K extends Outcome["case"]>(
   return outcome.value as never;
 }
 
+// § one cq034wpjp@y9wqr
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
 const MAX_MS = 2n ** 48n - 1n;
 
@@ -76,11 +77,13 @@ export function ulids(bits: (ms: number) => bigint): (ms: number) => string {
   return (ms) => {
     if (!Number.isSafeInteger(ms) || ms < 0) throw new RangeError("a time after 1970");
     let value = ((BigInt(ms) & MAX_MS) << 80n) | bits(ms);
+    // § wtwx1e769.b@ya1kf
     if (value >> 80n <= last >> 80n) {
       value = last + 1n;
     }
     if (value >> 128n !== 0n) throw new RangeError("ULIDs exhausted");
     last = value;
+    // § end wtwx1e769.b
     let out = "";
     for (let i = 25; i >= 0; i--) {
       out += CROCKFORD[Number((value >> BigInt(i * 5)) & 31n)];
@@ -90,4 +93,5 @@ export function ulids(bits: (ms: number) => bigint): (ms: number) => string {
 }
 
 /** The ULIDs of the process, monotonic across its clients. */
+// § one gpzydmca3.b@95fex
 export const ulid: (ms: number) => string = ulids(randomBits);

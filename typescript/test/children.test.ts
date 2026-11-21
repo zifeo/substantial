@@ -120,7 +120,7 @@ eachAdapter(
   "a state that is not JSON fails a compression",
   async (store) => {
     const opaque = workflow("opaque", async (c: Context) => {
-      const s = { i: 0, at: undefined as unknown };
+      const s = { i: 0, at: null as unknown };
       for await (const _ of c.iterate(s)) {
         s.i += 1;
         s.at = new Map();

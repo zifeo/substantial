@@ -112,6 +112,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     // The undo gets the arguments too: its closure keeps copies of its own.
     let (undo_args, undo) = match o.undo {
         Some(undo) => {
+            // § a5c1mfs8d@thjp5
             let copies: Vec<Ident> = (0..types.len())
                 .map(|i| format_ident!("__undo{i}"))
                 .collect();

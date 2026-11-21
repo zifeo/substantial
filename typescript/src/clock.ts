@@ -162,11 +162,14 @@ export class RealClock implements Clock {
     const interrupt = new Interrupt(abandoned);
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (timeoutMs !== undefined) {
+      // § aym52h8ch@7hzr2
       timer = setTimeout(() => interrupt.abort(pastTimeout(timeoutMs)), timeoutMs);
     }
     try {
-      // A body that does not pass its signal on goes on: its late outcome is discarded.
+      // § v4n6ja42e.a@jnxp9
       const outcome = await Promise.race([body(interrupt.signal), interrupt.aborted]);
+      // A body that does not pass its signal on goes on: its late outcome is discarded.
+      // § one v4n6ja42e.c@vnpax
       return outcome === ABANDONED ? undefined : outcome;
     } finally {
       clearTimeout(timer);

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as s from "../src/mod.ts";
-import { iso, nextFire, type Plan, parse, plan } from "../src/schedule.ts";
+import { config, iso, messageId, nextFire, type Plan, parse, plan } from "../src/schedule.ts";
 import { withEnv } from "./testing_helpers.ts";
 
 interface Vectors {
@@ -173,6 +173,46 @@ test(
     );
     await env.advance(s.hours(1));
     assert.deepEqual(fired, ["2030-01-07T09:30:00.000Z"]);
+  }),
+);
+
+test(
+  "a malformed schedule message fails the run",
+  scheduled(async (env) => {
+    const run = await env.schedule(ticker, "tick", HOURLY, { revision: 1 });
+    await run.send("schedule", { revision: 2, cron: "0 * * * *" });
+    {
+      await using _worker = env.worker([ticker], service);
+      await env.settle();
+    }
+    const failed = await run.result().catch((e) => e);
+    assert.ok(failed instanceof s.RunFailed, String(failed));
+    assert.equal(failed.error.type, "InvalidArgument");
+    assert.match(failed.error.message, /a schedule message is a config of sub.schedule/);
+  }),
+);
+
+test("message ids are the same in every host", async () => {
+  const hourly = new s.Cron("0 * * * *", "UTC");
+  assert.equal(await messageId(config(1, hourly, 5)), "schedule-1-0a984120fb588a41");
+  assert.equal(await messageId(config(2, null, 1)), "schedule-2-1669c891556cdd13");
+});
+
+test(
+  "two configs of one revision fail the run",
+  scheduled(async (env) => {
+    await env.schedule(ticker, "tick", HOURLY, { revision: 1 });
+    const run = await env.schedule(ticker, "tick", new s.Cron("30 * * * *", "UTC"), {
+      revision: 1,
+    });
+    {
+      await using _worker = env.worker([ticker], service);
+      await env.settle();
+    }
+    const failed = await run.result().catch((e) => e);
+    assert.ok(failed instanceof s.RunFailed, String(failed));
+    assert.equal(failed.error.type, "ConfigError");
+    assert.match(failed.error.message, /revision 1 came with two configs/);
   }),
 );
 

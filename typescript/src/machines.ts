@@ -100,6 +100,7 @@ class Machine<Req extends Message, Res extends Response> {
       throw coreError(answer.value as boundary.CoreError);
     }
     if (answer.case !== expected) {
+      // § b80k2s0e4.a@20d0p
       throw new ProtocolError(`expected ${expected}, got ${answer.case}`);
     }
     return answer.value as Answer<Res, K>;

@@ -27,11 +27,13 @@ export interface Listing {
 
 /** An adapter scoped to its namespace: keys are relative to it. */
 export interface Store {
+  // § w89qkqkaj@0b3n5
   readonly capabilities: Capabilities;
   /** Connects, throwing `ConfigError` on a store the adapter cannot use; the operations connect
    * too when it was not called. */
   open(): Promise<void>;
   /** Atomic and exclusive: of concurrent creates of a key, exactly one gets "created". */
+  // § one kwvhb7ehw@d945n
   create(key: string, data: Uint8Array): Promise<Create>;
   get(key: string): Promise<Uint8Array | undefined>;
   /** Keys under `prefix` and after `startAfter`, in byte order of the full key. */
@@ -71,6 +73,7 @@ export function inRange(
   startAfter: string | undefined,
   maxKeys: number,
 ): string[] {
+  // § dfd6vt90h.b@ae726
   const out: string[] = [];
   for (const key of keys) {
     if (out.length >= maxKeys) break;

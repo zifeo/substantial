@@ -67,6 +67,10 @@ name = "redis_failover"
 required-features = ["redis"]
 
 [[test]]
+name = "children"
+required-features = ["testing"]
+
+[[test]]
 name = "runs"
 required-features = ["testing"]
 

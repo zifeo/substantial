@@ -109,9 +109,11 @@ impl Shared {
         step_timeout: std::time::Duration,
     ) -> Arc<Self> {
         let run = run_input.run.clone();
+        // § b1cj6wtk9.a@bx0rm
         let line = (run_input.start.as_ref())
             .and_then(|start| start.line.clone())
             .unwrap_or_else(|| run.clone());
+        // § end b1cj6wtk9.a
         let state = State {
             machine,
             slots: HashMap::new(),
@@ -248,7 +250,9 @@ impl Shared {
         let (called, occurrence) = self.call_full(b::call::Call::Step(step))?;
         let occurrence = occurrence.expect("call_full checks that a step has its occurrence");
         if let Called::Pending(id) = called {
+            // § b1cj6wtk9@0eq1c
             let key = format!("{}/{name}/{occurrence}", self.line);
+            // § end b1cj6wtk9
             let mut state = self.lock();
             let pending = PendingStep {
                 body: spec.body,
@@ -331,6 +335,7 @@ impl Shared {
 
     /// Tells the run machine of every wait whose predicate now holds.
     pub(crate) fn evaluate_waits(&self) -> Result<()> {
+        // § k3zma9hjs.a@hyzts
         let waits = std::mem::take(&mut self.lock().waits);
         let (held, pending): (Vec<_>, Vec<_>) = waits.into_iter().partition(|(_, p)| p());
         let mut state = self.lock();
@@ -444,6 +449,7 @@ impl Future for CallFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         if let Some(call) = self.call.take() {
+            // § wv67rmrjm.a@manj1
             let called = match (call, self.step.take()) {
                 (b::call::Call::Step(step), Some(spec)) => self.shared.call_step(step, spec)?,
                 (call, None) => self.shared.call(call)?,

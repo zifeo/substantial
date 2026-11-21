@@ -26,6 +26,7 @@ use crate::settings::StoreRetry;
 pub(super) const PAGE: u32 = 1000;
 /// A request that hangs must become an ambiguous outcome, not a stuck worker. An attempt fits a
 /// waiting listing (20 s at most) with 40 s to spare.
+// § one gvqb04830.b@1twx3
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `s3://<endpoint>/<bucket>/<ns>?region=<r>`: one object per key under the prefix `<ns>/`,
@@ -91,6 +92,7 @@ impl S3Location {
                 "names no namespace, or one with an empty component",
             ));
         }
+        // § e9ern38bz.b@m1bwf
         let mut query = BTreeMap::new();
         for (name, value) in parsed.query_pairs() {
             if query.insert(name.to_string(), value.to_string()).is_some() {
@@ -110,6 +112,7 @@ impl S3Location {
         if let Some(unknown) = query.keys().next() {
             return Err(invalid(&format!("unknown query parameter {unknown}")));
         }
+        // § end e9ern38bz.b
         Ok(Self {
             endpoint,
             bucket: bucket.to_owned(),
@@ -138,10 +141,12 @@ impl S3Store {
         retry.validate()?;
         let auth = credentials.s3()?;
         // Retries are `store_retry`'s alone.
+        // § gvqb04830.b@q07wb
         let timeouts = TimeoutConfig::builder()
             .connect_timeout(Duration::from_secs(5))
             .operation_attempt_timeout(ATTEMPT_TIMEOUT)
             .build();
+        // § end gvqb04830.b
         let mut config = aws_sdk_s3::Config::builder();
         let refresh = match auth {
             S3Auth::Static(keys) => {
@@ -156,6 +161,9 @@ impl S3Store {
                 Some(refresh)
             }
         };
+        // No cap, as in every host: the SDK's default client, hyper's pool, opens a
+        // connection per request in flight, so a waiting listing queues nothing behind it.
+        // § x2qrbh9jk.a@gqj0w
         // Pinned, not the newest: a newer one needs a newer SDK than the floor this crate declares.
         #[allow(deprecated)]
         let config = config
@@ -177,6 +185,7 @@ impl S3Store {
             retry,
             refresh,
         })
+        // § end x2qrbh9jk.a
     }
 
     /// Refreshes the provider's keys if they near their expiry; a provider's error fails the
@@ -202,6 +211,7 @@ impl S3Store {
     }
 
     async fn put(&self, key: &str, bytes: &Bytes) -> Result<Create, Fault> {
+        // § gvqb04830@xhtdq
         self.fresh().await?;
         let sent = self
             .client
@@ -228,6 +238,7 @@ impl S3Store {
     }
 
     async fn read(&self, key: &str) -> Result<Option<Bytes>, Fault> {
+        // § gvqb04830.a@mq5p6
         self.fresh().await?;
         let sent = self
             .client
@@ -255,6 +266,7 @@ impl S3Store {
         self.fresh().await?;
         let mut keys = Vec::new();
         let mut after = start_after.map(|s| self.full(s));
+        // § dfd6vt90h.c@v3zeq
         while (keys.len() as u32) < max_keys {
             let page = (max_keys - keys.len() as u32).min(PAGE);
             let out = self
@@ -285,6 +297,7 @@ impl S3Store {
         max_keys: u32,
         wait: &ListWait,
     ) -> Result<Listing, Fault> {
+        // § gvqb04830.c@cvqyc
         self.fresh().await?;
         let page = self.page(prefix, start_after.map(|s| self.full(s)), max_keys);
         let (list, answer) = h3::wait(page.customize(), max_keys, wait)?;
@@ -333,6 +346,7 @@ impl S3Store {
             .await;
         match sent {
             Ok(_) => Ok(()),
+            // § one dfd6vt90h.d@w2vp7
             Err(e) if e.code() == Some("NoSuchKey") => Ok(()),
             Err(e) => Err(fault("delete", key, &e)),
         }

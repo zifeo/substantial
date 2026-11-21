@@ -80,6 +80,17 @@ fn a_step_is_an_async_fn_of_values_or_shared_references() {
     );
     refused(
         step::expand(
+            quote!(name = "substantial.charge"),
+            quote!(
+                async fn f() -> R {
+                    x
+                }
+            ),
+        ),
+        "step name \"substantial.charge\" starts with substantial., which is reserved",
+    );
+    refused(
+        step::expand(
             quote!(name = "schedule.next"),
             quote!(
                 async fn f() -> R {

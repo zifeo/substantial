@@ -106,6 +106,7 @@ impl Running {
 
     /// Asks the agent to drain within `within` of now, without waiting for it.
     pub(crate) fn drain(&self, within: Duration) -> i64 {
+        // § cjtegwkna@g8870
         let until = self.clock.now().ms + i64::try_from(millis(within)).expect("ms fit in i64");
         self.agent.drain(until);
         until
@@ -120,10 +121,12 @@ impl Running {
     }
 
     pub(crate) fn is_alive(&self) -> bool {
+        // § pgv9r1j12.a@gspcj
         !self.task.is_finished()
     }
 
     pub(crate) fn error(&self) -> Option<Error> {
+        // § pgv9r1j12.a@np81j
         self.task
             .with(|ended| ended.and_then(|e| e.as_ref().err()).map(Error::again))
     }
@@ -133,6 +136,7 @@ impl Running {
 /// else would stop.
 impl Drop for Running {
     fn drop(&mut self) {
+        // § dh7y75pvn.c@e9b9j
         if !self.task.is_finished() {
             self.agent.shutdown(self.grace);
         }
@@ -205,6 +209,7 @@ impl Launch<'_> {
         };
         // Told once the task has its value, so that the waits it fails see a worker not alive.
         let ended = move |ended: &Result<()>| {
+            // § pgv9r1j12@kxt4m
             if let Err(e) = ended {
                 tracing::error!(worker = id, "worker died: {e}");
                 died(e);
@@ -237,6 +242,7 @@ const OP_RETRIES: u32 = 5;
 
 /// The 256 bits the core seeds its random and uuid from, from the OS CSPRNG.
 pub(super) fn os_seed() -> Vec<u8> {
+    // § gpzydmca3.a@nf5pn
     use rand::TryRng;
     let mut seed = vec![0; 32];
     rand::rngs::SysRng
@@ -321,6 +327,7 @@ impl AgentLoop {
         loop {
             match self.machine.next(self.clock.now())? {
                 Command::Store(b::agent_command::Store { id, op }) => {
+                    // § pgv9r1j12.b@5p1g1
                     let (store, events) = (self.store.clone(), events.clone());
                     let op =
                         op.ok_or_else(|| Error::Protocol("store command without op".into()))?;
@@ -367,6 +374,7 @@ impl AgentLoop {
                     }
                     let Some(event) = events.pop() else {
                         if past_grace.is_some_and(|ends| self.clock.elapsed() >= ends) {
+                            // § dh7y75pvn.b@j5tr9
                             self.replays.stop_all();
                             grace_ends = Some(self.clock.elapsed() + grace);
                         }
@@ -385,6 +393,7 @@ impl AgentLoop {
                         }
                         Event::WakeWorkflow(workflow) => self.machine.wake_workflow(workflow)?,
                         Event::Shutdown(g) if grace_ends.is_none() => {
+                            // § dh7y75pvn@kb3x4
                             grace = i64::try_from(millis(g)).expect("a grace fits in i64 ms");
                             grace_ends = Some(self.clock.elapsed() + grace);
                             self.machine.shutdown()?;

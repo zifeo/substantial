@@ -14,12 +14,14 @@ repos:
       - id: check-merge-conflict
       - id: end-of-file-fixer
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: "v0.8.6"
+    rev: "v0.17.3"
     hooks:
       - id: ruff
         args:
           - --fix
+      # Python files only, as CI checks: the hook would also reflow the examples of the docs.
       - id: ruff-format
+        types_or: [python, pyi]
   - repo: https://github.com/commitizen-tools/commitizen
     rev: v4.1.0
     hooks:

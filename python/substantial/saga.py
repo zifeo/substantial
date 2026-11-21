@@ -19,11 +19,14 @@ async def run_undos(shared: Shared, undos: run.Called.Undos) -> None:
         if found is None:
             raise shared.protocol(f"undo of call {u.call} without an undo")
         make, step_options = found
+        # § a5c1mfs8d.a@v05hn
         options = run.StepOptions()
         options.CopyFrom(step_options)
         options.occurrence = u.occurrence
+        # § end a5c1mfs8d.a
         call = run.Call(step=run.Call.Step(name=u.name, options=options))
         value = decode_json(u.value if u.HasField("value") else None)
+        # § one j5gf2r47g@hhkr1
         try:
             await shared.future(call, decode_json, StepSpec(make(value)))
         except StepFailed as e:
@@ -31,8 +34,10 @@ async def run_undos(shared: Shared, undos: run.Called.Undos) -> None:
 
 
 async def rollback(shared: Shared, reason: str) -> None:
+    # § zjw5cess8@270fs
     undos = shared.expect(run.Call(rollback=boundary.Empty()), "undos")
     await run_undos(shared, undos)
+    # § one g039jvy6k.c@atzgr
     raise RolledBack(reason)
 
 
@@ -57,10 +62,12 @@ class Saga:
         tb: TracebackType | None,
     ) -> bool:
         SAGA.reset(self._token)  # type: ignore[arg-type]
+        # § one ctp0q370t.c@y4rvy
         if isinstance(exc, asyncio.CancelledError):
             # The replay is closing its code: nothing more is recorded.
             return False
         # Continuing as new is no failure: nothing is undone.
+        # § one ctp0q370t.a@08t0z, ctp0q370t.b@k6z3b
         failed = exc is not None and not isinstance(exc, ContinuedAsNew)
         # An inner saga ending without error hands its steps to the enclosing one.
         parent = SAGA.get()
@@ -68,6 +75,7 @@ class Saga:
         if parent is not None:
             fields["parent"] = parent
         end = run.Call(saga_end=run.Call.SagaEnd(**fields))
+        # § ctp0q370t@0279z
         if failed:
             await run_undos(self._shared, self._shared.expect(end, "undos"))
         else:

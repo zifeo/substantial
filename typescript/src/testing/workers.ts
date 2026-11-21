@@ -75,6 +75,7 @@ export class WorkerClock implements Clock, Owner {
   }
 
   now(): number {
+    // § x55x5yqy4.c@m8znr
     return this.world.time.ms;
   }
 

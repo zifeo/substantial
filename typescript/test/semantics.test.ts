@@ -73,7 +73,9 @@ eachAdapter(
           try {
             call();
           } catch (e) {
-            if (e instanceof InvalidArgument) refused.push(bad);
+            if (e instanceof InvalidArgument) {
+              refused.push(`${bad} ${e.message.includes("must match [A-Za-z0-9._-]{1,128}")}`);
+            }
           }
         }
       }
@@ -84,10 +86,34 @@ eachAdapter(
     const run = await sub.start(names);
     const twice = (name: string) => [name, name];
     assert.deepEqual(await run.result({ timeout: LONG }), [
-      ...twice("substantial.ended"),
-      ...twice("a note"),
-      ...twice(""),
+      ...twice("substantial.ended false"),
+      ...twice("a note true"),
+      ...twice(" true"),
     ]);
+  },
+  ["memory"],
+);
+
+eachAdapter(
+  "reserved names are refused to a client send and a step",
+  async (store) => {
+    assert.throws(() => step("substantial.charge", () => null), /reserved/);
+    const stepper = workflow("stepper", async (c: Context) => {
+      try {
+        await c.step("substantial.charge", () => null);
+      } catch (e) {
+        if (e instanceof InvalidArgument) return true;
+      }
+      return false;
+    });
+    const sub = await createOn(store);
+    const run = await sub.start(stepper);
+    await assert.rejects(
+      run.send("substantial.cancel", "forged"),
+      (e) => e instanceof InvalidArgument && /reserved/.test(e.message),
+    );
+    await using _ = script(sub, [stepper]);
+    assert.equal(await run.result({ timeout: LONG }), true);
   },
   ["memory"],
 );

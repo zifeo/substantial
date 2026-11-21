@@ -43,6 +43,7 @@ log = logging.getLogger("substantial")
 
 
 def _namespace(url: str, rest: str) -> str:
+    # § e9ern38bz.b@c05pc
     if "?" in rest:
         raise ConfigError(f"{url!r} takes no query parameters")
     if not rest:
@@ -52,6 +53,7 @@ def _namespace(url: str, rest: str) -> str:
 
 def open_store(url: str, credentials: CredentialsArg) -> Store:
     """Opens the adapter a URL names (I-16); the scheme alone picks it, nothing is detected."""
+    # § e9ern38bz@3wfkx
     if not isinstance(url, str):
         raise ConfigError(f"a store is a URL, not {url!r}")
     if url.startswith("memory://"):
@@ -91,6 +93,7 @@ def open_store(url: str, credentials: CredentialsArg) -> Store:
     for scheme in ("sqlite:", "postgres://", "mysql://"):
         if url.startswith(scheme):
             raise ConfigError(f"{scheme} stores are not available in this host yet; {_SUPPORTED}")
+    # § one e9ern38bz.a@ntpkv
     raise ConfigError(f"unknown scheme in {url!r}; {_SUPPORTED}")
 
 
@@ -139,6 +142,7 @@ async def perform(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
 
 
 async def _perform_once(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
+    # § pgv9r1j12.b@af9x1
     try:
         return await _perform(store, op)
     except StoreFailure as e:

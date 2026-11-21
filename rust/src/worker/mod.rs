@@ -94,6 +94,7 @@ impl Worker {
                 ));
             }
         };
+        // § dh7y75pvn.a@yde29
         tokio::select! {
             () = running.task.returned() => {
                 running.ended()?;
@@ -102,6 +103,7 @@ impl Worker {
             received = signals.recv() => received?,
         }
         self.shutdown().await
+        // § end dh7y75pvn.a
     }
 
     /// Starts no new replay and lets the steps in flight end within `shutdown_grace`.
@@ -123,6 +125,7 @@ impl Worker {
     pub async fn drain(&self, within: std::time::Duration) -> Result<()> {
         match &self.0 {
             Kind::Real(r) => {
+                // § cjtegwkna.a@2fzqk
                 r.drain(within);
                 r.task.returned().await;
                 r.ended()
@@ -186,7 +189,7 @@ impl Worker {
 
 /// The signals that stop a served worker: SIGTERM, and Ctrl-C.
 pub(crate) struct Signals {
-    #[cfg(unix)]
+    // § one k6m3smdpk@kt775
     term: tokio::signal::unix::Signal,
 }
 
@@ -194,18 +197,15 @@ impl Signals {
     /// Listens from now on, so that a signal sent once this returns is never missed.
     pub(crate) fn listen() -> Result<Self> {
         Ok(Self {
-            #[cfg(unix)]
             term: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
         })
     }
 
     async fn recv(&mut self) -> Result<()> {
-        #[cfg(unix)]
+        // § dh7y75pvn.a@vqqs2
         tokio::select! {
             _ = self.term.recv() => Ok(()),
             interrupted = tokio::signal::ctrl_c() => Ok(interrupted?),
         }
-        #[cfg(not(unix))]
-        Ok(tokio::signal::ctrl_c().await?)
     }
 }

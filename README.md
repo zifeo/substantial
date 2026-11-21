@@ -170,6 +170,8 @@ Run it with `node checkout.ts` or `deno run -A checkout.ts`. Steps and workflows
 
 ## Install
 
+Substantial runs on Linux and macOS. Windows is not supported: run it in WSL, as on Linux.
+
 Python 3.12 or later:
 
 ```sh
@@ -373,7 +375,7 @@ await register(webhook, c.chain);
 
 </details>
 
-Messages come from clients (`run.send`) or other runs (`c.send`), and a message id makes a resend delivered once. Sending to a run that ended raises `RunEnded`, to a chain that does not exist `RunNotFound`, from a run too. Handlers bound together see their past messages in arrival order, across names. A run consumes its messages in the order sent; across a continue as new, a message that arrives as the run continues may be consumed after one sent later. More in [I-9].
+Messages come from clients (`run.send`) or other runs (`c.send`), and a message id makes a resend delivered once. Sending to a run that ended raises `RunEnded`, to a chain that does not exist `RunNotFound`, from a run too. Handlers bound together see their past messages in arrival order, across names. A run consumes one sender's messages in the order sent; across a continue as new, a message that arrives as the run continues may be consumed after one sent later. More in [I-9].
 
 ### Children
 
@@ -620,7 +622,7 @@ try {
 
 </details>
 
-`runs` reads a workflow's queue, never its histories: ended runs are not listed. `retry` starts a new run of the chain that replays the failed one without its failure, so a payment that succeeded is not charged again and the failed step gets a fresh retry budget; `s.step_key()` stays the same. More in [I-17].
+`runs` reads a workflow's queue, never its histories: ended runs are not listed, though one that just ended may be for a moment. `retry` starts a new run of the chain that replays the failed one without its failure, so a payment that succeeded is not charged again and the failed step gets a fresh retry budget; `s.step_key()` stays the same. More in [I-17].
 
 ### Cost, budgets and observing
 
@@ -760,7 +762,7 @@ const sub = await s.Substantial.open(redisUrl, {
 
 </details>
 
-S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Redis takes none, `"env"` (`REDIS_PASSWORD`, `REDIS_USERNAME`), a password, or such a function returning one (`s::Credentials::password_provider` in Rust). Ended runs are deleted 30 days after their chain ends, or after the `retention` a worker or a workflow sets, at most 100 years; never delete keys under a namespace yourself, by hand or with a lifecycle rule. More in [I-16].
+S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Redis takes none, `"env"` (`REDIS_PASSWORD`, `REDIS_USERNAME`), a password, or such a function returning one (`s::Credentials::password_provider` in Rust). Ended runs are deleted 30 days after they end, or after the `retention` a worker or a workflow sets, at most 100 years; never delete keys under a namespace yourself, by hand or with a lifecycle rule. More in [I-16].
 
 ### Workers
 
@@ -839,7 +841,7 @@ cargo test --workspace  # or uv run pytest, or npm test
 
 Each host has two examples on a file or memory store, `first_workflow` and `backup`: `cargo run -p substantial --example first_workflow -- /tmp/demo`, `uv run python/examples/first_workflow.py /tmp/demo-py`, `node --conditions=substantial-source typescript/examples/first_workflow.ts /tmp/demo-ts`.
 
-`rust/wasm` and `rust/proto` are symlinks to `wasm/` and `proto/`, so that the published crate carries them (on Windows, clone with `git clone -c core.symlinks=true`). `npm run gen` regenerates the TypeScript protobuf code from `proto/`.
+`rust/wasm` and `rust/proto` are symlinks to `wasm/` and `proto/`, so that the published crate carries them. `npm run gen` regenerates the TypeScript protobuf code from `proto/`.
 
 ## License
 

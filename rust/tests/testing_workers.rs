@@ -29,6 +29,7 @@ async fn a_crash_after_the_charge_before_it_is_recorded() {
     assert_eq!(shop.charges(), ["a-42"]);
     env.advance(seconds(2)).await.unwrap();
     assert_eq!(run.result().await.unwrap()["payment"], "pay-a-42");
+    // § ftq7bbgff@cxsbx
     assert_eq!(shop.charges(), ["a-42", "a-42"]);
     second.shutdown().await.unwrap();
     first.shutdown().await.unwrap();
@@ -44,6 +45,7 @@ async fn claims_are_renewed_and_taken_over_after_the_last_renewal() {
     );
     let hold = env.hold("charge");
     let run = env.start(checkout(&shop), order("a-42")).await.unwrap();
+    // § t452yredf.b@nhqjq
     // Renewed every 15 s, the claim outlives claim_ttl while its worker holds the step.
     env.advance(seconds(61)).await.unwrap();
     assert_eq!(shop.charges(), ["a-42"]);
@@ -54,6 +56,7 @@ async fn claims_are_renewed_and_taken_over_after_the_last_renewal() {
     env.advance(seconds(1)).await.unwrap();
     let at = run.result().await.unwrap()["at"].clone();
     assert_eq!(at, "2030-01-07T09:01:35.001+00:00");
+    // § end t452yredf.b
     second.shutdown().await.unwrap();
     first.shutdown().await.unwrap();
     done(env).await;
@@ -164,8 +167,10 @@ async fn a_pause_of(d: Duration) -> (Env, Shop) {
 
 #[tokio::test]
 async fn a_paused_pod_does_not_apply_an_op_twice() {
+    // § ftq7bbgff.a@kpnt6
     let (env, shop) = a_pause_of(seconds(65)).await;
     assert_eq!(shop.applied(), ["op-1", "op-1"]);
+    // § end ftq7bbgff.a
     done(env).await;
 }
 
@@ -184,14 +189,18 @@ async fn a_shutdown_leaves_held_steps_and_its_runs_to_another_worker() {
     let run = env.start(checkout(&shop), order("a-42")).await.unwrap();
     env.settle().await.unwrap();
     let other = service(&env, checkout(&shop));
+    // § bv0addfga@pffn5
     leaving.shutdown().await.unwrap();
     assert!(hold.held() == 0 && !leaving.is_alive());
+    // § t452yredf.c@ey39w
     // Its claims are deleted: the other worker takes the run at its next scan, at 30 s.
     env.advance(seconds(30)).await.unwrap();
     let ended = run.result().await.unwrap();
     assert_eq!(ended["payment"], "pay-a-42");
     assert_eq!(ended["at"], "2030-01-07T09:00:30+00:00");
     assert_eq!(shop.charges(), ["a-42", "a-42"]);
+    // § end t452yredf.c
+    // § end bv0addfga
     other.shutdown().await.unwrap();
     done(env).await;
 }

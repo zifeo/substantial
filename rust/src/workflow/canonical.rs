@@ -1,6 +1,6 @@
-//! Inputs as canonical JSON (RFC 8785). serde_jcs, as serde_json, writes a NaN or an infinity
-//! inside a value as `null`, and rounds an integer past 2^53 - 1 to the double JCS numbers are:
-//! both are refused here first.
+//! Values of the code as JSON, and inputs as canonical JSON (RFC 8785). serde_json and
+//! serde_jcs write a NaN or an infinity inside a value as `null`; an integer past 2^53 - 1 is
+//! rounded by serde_jcs and by every JavaScript reader: both are refused here first.
 
 use std::fmt;
 
@@ -9,13 +9,32 @@ use serde::ser;
 
 use crate::error::{Error, Result};
 
+/// The JSON of a value of the code, a NaN, an infinity or an integer past 2^53 - 1 in it refused
+/// rather than written as `null` or read rounded.
+pub(crate) fn to_json<T: ?Sized + Serialize>(value: &T) -> serde_json::Result<Vec<u8>> {
+    value
+        .serialize(Check)
+        .map_err(<serde_json::Error as ser::Error>::custom)?;
+    serde_json::to_vec(value)
+}
+
+/// As [`to_json`], for a value given to a call: a message, a published value. A refused one
+/// raises `InvalidArgument`, as in every host.
+pub(crate) fn argument_json<T: ?Sized + Serialize>(value: &T, what: &str) -> Result<Vec<u8>> {
+    // § one z6zyx22ss.c@qksg6
+    to_json(value).map_err(|e| Error::InvalidArgument(format!("{what} is not JSON: {e}")))
+}
+
 /// The canonical JSON of an input: an object, or `{}` for `()` and `None`.
 pub(crate) fn input_object(input: impl Serialize) -> Result<Vec<u8>> {
     let not_json =
         |e: &dyn fmt::Display| Error::InvalidArgument(format!("the input is not JSON: {e}"));
+    // § aaev3rs1q@2zaq7
     input.serialize(Check).map_err(|e| not_json(&e))?;
     let bytes = serde_jcs::to_vec(&input).map_err(|e| not_json(&e))?;
+    // § end aaev3rs1q
     match bytes.as_slice() {
+        // § e1dc4dar4.a@fkdvv
         b"null" => Ok(b"{}".to_vec()),
         [b'{', ..] => Ok(bytes),
         other => Err(Error::InvalidArgument(format!(
@@ -47,6 +66,7 @@ type Checked = std::result::Result<(), Refused>;
 const SAFE: u128 = (1 << 53) - 1;
 
 fn integer(magnitude: u128, shown: impl fmt::Display) -> Checked {
+    // § one aaev3rs1q.a@qj264, z6zyx22ss.e@qf6e9
     if magnitude > SAFE {
         return Err(Refused(format!(
             "{shown} is past 2^53 - 1, the largest integer a JSON number holds exactly"
@@ -56,6 +76,7 @@ fn integer(magnitude: u128, shown: impl fmt::Display) -> Checked {
 }
 
 fn float(value: f64) -> Checked {
+    // § one aaev3rs1q.a@td1ks, z6zyx22ss.d@prk72
     if !value.is_finite() {
         return Err(Refused(format!("{value} is not a JSON number")));
     }

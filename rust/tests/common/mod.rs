@@ -22,6 +22,8 @@ pub struct Recording {
     pub listed: Mutex<Vec<String>>,
     pub created: Mutex<Vec<(String, Create)>>,
     pub failing: AtomicBool,
+    /// Whether every create of a segment fails, the other operations going through.
+    pub failing_segments: AtomicBool,
     /// When set, the first create of a segment freezes every operation until this sees `true`
     /// or its sender is dropped.
     pub freeze_on_segment: Mutex<Option<watch::Receiver<bool>>>,
@@ -38,6 +40,7 @@ impl Recording {
             listed: Mutex::default(),
             created: Mutex::default(),
             failing: AtomicBool::new(false),
+            failing_segments: AtomicBool::new(false),
             freeze_on_segment: Mutex::default(),
             frozen: Mutex::default(),
             hold_delete: Mutex::default(),
@@ -81,6 +84,9 @@ impl Store for Recording {
                 *self.frozen.lock().unwrap() = Some(freeze);
             }
             self.gate().await?;
+            if key.contains("/log/") && self.failing_segments.load(Ordering::SeqCst) {
+                return Err(StoreFailure::new("injected"));
+            }
             let outcome = self.inner.create(key, bytes).await?;
             self.created.lock().unwrap().push((key.to_owned(), outcome));
             Ok(outcome)

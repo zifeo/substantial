@@ -173,6 +173,7 @@ impl Time {
 
     /// Returns once the gate is open and the owner not paused.
     pub(super) async fn passing(&self, owner: &Incarnation) {
+        // § x55x5yqy4.a@0b6gd
         let blocked = {
             let st = self.lock();
             !st.open || owner.paused()
@@ -301,6 +302,7 @@ impl Time {
         what: &str,
         mut skip: impl FnMut(&mut State, i64),
     ) -> Result<()> {
+        // § x55x5yqy4.d@74087
         outside()?;
         let _settling = self.settling.lock().await;
         self.settled().await?;
@@ -322,6 +324,7 @@ impl Time {
 
     /// Moves to each deadline up to `target`, settling there.
     async fn move_to(&self, target: i64, skip: &mut impl FnMut(&mut State, i64)) -> Result<()> {
+        // § x55x5yqy4.b@1dhda
         loop {
             {
                 let mut st = self.lock();

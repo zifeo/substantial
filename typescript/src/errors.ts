@@ -1,6 +1,7 @@
 /** A failure as recorded in a history: a type name, a message, whether a retry may help, and the
  * JSON object of details the core records with the failures it makes, else `undefined`. */
 export interface Failure {
+  // § r3sd261h4@knsap
   readonly type: string;
   readonly message: string;
   readonly retryable: boolean;
@@ -21,6 +22,7 @@ export function makeFailure(
   return { type, message, retryable, details: details as Record<string, unknown> };
 }
 
+// § rabbgjpb2@kmwya
 /** The base of every error Substantial raises, control flow excepted. */
 export class SubstantialError extends Error {
   constructor(message: string) {
@@ -29,6 +31,7 @@ export class SubstantialError extends Error {
   }
 }
 
+// § b7wsejcvb.b@bpv15
 /** Control flow of Substantial: workflow code rethrows it, `isControl(e)`. */
 export class Control extends Error {
   constructor(message: string) {
@@ -80,9 +83,11 @@ export class ContinuedAsNew extends Control {
     this.state = state;
   }
 }
+// § end b7wsejcvb.b
 
 /** A step had no attempt left, or failed with a permanent error; `cause` is its last attempt's
- * failure, such as `StepTimeout`, `ValueTooLarge` or the type of the error it threw. */
+ * failure, such as `StepTimeout`, `ValueTooLarge`, `Json` for a value that does not encode, or
+ * the type of the error it threw. */
 export class StepFailed extends SubstantialError {
   readonly failure: Failure;
   override readonly cause: Failure;
@@ -170,6 +175,7 @@ export function wrappedFailure(stepDetails: unknown): Failure | undefined {
 
 /** The cause of a run failed with `type`: a `StepFailed`'s wraps it in its details. */
 export function runFailedCause(type: string, details: unknown): Failure | undefined {
+  // § r3sd261h4.a@sx2cf
   if (type !== "StepFailed") return undefined;
   const cause = wrappedFailure(details);
   if (cause === undefined) {
@@ -234,6 +240,7 @@ export class ModuleError extends SubstantialError {}
 
 /** The core answered with a response this host does not expect at that point. */
 export class ProtocolError extends SubstantialError {}
+// § end rabbgjpb2
 
 /** Refuses options that are not an object, or that hold a name not in `names`. */
 export function onlyOptions(
@@ -251,6 +258,7 @@ export function onlyOptions(
 
 /** The type name of a thrown value, as a failure records it. */
 export function typeName(e: unknown): string {
+  // § r3sd261h4.c@e31hh
   if (e instanceof Error) {
     return e.constructor.name || e.name;
   }
@@ -267,5 +275,6 @@ export function failureOf(e: unknown): Failure {
     return e.failure;
   }
   if (e instanceof RolledBack) return { type: "RolledBack", message: e.reason, retryable: false };
+  // § one r3sd261h4.c@zdyf8
   return { type: typeName(e), message: messageOf(e), retryable: false };
 }

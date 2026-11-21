@@ -33,6 +33,7 @@ async fn runs_are_replayed_by_the_code_of_their_version() {
         let two = sub.start(&versioned(2), ()).await.unwrap();
         assert_eq!(none.result().timeout(LONG).await.unwrap(), "none");
         assert_eq!(one.result().timeout(LONG).await.unwrap(), "v1");
+        // § e3rcyme0p.c@2hw76
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(
             two.status().await.unwrap(),
@@ -40,6 +41,7 @@ async fn runs_are_replayed_by_the_code_of_their_version() {
             "{}",
             ns.name
         );
+        // § end e3rcyme0p.c
         let all = vec![unversioned(), versioned(1), versioned(2)];
         let both = script(&sub, all).start().unwrap();
         assert_eq!(two.result().timeout(LONG).await.unwrap(), "v2");
@@ -59,6 +61,7 @@ async fn a_worker_with_versions_only_leaves_unversioned_runs_alone() {
         let none = sub.start(&unversioned(), ()).await.unwrap();
         let one = sub.start(&versioned(1), ()).await.unwrap();
         assert_eq!(one.result().timeout(LONG).await.unwrap(), "v1");
+        // § e3rcyme0p.d@veh9n
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(
             none.status().await.unwrap(),
@@ -68,6 +71,7 @@ async fn a_worker_with_versions_only_leaves_unversioned_runs_alone() {
         );
         let unversioned_code = script(&sub, unversioned()).start().unwrap();
         assert_eq!(none.result().timeout(LONG).await.unwrap(), "none");
+        // § end e3rcyme0p.d
         only_one.shutdown().await.unwrap();
         unversioned_code.shutdown().await.unwrap();
     }
@@ -126,10 +130,12 @@ async fn a_continuation_names_the_version_of_its_workflow() {
         let worker = script(&sub, all).start().unwrap();
         let to_two = sub.start(&hop(), ()).await.unwrap();
         let to_none = sub.start(&hop_unversioned(), ()).await.unwrap();
+        // § deycjjrap.a@2ny13
         assert_eq!(to_two.result().timeout(LONG).await.unwrap(), "v2");
         assert_eq!(to_none.result().timeout(LONG).await.unwrap(), "none");
         let one = sub.start(&target(1), N { n: 2 }).await.unwrap();
         assert_eq!(one.result().timeout(LONG).await.unwrap(), "v1");
+        // § end deycjjrap.a
         worker.shutdown().await.unwrap();
     }
 }
@@ -168,8 +174,10 @@ async fn an_incompatible_change_fails_the_run_with_non_determinism() {
         let Err(Error::RunFailed { status, error, .. }) = failed else {
             panic!("{}: {failed:?}", ns.name);
         };
+        // § twravbm6m@rjc9j
         assert_eq!(status, RunStatus::Failed, "{}", ns.name);
         assert_eq!(error.kind, "NonDeterminism", "{}: {error}", ns.name);
+        // § end twravbm6m
         let message = message.unwrap();
         assert!(
             message.ends_with("; an incompatible change needs a new version (version=)"),

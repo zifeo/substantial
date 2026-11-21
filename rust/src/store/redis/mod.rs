@@ -98,6 +98,7 @@ impl RedisLocation {
                 "names no namespace, or one outside [A-Za-z0-9._-] and /",
             ));
         }
+        // § e9ern38bz.b@d9ajp
         let allowed = topology.parameters();
         let mut query = BTreeMap::new();
         for (name, value) in url::form_urlencoded::parse(query_text.as_bytes()) {
@@ -114,11 +115,13 @@ impl RedisLocation {
                 "the query parameter {missing} is required"
             )));
         }
+        // § end e9ern38bz.b
         let replicas = match query["replicas"].as_str() {
             "all" => None,
             // Sentinel and Cluster promote a replica on failover: a create one of them misses is
             // lost.
             _ if topology != Topology::Standalone => {
+                // § htbc4k715.c@wkhjv
                 return Err(invalid(
                     "replicas is all on Sentinel and Cluster, so a failover keeps every create",
                 ));

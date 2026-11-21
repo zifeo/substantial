@@ -26,7 +26,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 pub use as_workflow::{AsWorkflow, IntoWorkflows};
-pub(crate) use canonical::input_object;
+pub(crate) use canonical::{argument_json, input_object, to_json};
 pub use child::{ChainResult, Child, SendFromWorkflow, StartChild};
 pub use context::{Context, Receive, WaitUntil};
 pub use log::Log;
@@ -102,7 +102,8 @@ impl<O: Serialize + Send + 'static> Workflow<O> {
             let f = f.clone();
             Box::pin(async move {
                 let input: I = serde_json::from_slice(&input)?;
-                Ok(serde_json::to_vec(&f(c, input).await?)?)
+                // § one g039jvy6k.a@bpb7b
+                Ok(to_json(&f(c, input).await?)?)
             })
         };
         Self {
@@ -234,6 +235,7 @@ impl Workflows {
                     &format!("the retention of workflow {name:?}"),
                 )?;
             }
+            // § one pn928919v.a@gsy12
             if *retentions.entry(name).or_insert(w.retention) != w.retention {
                 return Err(Error::ConfigError(format!(
                     "the versions of workflow {name:?} give different retentions"
@@ -251,6 +253,7 @@ impl Workflows {
             .and_then(|(_, w)| w.retention)
     }
 
+    // § one pjrbw31h4@srryr
     pub(crate) fn get(&self, name: &str, version: Option<u32>) -> Option<&Untyped> {
         self.0.get(&(name.to_owned(), version))
     }
@@ -316,16 +319,19 @@ impl std::error::Error for Permanent {}
 
 /// The largest JSON encoding of a value the host hands to the core, above which it refuses it
 /// with `ValueTooLarge`: much larger values trap the core.
+// § one h8wg39cct@5xyr3
 pub(crate) const MAX_VALUE: usize = 64 * 1024 * 1024;
 
 /// A value encoded by the host, refused above `MAX_VALUE`.
 pub(crate) fn json(bytes: Vec<u8>) -> Result<layout::Value> {
+    // § one h8wg39cct@a9ba2
     if bytes.len() > MAX_VALUE {
         return Err(Error::ValueTooLarge {
             size: bytes.len(),
             limit: MAX_VALUE,
         });
     }
+    // § one e1dc4dar4@0p3jv
     Ok(layout::Value {
         kind: Some(value::Kind::Json(bytes)),
     })
@@ -383,6 +389,7 @@ fn error_kind(e: &Error) -> &'static str {
         Error::Unchecked(_) => "Unchecked",
         Error::ValueTooLarge { .. } => "ValueTooLarge",
         Error::NotInWorkflow => "NotInWorkflow",
+        Error::NotCompressible(_) => "NotCompressible",
         Error::Json(_) => "Json",
         Error::Core { .. }
         | Error::Trap(_)

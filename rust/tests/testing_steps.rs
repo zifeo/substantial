@@ -123,6 +123,7 @@ async fn a_cancel_landing_with_the_timer() {
     let from_another_pod = client.run(remind(None), other.chain());
     from_another_pod.cancel("account deleted").await.unwrap();
     env.advance(minutes(1)).await.unwrap();
+    // § vmk2ydwta.c@xba5n
     assert_eq!(own.status().await.unwrap(), RunStatus::Cancelled);
     // The cancel from another pod reaches the store first; the replay at the timer sees it.
     assert_eq!(other.status().await.unwrap(), RunStatus::Cancelled);
@@ -169,6 +170,7 @@ async fn a_redelivered_webhook_applies_once() {
             .unwrap();
     }
     env.advance(minutes(1)).await.unwrap();
+    // § r1nrgn5h8@czzka
     assert_eq!(shop.applied(), ["op-1"]);
     worker.shutdown().await.unwrap();
     done(env).await;

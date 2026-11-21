@@ -85,6 +85,7 @@ export class FaultStore implements Store {
       if (clock.dead) return never();
     }
     if (world.time.ms < world.outageUntil) throw new Transient("the store is out");
+    // § one hz0ve24df.b@09n0a
     if (clock !== undefined && world.draw(kind, key, clock)) {
       const n = clock.tries.get(`${kind} ${key}`) ?? 0;
       const applied = kind === "create" && unit(world.seed, "applied", key, clock.id, n) < 0.5;

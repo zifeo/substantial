@@ -1,6 +1,8 @@
-// The objects of layout 2, those of layout 1 unchanged (docs/interfaces.md). Every object of a namespace but its marker,
-// substantial.json, is one of these messages in protobuf binary encoding. The core alone encodes
-// them, for every host, so the bytes are the same everywhere: no map fields, whose order would vary.
+// The objects of layout 2, those of layout 1 unchanged (docs/interfaces.md). Every object of a
+// namespace but its marker, substantial.json, is one of these messages in protobuf binary encoding.
+// The core alone encodes them, for every host, so the bytes are the same everywhere: no map fields,
+// whose order would vary.
+// § sqbjc1adw.a@c0abq
 syntax = "proto3";
 
 package substantial.layout.v1;

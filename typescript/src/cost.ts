@@ -5,6 +5,7 @@ import { ConfigError, InvalidArgument, onlyOptions, ProtocolError } from "./erro
 import { layout, run } from "./proto.ts";
 
 /** The largest amount or limit, as the core counts them. */
+// § one cvnf47vy8.a@t86v9
 export const MAX: bigint = 2n ** 63n - 1n;
 
 const KINDS = ["create", "get", "list", "delete"] as const;
@@ -120,6 +121,7 @@ export class Prices implements PriceFields {
 
 /** What `attempts` requests of the store operation `op` cost at `prices`. */
 export function priceOf(prices: Prices, op: Kind, attempts: number): Amount {
+  // § vg9yp9xsf@eg5b2
   const per1000 = prices[op];
   return new Amount(prices.currency, ((per1000 + 999n) / 1000n) * BigInt(attempts));
 }
@@ -200,6 +202,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function amountsOf(value: unknown, what: string): Record<string, bigint> {
   if (!isObject(value)) throw new ProtocolError(`${what} ${JSON.stringify(value)}`);
   const out: Record<string, bigint> = {};
+  // § one hzh3dr6yh@sb015
   for (const [currency, nano] of Object.entries(value)) {
     if (typeof nano !== "string" || !/^[0-9]+$/.test(nano)) {
       throw new ProtocolError(`${what} ${JSON.stringify(value)}`);
@@ -277,6 +280,7 @@ export function effectiveBudget(
   budget: Budget | undefined,
   declared: Budget | undefined,
 ): layout.Budget | undefined {
+  // § evdz71nzb.a@55rxd
   if (budget !== undefined) return budgetProto(budget);
   if (declared !== undefined) return budgetProto(declared);
   return undefined;

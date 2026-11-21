@@ -110,8 +110,10 @@ impl World {
             time: Arc::new(Time::new(ms)),
             chaos,
             seed,
+            // § hz0ve24df@b6a1m
             core_seed: derive(seed, &[&"core"]),
             ulids: Ulids::seeded(seed),
+            // § end hz0ve24df
             faults: Mutex::default(),
             writes: AtomicU64::new(0),
             outage_until: AtomicI64::new(ms),
@@ -148,11 +150,13 @@ impl World {
     }
 
     pub(super) fn worker_id(&self, place: usize, replaced: u32) -> String {
+        // § hz0ve24df@zsbnx
         hex::encode(&derive(self.seed, &[&"worker", &place, &replaced])[..8])
     }
 
     /// The try number when Chaos faults this try of `kind` on `key` by `inc`.
     pub(super) fn draw(&self, kind: &str, key: &str, inc: &Incarnation) -> Option<u32> {
+        // § hz0ve24df.a@jsdth
         let chaos = self.chaos?;
         let n = inc.tries(kind, key, 1);
         (unit(self.seed, &[&kind, &key, &inc.id, &n]) < chaos.rate).then_some(n)

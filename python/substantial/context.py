@@ -21,7 +21,7 @@ from substantial.errors import (
     WaitTimeout,
 )
 from substantial.log import Log
-from substantial.names import check_step_name, check_str
+from substantial.names import check_name, check_step_name, check_str
 from substantial.scheduler import Receives, Shared, decode_json
 from substantial.step import call_step
 from substantial.workflow import Retry, Workflow
@@ -166,9 +166,14 @@ class Context:
             raise InvalidArgument(f"every is a positive timedelta, not {every!r}")
         if not isinstance(timeout, timedelta) or timeout < timedelta(0):
             raise InvalidArgument(f"timeout is a timedelta, not negative, not {timeout!r}")
+        # § c5kkpjdz5.a@2pafx
         deadline = await self.now() + timeout
+        # § end c5kkpjdz5.a
         while True:
+            # § c5kkpjdz5.b@vw730
             value = await self.step(name, fn, *args, retry=retry)
+            # § end c5kkpjdz5.b
+            # § c5kkpjdz5@b1k9y
             if value is not None:
                 return value
             left = deadline - await self.now()
@@ -212,15 +217,18 @@ class Context:
     def receive(self, name: str, *, timeout: timedelta | None = None) -> Awaitable[Any]:
         """The next message of `name` that no `receive` took yet; `WaitTimeout` once `timeout`
         passed with none."""
+        check_name("message name", name)
         counts = self._shared.receives.setdefault(name, Receives())
         if timeout is not None:
             millis(timeout)
             if counts.plain:
+                # § p6tzbmjaq.a@9hqjt
                 raise _both_pending(name)
             # Pending from the call, as a receive without timeout is, not from the first await.
             counts.timed += 1
             return self._receive_within(name, timeout, counts)
         if counts.timed:
+            # § p6tzbmjaq.a@h1984
             raise _both_pending(name)
         received = self._shared.future(run.Call(receive=name), decode_json)
         counts.taken += 1
@@ -239,6 +247,7 @@ class Context:
             counts.timed -= 1
 
     async def _receive_claimed(self, name: str, timeout: timedelta, counts: Receives) -> Any:
+        # § p6tzbmjaq@wh8m2
         if not counts.bound:
 
             def count(_: run.Message) -> None:
@@ -344,7 +353,10 @@ class Context:
     ) -> None:
         """Ends the run and starts the next of its chain with `input`, of `workflow` if given;
         it does not return."""
+        # § aaev3rs1q.b@8r9y6
         data = child.input_object(input)
+        # § end aaev3rs1q.b
+        # § gjnefe4w6@qt388
         if workflow is None:
             raise ContinuedAsNew(None, None, data)
         if not isinstance(workflow, Workflow):
@@ -353,4 +365,5 @@ class Context:
 
     async def cancel(self, reason: str) -> None:
         """Ends the run cancelled; it does not return."""
+        # § g039jvy6k.c@nvxyz
         raise Cancelled(check_str("a reason", reason))

@@ -14,7 +14,7 @@ import {
   StoreError,
   WaitTimeout,
 } from "./errors.ts";
-import { checkKey, checkName } from "./names.ts";
+import { checkKey, checkSentName } from "./names.ts";
 import { ObserverRaised } from "./observe.ts";
 import { outcomeOf, type runPlan } from "./plan.ts";
 import {
@@ -89,6 +89,7 @@ export interface Namespace {
 
 /** A wait follows its chain from the first run again this often, as polling one run's `result`
  * never sees that run collected (I-17). */
+// § one y025f8qen.c@9hnr2
 const REFOLLOW_MS = RETENTION_MIN.ms / 2;
 
 /** When a run was collected, from a `NoChain` or a `RunExists`. */
@@ -131,6 +132,7 @@ export interface ResultOptions {
 
 /** The longest wait between two polls of `result`, in ms. */
 export function maxIntervalMs(maxInterval: unknown): number {
+  // § one y025f8qen@v0rgp
   if (maxInterval === undefined) return 30_000;
   if (!(maxInterval instanceof Duration) || maxInterval.ms <= 0) {
     throw new InvalidArgument(`maxInterval is a positive Duration, not ${maxInterval}`);
@@ -195,16 +197,20 @@ export class Run<O = unknown> {
     const at = this.#ns.now();
     const chain = checkKey("run id", this.chain);
     const id = options.id === undefined ? undefined : checkKey("message id", options.id);
+    // § wtwx1e769@1kfrb
     const ord = this.#ns.ulid(Number(at.ms));
     const send = {
       prefix: "",
       chain,
-      name: checkName("message name", name),
+      name: checkSentName(name),
+      // § one h8wg39cct.a@6ne1r
       value: jsonValue(encodeJson(value, "the message")),
+      // § one wtwx1e769.a@wm9p6
       id: id ?? ord,
       now: at,
       ord,
     };
+    // § end wtwx1e769
     await this.#sent(create(plan.PlanInputSchema, { plan: { case: "send", value: send } }));
   }
 
@@ -213,6 +219,7 @@ export class Run<O = unknown> {
     const at = this.#ns.now();
     const chain = checkKey("run id", this.chain);
     const why = text(reason, "a reason");
+    // § wtwx1e769.c@mn8r5
     const ord = this.#ns.ulid(Number(at.ms));
     const cancel = {
       prefix: "",
@@ -222,6 +229,7 @@ export class Run<O = unknown> {
       now: at,
       ord,
     };
+    // § end wtwx1e769.c
     await this.#sent(create(plan.PlanInputSchema, { plan: { case: "cancel", value: cancel } }));
   }
 
@@ -330,21 +338,30 @@ export class Run<O = unknown> {
     const cap = maxIntervalMs(options.maxInterval);
     const deadline = timeout === undefined ? undefined : performance.now() + timeout.ms;
     const died = this.#ns.died();
+    // § y025f8qen@jr8ks
     let wait = Math.min(10, cap);
+    // § end y025f8qen
     let last: string | undefined;
     let followed = performance.now();
     for (;;) {
+      // § y025f8qen@bkh1y
+      // § one y025f8qen.c@pbaay
       if (performance.now() - followed >= this.#refollow) {
         last = undefined;
         followed = performance.now();
       }
+      // § y025f8qen.b@q31d5
       const ended = await this.#ended(last);
       if (ended.done) return ended.value as O;
+      // § end y025f8qen.b
       last = ended.run;
       const left = deadline === undefined ? Number.POSITIVE_INFINITY : deadline - performance.now();
       if (left <= 0) throw new WaitTimeout(`run ${this.chain} did not end within ${timeout}`);
       const { store } = this.#ns;
+      // § y025f8qen.d@j2dnc
       const held = Math.min(left, followed + this.#refollow - performance.now());
+      // § end y025f8qen.d
+      // § y025f8qen.a@v93c0
       const pause = delay(store.capabilities.wait ? held : Math.min(wait, left));
       // Ends the waiting listings once the race is settled, as Python cancels them.
       const settled = new AbortController();
@@ -352,6 +369,7 @@ export class Run<O = unknown> {
       if (store.capabilities.wait)
         ends.push(created(store, ended.resultKey, performance.now() + held, settled.signal));
       else wait = Math.min(wait * 2, cap);
+      // § end y025f8qen.a
       try {
         await Promise.race(ends);
       } finally {

@@ -119,8 +119,10 @@ impl Observing {
             seconds: started.elapsed().as_secs_f64(),
             attempts,
             outcome: result.as_ref().map_or("failed", outcome),
+            // § one vg9yp9xsf@hdx5e
             cost: self.prices.as_ref().map(|p| p.of(op, attempts)),
         };
+        // § yp7fv5sa7.a@8mn6n
         (self.observe)(&Observed::StoreOp(event));
         result
     }

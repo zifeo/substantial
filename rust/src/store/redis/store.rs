@@ -177,6 +177,7 @@ impl Shared {
         what: &str,
         created: bool,
     ) -> Result<(), Failure> {
+        // § htbc4k715@w2qrg
         let fault = |m: String| -> Failure {
             if created {
                 Fault::Ambiguous(m).into()
@@ -188,6 +189,7 @@ impl Shared {
             Err(Failure::Fault(Fault::Transient(e))) => return Err(fault(format!("{what}: {e}"))),
             other => other?,
         };
+        // § dfd6vt90h.e@xv9vr
         let waited: Result<Vec<i64>, _> = ::redis::cmd("WAITAOF")
             .arg(1)
             .arg(replicas)
@@ -208,6 +210,7 @@ impl Shared {
             Err(e) if answered(&e) => e.to_string(),
             Err(e) => return Err(e.into()),
         };
+        // § end dfd6vt90h.e
         if self.connector.location.replicas.is_none() {
             self.count(primary, conn).await?;
         }
@@ -236,6 +239,7 @@ impl Shared {
             counted.replicas
         };
         if replicas == 0 && self.connector.location.topology != Topology::Standalone {
+            // § htbc4k715.c@ht8t1
             return Err(Fault::Transient(format!("{} has no replica online", primary.at)).into());
         }
         Ok(replicas)
@@ -301,6 +305,7 @@ impl Shared {
         command: ::redis::Cmd,
         resolving: bool,
     ) -> Result<Value, Failure> {
+        // § htbc4k715.a@b7qf9
         let mut lease = primary.lease(&self.connector).await?;
         let (found, _): (Value, i64) = ::redis::pipe()
             .add_command(command)
@@ -358,6 +363,7 @@ impl Shared {
     }
 
     async fn remove(&self, primary: Arc<Primary>, key: &str) -> Result<(), Failure> {
+        // § htbc4k715.a@3k8s0
         let mut lease = primary.lease(&self.connector).await?;
         let _: Value = ::redis::cmd("EVALSHA")
             .arg(&DELETE.sha)
@@ -397,6 +403,7 @@ impl RedisStore {
     ) -> Result<Self> {
         retry.validate()?;
         let auth = credentials.redis()?;
+        // § htbc4k715.d@pt9bf
         let tag = format!("{{{}}}", location.namespace);
         let cluster = location.topology == Topology::Cluster;
         let channel = format!("{tag}:c");

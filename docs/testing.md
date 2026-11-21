@@ -43,7 +43,7 @@ async def test_debounce() -> None:
 
 ## Time
 
-Nothing runs between two calls of the test. Only `settle` and `advance` let workers work and the clock move:
+Nothing runs between two calls of the test. Only `settle`, `advance` and a worker's `drain` let workers work and the clock move:
 
 - `start`, `send`, `cancel`, `status` and `read` act on the store and return. As in production, a `Substantial` wakes the workers it started that serve the run's workflow at once on its own `start`, `send` and `cancel`, and every other worker finds the run at its next scan, up to `max_idle` later; the woken worker acts at the next `settle`. So two `send` calls in a row reach the run together, and `await env.settle()` between them has the run see the first before the second exists.
 - `await env.settle()` lets every worker do all it can at the current time, and returns once nothing can happen without the clock moving: every run waits on a timer, a message, its end or a held step, and no replay, step or store operation is in flight.

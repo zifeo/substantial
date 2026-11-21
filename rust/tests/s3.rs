@@ -98,6 +98,7 @@ async fn create_and_open_run_the_probe() {
         .unwrap();
     let s = internal::open(&url, env, retry()).unwrap();
     let probes = s.list("probe/", None, 10, None).await.unwrap().keys;
+    // § mgfgmd25p.b@gp5ac
     assert_eq!(probes, ["probe/exclusive"], "one probe key, kept");
 }
 

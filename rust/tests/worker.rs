@@ -4,9 +4,9 @@ mod common;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use common::{Recording, eventually, namespaces, script};
+use common::{LONG, Recording, eventually, namespaces, script};
 use substantial::__internal::{self as internal, MemoryStore, Store};
 use substantial::{Credentials, Error, Substantial, Workflow};
 
@@ -52,6 +52,43 @@ async fn a_failing_store_never_stops_the_worker() {
         .unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replay_whose_commit_keeps_failing_is_dropped_and_tried_again_once_its_claim_expired() {
+    let inner: Arc<dyn Store> = Arc::new(MemoryStore::open("worker-op-retries").unwrap());
+    let store = Recording::new(inner.clone());
+    let sub = internal::create(store.clone()).await.unwrap();
+    let run = sub.start(&workflows()[0], ()).await.unwrap();
+    store.failing_segments.store(true, Ordering::SeqCst);
+    let worker = script(&sub, workflows())
+        .set("claim_ttl", "2s")
+        .start()
+        .unwrap();
+    let claims = format!("runs/{}/claim/", run.chain());
+    let claimed = async || {
+        let created = store.created();
+        created.iter().any(|(k, _)| k.starts_with(&claims))
+    };
+    eventually("a claim", claimed).await;
+    let started = Instant::now();
+    // § t916k65mb.a@t9k68
+    eventually("the claims deleted", async || {
+        let listing = inner.list(&claims, None, 100, None).await.unwrap();
+        listing.keys.is_empty()
+    })
+    .await;
+    store.failing_segments.store(false, Ordering::SeqCst);
+    let value: i32 = run.result().timeout(LONG).await.unwrap();
+    assert_eq!(value, 1);
+    // A worker listing every 50 ms would have taken it at once had the drop freed it.
+    let retried = started.elapsed();
+    assert!(
+        retried >= Duration::from_secs(1),
+        "retried after {retried:?}"
+    );
+    // § end t916k65mb.a
+    worker.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn workers_refuse_invalid_configuration() {
     let sub = Substantial::create("memory://worker-config").await.unwrap();
@@ -86,16 +123,26 @@ async fn create_and_open_check_the_layout() {
             .credentials(Credentials::Env)
             .await;
         assert!(matches!(configured, Err(Error::ConfigError(_))));
+        // § mgfgmd25p@44ze4
         let missing = internal::open_store(store.clone()).await;
         assert!(
             matches!(missing, Err(Error::LayoutError(_))),
             "{}: open of nothing",
             ns.name
         );
+        // § end mgfgmd25p
+        // § mgfgmd25p.a@4357k
         internal::create(store.clone()).await.unwrap();
-        internal::create(store.clone()).await.unwrap();
+        let again = internal::create(store.clone()).await;
+        assert!(
+            again.is_ok(),
+            "{}: a create of this layout opens it",
+            ns.name
+        );
         internal::open_store(store.clone()).await.unwrap();
+        // § end mgfgmd25p.a
         let marker = store.get("substantial.json").await.unwrap().unwrap();
+        // § sqbjc1adw.b@pz6j7
         assert_eq!(&marker[..], br#"{"layout":2,"encoding":"protobuf"}"#);
     }
     // A namespace of the layout before, with its partitions: drained by the version that wrote

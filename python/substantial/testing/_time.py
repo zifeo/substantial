@@ -116,6 +116,7 @@ class Time:
 
     async def passing(self, owner: Owner) -> None:
         """Returns once the gate is open and `owner` not paused."""
+        # § x55x5yqy4.a@6269w
         if not self.open or owner.paused:
             done = asyncio.get_running_loop().create_future()
             done.set_result(None)
@@ -189,6 +190,7 @@ class Time:
         self, paused: Callable[[], bool], done: Callable[[], bool], what: str
     ) -> None:
         """Settles, then moves the clock from deadline to deadline until `done()`."""
+        # § x55x5yqy4.d@fg14c
         _outside()
         async with self._lock:
             await self._settle()
@@ -204,6 +206,7 @@ class Time:
         return [w.at for w in self.parked.values() if w.at is not None and not w.owner.paused]
 
     async def _move(self, target: int) -> None:
+        # § x55x5yqy4.b@7jrxb
         while self.ms < target:
             self.skip(target)
             nxt = min([target, *self._deadlines()])

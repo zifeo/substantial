@@ -65,6 +65,7 @@ async function isDir(path: string): Promise<boolean> {
 
 /** Creates the missing directories between `root` and `directory`, each fsynced in its parent. */
 async function ensureDirs(root: string, directory: string): Promise<void> {
+  // § c7pz5rk26.a@8aca1
   const missing: string[] = [];
   for (let at = directory; at !== root && !(await isDir(at)); at = dirname(at)) {
     missing.push(at);
@@ -89,6 +90,7 @@ function hex(bytes: Uint8Array): string {
 }
 
 async function createKey(root: string, key: string, data: Uint8Array): Promise<Create> {
+  // § c7pz5rk26@anr69
   checkKey(key);
   const path = join(root, ...key.split("/"));
   const tmp = join(root, TMP, hex(crypto.getRandomValues(new Uint8Array(16))));
@@ -127,6 +129,7 @@ async function createKey(root: string, key: string, data: Uint8Array): Promise<C
 const ABSENT = ["ENOENT", "EISDIR", "ENOTDIR"];
 
 async function getKey(root: string, key: string): Promise<Uint8Array | undefined> {
+  // § dfd6vt90h.a@ec0nm
   checkKey(key);
   const path = join(root, ...key.split("/"));
   try {
@@ -138,6 +141,7 @@ async function getKey(root: string, key: string): Promise<Uint8Array | undefined
 }
 
 async function deleteKey(root: string, key: string): Promise<void> {
+  // § dfd6vt90h.d@45nvx
   checkKey(key);
   const path = join(root, ...key.split("/"));
   try {

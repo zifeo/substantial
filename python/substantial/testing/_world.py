@@ -78,8 +78,10 @@ class World:
         self.chaos = chaos
         self.seed = 0 if chaos is None else chaos.seed
         # One core seed for every worker: a run's random then depends on the run alone.
+        # § hz0ve24df@pnc9c
         self.core_seed = derive(self.seed, "core")
         self.ulids = Ulids(lambda ms: int.from_bytes(derive(self.seed, "ulid", ms)[:10]))
+        # § end hz0ve24df
         self.counts = Faults()
         self.writes = 0
         self.outage_until = ms
@@ -131,6 +133,7 @@ class World:
         self.errors.append(error)
 
     def worker_id(self, place: int, replaced: int) -> str:
+        # § hz0ve24df@kc8a9
         return derive(self.seed, "worker", place, replaced).hex()[:16]
 
     def draw(self, kind: str, key: str, clock: WorkerClock) -> bool:
@@ -143,6 +146,7 @@ class World:
     def _faults(self, kind: str, key: str, clock: WorkerClock, n: int) -> bool:
         """Whether Chaos faults the `n`th try of `kind` on `key` by the worker of `clock`."""
         assert self.chaos is not None
+        # § one hz0ve24df.a@0yxte
         return unit(self.seed, kind, key, clock.id, n) < self.chaos.rate
 
     def _succeeding(self, clock: WorkerClock, scans: int) -> int:

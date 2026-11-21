@@ -40,6 +40,7 @@ export interface RedisLocation {
 }
 
 export function parseRedisUrl(url: string): RedisLocation {
+  // § e9ern38bz.b@bgrmz
   const invalid = (why: string) => new ConfigError(`${url}: ${why}`);
   const at = url.indexOf("://");
   const scheme = at < 0 ? undefined : SCHEMES[url.slice(0, at)];
@@ -107,6 +108,7 @@ function replicasOf(
 ): number | "all" {
   if (value === "all") return "all";
   // Sentinel and Cluster promote a replica on failover: a create one of them misses is lost.
+  // § one htbc4k715.c@cwjrq
   if (topology !== "standalone") {
     throw invalid("replicas is all on Sentinel and Cluster, so a failover keeps every create");
   }

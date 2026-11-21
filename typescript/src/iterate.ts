@@ -32,6 +32,7 @@ function encodeState(state: unknown, error: (message: string) => Error): Uint8Ar
 
 /** The chain's input, which each run of a loop starts with. */
 function chainInput(shared: Shared): Uint8Array {
+  // § hy3f1z5jj.b@6ddtn
   const input = shared.start.input;
   return input?.kind.case === "json" ? input.kind.value : encoder.encode("{}");
 }
@@ -69,7 +70,9 @@ export class Iteration<S extends object> implements AsyncIterableIterator<S> {
       return { value: this.#state, done: false };
     }
     if (shouldContinueAsNew(shared)) {
+      // § hy3f1z5jj.a@q6kyt
       const state = encodeState(this.#state, (m) => new NotCompressible(m));
+      // § one hy3f1z5jj.b@wz17z
       throw new ContinuedAsNew(undefined, undefined, chainInput(shared), state);
     }
     return { value: this.#state, done: false };

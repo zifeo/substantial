@@ -110,6 +110,7 @@ async fn a_waiting_run_is_cancelled() {
             run.status().await.unwrap() == RunStatus::Suspended
         })
         .await;
+        // § vmk2ydwta@qtemj
         run.cancel("not needed").await.unwrap();
         match run.result().timeout(LONG).await {
             Err(Error::RunFailed {
@@ -122,6 +123,7 @@ async fn a_waiting_run_is_cancelled() {
             other => panic!("{}: {other:?}", ns.name),
         }
         assert_eq!(run.status().await.unwrap(), RunStatus::Cancelled);
+        // § end vmk2ydwta
         worker.shutdown().await.unwrap();
     }
 }
@@ -261,8 +263,104 @@ async fn a_message_no_handler_can_decode_fails_the_run() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_handler_that_panics_fails_the_run() {
+    let refusing = Workflow::without_input("refusing", |c| async move {
+        c.handle("n", |n: u32| assert!(n < 10, "{n} is too large"))?;
+        c.receive::<()>("never").await
+    });
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let worker = script(&sub, &refusing).start().unwrap();
+        let run = sub.start(&refusing, ()).await.unwrap();
+        run.send("n", 99).await.unwrap();
+        match run.result().timeout(LONG).await {
+            Err(Error::RunFailed {
+                status: RunStatus::Failed,
+                error,
+                ..
+            }) => {
+                assert_eq!(error.kind, "MessageDecode", "{}: {error}", ns.name);
+                assert!(
+                    error.message.contains("99 is too large"),
+                    "{}: {error}",
+                    ns.name
+                );
+            }
+            other => panic!("{}: {other:?}", ns.name),
+        }
+        worker.shutdown().await.unwrap();
+    }
+}
+
 fn invalid<T: std::fmt::Debug>(r: Result<T>) -> bool {
     matches!(r, Err(Error::InvalidArgument(_)))
+}
+
+#[derive(serde::Deserialize)]
+struct Pick {
+    i: usize,
+}
+
+/// A number JSON cannot hold as it is: a NaN, an infinity, or an integer a double rounds.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug)]
+#[serde(untagged)]
+enum Bad {
+    Float(f64),
+    Integer(i64),
+}
+
+const NOT_JSON: [Bad; 5] = [
+    Bad::Float(f64::NAN),
+    Bad::Float(f64::INFINITY),
+    Bad::Float(f64::NEG_INFINITY),
+    Bad::Integer(1 << 53),
+    Bad::Integer(-(1 << 53)),
+];
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_value_json_cannot_hold_is_refused_never_written_as_another() {
+    let holding = Workflow::new("holding", |c: Context, pick: Pick| async move {
+        let bad = vec![NOT_JSON[pick.i]];
+        let published = c.publish("k", &bad);
+        if !matches!(&published, Err(Error::InvalidArgument(m)) if m.contains("is not JSON")) {
+            return Err(Error::InvalidArgument(format!("published: {published:?}")));
+        }
+        let value = bad.clone();
+        let stepped = c
+            .step("value", move || {
+                let value = value.clone();
+                async move { Ok::<_, Error>(value) }
+            })
+            .await;
+        match stepped {
+            Err(Error::StepFailed { cause, .. }) if cause.kind == "Json" => Ok(bad),
+            other => Err(Error::InvalidArgument(format!("stepped: {other:?}"))),
+        }
+    });
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let worker = script(&sub, &holding).start().unwrap();
+        for (i, x) in NOT_JSON.into_iter().enumerate() {
+            let run = sub
+                .start(&holding, serde_json::json!({"i": i}))
+                .await
+                .unwrap();
+            let sent = run.send("note", [x]).await;
+            assert!(
+                matches!(&sent, Err(Error::InvalidArgument(m)) if m.contains("is not JSON")),
+                "{}: {sent:?}",
+                ns.name
+            );
+            match run.result().timeout(LONG).await {
+                Err(Error::RunFailed { error, .. }) => {
+                    assert_eq!(error.kind, "Json", "{}: {x:?}: {error}", ns.name);
+                }
+                other => panic!("{}: {x:?}: {other:?}", ns.name),
+            }
+        }
+        worker.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -342,9 +440,30 @@ async fn a_step_name_outside_the_rules_fails_the_run() {
             ..
         }) => {
             assert_eq!(error.kind, "InvalidArgument", "{error}");
+            assert!(
+                error.message.contains("must match [A-Za-z0-9._-]{1,128}"),
+                "{error}"
+            );
         }
         other => panic!("{other:?}"),
     }
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn receive_and_handle_refuse_a_name_outside_the_rules_stating_the_rule() {
+    let names = Workflow::without_input("names", |c| async move {
+        let rule = |r: Result<()>| matches!(r, Err(Error::InvalidArgument(m)) if m.contains("must match [A-Za-z0-9._-]{1,128}"));
+        let received = c.receive::<()>("a note").await;
+        let handled = c.handle("a note", |_: serde_json::Value| {});
+        Ok((rule(received), rule(handled)))
+    });
+    let ns = namespaces().remove(0);
+    let sub = internal::create(ns.store).await.unwrap();
+    let worker = script(&sub, &names).start().unwrap();
+    let run = sub.start(&names, ()).await.unwrap();
+    let refused: (bool, bool) = run.result().timeout(LONG).await.unwrap();
+    assert_eq!(refused, (true, true));
     worker.shutdown().await.unwrap();
 }
 
@@ -376,6 +495,7 @@ async fn a_cancel_reaches_a_run_looping_on_steps() {
         let worker = script(&sub, w.clone()).start().unwrap();
         let run = sub.start(&w, ()).await.unwrap();
         eventually("a few steps", async || ticks.load(Ordering::Relaxed) > 2).await;
+        // § vmk2ydwta.a@sy3q2
         run.cancel("stop looping").await.unwrap();
         match run.result().timeout(LONG).await {
             Err(Error::RunFailed {

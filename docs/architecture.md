@@ -114,7 +114,7 @@ What every verb does to the store, how many round trips it waits for, what happe
 - **`runs`** lists the workflow's `due/` and `rest/` prefixes, one listing per 1,000 keys each, and gets the `start` of each run once; a run waiting on messages alone, found by its marker, gets its `result` first. Its pages come as the iteration goes, so stopping early costs less.
 - **`history`** reads what a wakeup of the last run reads: its latest snapshot and the segments after it, at most 63 with `snapshot_every` 64, plus 1 GET of its `start` when it has no snapshot; a retry without a snapshot of its own reads the failed run too.
 - **`read`** lists every value ever published under the key by the chain, kept as long as the chain: one listing per 1,000 values, then one get.
-- **A client in another process** than the worker is seen at the worker's next listing, within `max_idle`; in the same process it wakes the workers serving the run's workflow at once, without a request, and they list that workflow alone.
+- **A client in another process** than the worker, or through another `Substantial`, is seen at the worker's next listing, within `max_idle`; through the worker's own `Substantial` it wakes the workers serving the run's workflow at once, without a request, and they list that workflow alone.
 
 ## Workers
 
@@ -130,7 +130,8 @@ A worker scans:
 | a wakeup it saw comes due (a timer, a retry) | one at that time; a collection entry sets no timer, the next scan serves it |
 | a replay ends | only if a scan saw an entry of the run the replay did not serve, the worker was full on a store that waits, or the replay created an entry due now (a child, a message, a continuation); otherwise the timer comes forward to the entry its suspension created |
 | it skipped a run held by another worker's live claim | one more at once, once it let the run go |
-| a start or send in its own process | a listing of the run's workflow alone, at once |
+| a due run of a version it does not serve stays due | one every half `claim_ttl`, and a get of the run every `claim_ttl`, whatever `max_idle`, while it stays due: measured on the test environment, 240 listings and 120 gets an hour at the default `claim_ttl` |
+| a start or send through its own `Substantial` | a listing of the run's workflow alone, at once |
 
 A workflow's entries are listed past a full page (`due_page` keys) of entries all due that the worker cannot take (runs held by other workers, versions it does not serve), in rounds of up to `due_pages` pages, to their end or their first entry not yet due. A page is walked past only when all its entries were due when it was listed. With `S` skipped entries at the head of a workflow's entries, a scan of it costs about `S / due_page` listings, and each skipped run is read again (its `start`, and its claims if held) about once per `claim_ttl`. Runs of a version no worker serves cause this: give every version with runs left a worker.
 
@@ -276,7 +277,7 @@ Every create is exclusive, so doing an operation twice does it once. What a fail
 |---|---|---|
 | any operation fails | the adapter retries it, `store_retry`: 5 attempts, backoff from 100 ms to 5 s; S3 requests time out after 5 s to connect and 60 s per attempt | I-26 |
 | a create with no answer (timeout, 5xx, lost connection) | the adapter gets the key: the same bytes mean created, other bytes exist, missing means create again; 1 more GET per ambiguous attempt | I-26 |
-| an operation still failing in a worker | the core reissues it up to 5 times (`OP_RETRIES`), each with the adapter's retries, then drops the replay and deletes its claims; the due entry stays, the run is tried again after `claim_ttl` | I-20 `StoreError` |
+| an operation still failing in a worker | the core reissues it up to 5 times (`OP_RETRIES`), each with the adapter's retries, then drops the replay and deletes its claims; the due entry stays, yet the run is tried again only once `claim_ttl` passed since its claim, not at the next scan | I-20 `StoreError` |
 | an operation still failing in a client | `StoreError`; a `start` or `send` retried with the same id creates once | I-17, I-9 |
 | a client crashes after `start` before its due entry | the run waits; starting it again with the same id completes it (the 3-operation row) | I-17 |
 | a client crashes after a message's inbox key, before its due entry | the message waits for the run's next wakeup, which reads the whole inbox; resent with the same id, it is delivered once | I-9 |
@@ -287,8 +288,10 @@ Every create is exclusive, so doing an operation twice does it once. What a fail
 | a worker crashes after the effects, before its deletes | leftover due entries and claims: one wakeup that finds nothing new (6 operations and up) and deletes them | I-26 |
 | two workers commit the same segment | one create of `log/<n>` wins; the other deletes its claims, reads the run again, creates the winner's effects if missing, and replays; its steps ran once more than recorded | I-1, I-2 |
 | a step hangs | renewals keep the claim, 1 PUT and 1 DELETE every 15 s, until its attempt times out: the step's `timeout`, else `step_timeout`, 5 min by default | I-18 |
-| a worker crashes mid-collection | the served entry is deleted last: the next scan collects again, finding fewer keys; a first run's `gone` holds its `until`, so the tombstone keeps its time | I-16 |
 | shutdown | no new replay; steps in flight may commit within `shutdown_grace`; runs left keep their due entries | I-18 |
+
+A worker that crashes mid-collection leaves the served entry, which it deletes last, so the next scan collects again and finds fewer keys (I-16).
+A first run's `gone` holds its `until`, so a collector's crash leaves the tombstone its time.
 
 ## Settings that drive cost
 
@@ -406,7 +409,7 @@ Start, wait for a payment message, 2 steps, done; 100,000 orders a month, each c
 
 ## Storage
 
-A run's keys are deleted at its collection, its `retention` after its chain ends, 30 days by default (I-16); a collected chain leaves `gone`, 9 bytes, for 7 more days. Never delete keys under a namespace, by hand or with an S3 lifecycle rule: runs still going read keys of runs that ended (I-16). Hints (due entries, claims, consumed inbox keys) are deleted as they are used; the probe is one empty key per namespace. Values are stored inline in the history (I-15), so their size adds directly.
+A run's keys are deleted at its collection, its `retention` after it ends, 30 days by default (I-16); a collected chain leaves `gone`, 9 bytes, for 7 more days. Never delete keys under a namespace, by hand or with an S3 lifecycle rule: runs still going read keys of runs that ended (I-16). Hints (due entries, claims, consumed inbox keys) are deleted as they are used; the probe is one empty key per namespace. Values are stored inline in the history (I-15), so their size adds directly.
 
 Measured with small values (an integer per step, an empty input):
 
@@ -436,6 +439,7 @@ Measured with small values (an integer per step, an empty input):
 A Redis store performs the operations of every table above, each answer waiting for fsyncs on the primary and its replicas: its commands, latency, memory and failovers are in [Redis stores](redis.md).
 
 ## Keeping this document true
+
 
 `rust/tests/costs.rs` runs every row of this document against a store that counts operations by kind and measures round trips from their timing, and asserts the numbers above. A change of the core or of a host that changes a count fails it.
 

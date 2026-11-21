@@ -22,6 +22,7 @@ class StoreRetry:
 
 
 # The policy of every adapter (I-26).
+# § one zemxe46k3@4ahm3
 STORE_RETRY = StoreRetry(attempts=5, initial=timedelta(milliseconds=100), max=timedelta(seconds=5))
 
 
@@ -54,6 +55,7 @@ class _Backoff:
 
     async def next(self, error: str, *, sleep: bool) -> None:
         """Waits before the next attempt, or fails once every attempt is spent."""
+        # § zemxe46k3@5m0qy
         if self.attempt >= self.policy.attempts:
             unit = "attempt" if self.attempt == 1 else "attempts"
             raise StoreFailure(f"{error} (after {self.attempt} {unit})")
@@ -66,6 +68,7 @@ class _Backoff:
 async def with_retry[T](
     policy: StoreRetry, op: Callable[[], Awaitable[T]], sleep: Sleep = asyncio.sleep
 ) -> T:
+    # § zemxe46k3@g92z6
     backoff = _Backoff(policy, sleep)
     while True:
         sent()
@@ -86,6 +89,7 @@ async def create(
 ) -> Create:
     """A create that never assumes it won or lost: an ambiguous outcome is followed by a `get`,
     the same bytes meaning "created", other bytes "exists", and a missing key creating again."""
+    # § pnvmmdmz4@rwe8j
     backoff = _Backoff(policy, sleep)
     ambiguous = False
     # An earlier attempt left unanswered may have landed after the get, so a later "exists" is
@@ -117,6 +121,7 @@ async def create(
             await backoff.next(str(e), sleep=False)
             continue
         if outcome == "exists" and was_ambiguous:
+            # § pnvmmdmz4.a@8eaqs
             ambiguous = True
             await backoff.next("exists after an ambiguous create", sleep=False)
             continue

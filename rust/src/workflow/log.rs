@@ -14,6 +14,7 @@ pub struct Log {
 macro_rules! level {
     ($name:ident, $level:ident) => {
         pub fn $name(&self, message: impl Display) {
+            // § k3zma9hjs.b@g9srp
             if self.shared.live() {
                 tracing::$level!(run = self.shared.run(), "{message}");
             }

@@ -31,6 +31,7 @@ impl Context {
         Poll {
             ctx: self.clone(),
             attempt: Arc::new(move |c: &Context| {
+                // § c5kkpjdz5.b@zdqgw
                 let f = f.clone();
                 c.step(&name, move || f())
             }),
@@ -87,8 +88,11 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Poll<T> {
                 Error::InvalidArgument("timeout is a duration, not missing".into())
             })?;
             let c = self.ctx;
+            // § c5kkpjdz5.a@2g71x
             let deadline = c.now().await? + timeout;
+            // § end c5kkpjdz5.a
             loop {
+                // § c5kkpjdz5.b@5nr5c
                 let mut attempt = (self.attempt)(&c);
                 if let Some(retry) = self.retry {
                     attempt = attempt.retry(retry);
@@ -96,6 +100,8 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Poll<T> {
                 if let Some(value) = attempt.await? {
                     return Ok(Some(value));
                 }
+                // § end c5kkpjdz5.b
+                // § c5kkpjdz5@gn8rv
                 let left = deadline - c.now().await?;
                 // A negative left is not a std duration: the timeout passed.
                 let Ok(left) = left.to_std() else {

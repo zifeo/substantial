@@ -239,6 +239,58 @@ async fn sub_schedule_does_nothing_twice_and_refuses_a_stale_or_another_config()
 }
 
 #[tokio::test]
+async fn a_malformed_schedule_message_fails_the_run() {
+    let (env, f) = env().await;
+    let wf = ticker(&f);
+    let run = env.schedule(&wf, "tick", hourly(), 1).await.unwrap();
+    run.send(
+        "schedule",
+        serde_json::json!({"revision": 2, "cron": "0 * * * *"}),
+    )
+    .await
+    .unwrap();
+    let worker = service(&env, &wf);
+    env.settle().await.unwrap();
+    worker.shutdown().await.unwrap();
+    match run.result().await {
+        Err(Error::RunFailed { error, .. }) => {
+            assert_eq!(error.kind, "InvalidArgument", "{error}");
+            assert!(
+                error
+                    .message
+                    .contains("a schedule message is a config of sub.schedule"),
+                "{error}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    done(env).await;
+}
+
+#[tokio::test]
+async fn two_configs_of_one_revision_fail_the_run() {
+    let (env, f) = env().await;
+    let wf = ticker(&f);
+    env.schedule(&wf, "tick", hourly(), 1).await.unwrap();
+    let half = Cron::new("30 * * * *", "UTC").unwrap();
+    let run = env.schedule(&wf, "tick", Some(half), 1).await.unwrap();
+    let worker = service(&env, &wf);
+    env.settle().await.unwrap();
+    worker.shutdown().await.unwrap();
+    match run.result().await {
+        Err(Error::RunFailed { error, .. }) => {
+            assert_eq!(error.kind, "ConfigError", "{error}");
+            assert!(
+                error.message.contains("revision 1 came with two configs"),
+                "{error}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    done(env).await;
+}
+
+#[tokio::test]
 async fn none_disables_a_schedule_and_a_new_cron_fires_from_when_it_applies() {
     let (env, f) = env().await;
     let wf = ticker(&f);
