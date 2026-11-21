@@ -36,6 +36,7 @@ pub fn step(args: TokenStream, item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn guest_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § b4j0mc19d@wjekw
     guest::workflow(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -45,6 +46,7 @@ pub fn guest_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro_attribute]
 pub fn guest_step(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § b4j0mc19d@0qatr
     guest::step(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
@@ -54,6 +56,7 @@ pub fn guest_step(args: TokenStream, item: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn guest_export(item: TokenStream) -> TokenStream {
+    // § b4j0mc19d@1ykqy
     guest::export(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()

@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 
 pub use crate::__bindings::exports::substantial::guest::workflow::{End, StepError};
 use crate::__bindings::substantial::guest::panics;
-use crate::context::WorkflowContext;
+use crate::context::Context;
 use crate::error::{Error, Permanent, Result};
 use crate::executor::block_on;
 
@@ -30,8 +30,8 @@ pub trait Workflow {
 }
 
 /// The context of the workflow code being run, for the steps declared with `#[step]`.
-pub fn current_context() -> Result<WorkflowContext> {
-    Ok(WorkflowContext::new())
+pub fn current_context() -> Result<Context> {
+    Ok(Context::new())
 }
 
 /// Hands the host a panic's message before the guest traps, for the failure of its trap.
@@ -45,13 +45,13 @@ pub fn run_workflow<I, O, F, Fut>(input: String, f: F) -> std::result::Result<St
 where
     I: DeserializeOwned,
     O: Serialize,
-    F: FnOnce(WorkflowContext, I) -> Fut,
+    F: FnOnce(Context, I) -> Fut,
     Fut: Future<Output = Result<O>>,
 {
     report_panics();
     let ran = serde_json::from_str::<I>(&input)
         .map_err(Error::from)
-        .and_then(|input| block_on(f(WorkflowContext::new(), input)))
+        .and_then(|input| block_on(f(Context::new(), input)))
         .and_then(|output| Ok(serde_json::to_string(&output)?));
     ran.map_err(Error::end)
 }
@@ -60,7 +60,7 @@ where
 pub fn run_without_input<O, F, Fut>(input: String, f: F) -> std::result::Result<String, End>
 where
     O: Serialize,
-    F: FnOnce(WorkflowContext) -> Fut,
+    F: FnOnce(Context) -> Fut,
     Fut: Future<Output = Result<O>>,
 {
     run_workflow(input, |c, _: serde::de::IgnoredAny| f(c))
@@ -117,13 +117,13 @@ pub fn run_step(
     args: String,
 ) -> std::result::Result<String, StepError> {
     report_panics();
-    // § sfd6dmd7t.a@2cd65
+    // § .:sfd6dmd7t.a@2cd65
     let Some(entry) = steps.iter().find(|s| s.name == name) else {
         return Err(StepError {
             message: format!("this guest exports no step {name:?}: list it in export!"),
             permanent: true,
         });
     };
-    // § end sfd6dmd7t.a
+    // § end .:sfd6dmd7t.a
     block_on((entry.attempt)(args))
 }

@@ -46,14 +46,11 @@ pub mod __bindings {
 #[doc(hidden)]
 pub use wit_bindgen as __wit_bindgen;
 
-// § one b4j0mc19d@q3kd3
-pub use context::{Log, Receive, SendFromWorkflow, Step, WorkflowContext as Context};
+// § one .:b4j0mc19d@ht18y
+pub use context::{Context, Log, Receive, SendFromWorkflow, Step};
 pub use error::{Error, Failure, Permanent, Raised, Result};
-// § one b4j0mc19d@sc2mj
-pub use durations::{
-    duration_days as days, duration_hours as hours, duration_minutes as minutes,
-    duration_seconds as seconds,
-};
+// § one .:b4j0mc19d@m31at
+pub use durations::{days, hours, minutes, seconds};
 pub use substantial_macros::{
     guest_export as export, guest_step as step, guest_workflow as workflow,
 };

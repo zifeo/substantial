@@ -19,13 +19,13 @@ type LocalFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 /// What workflow code calls, `s::Context` as in the Rust host: each verb a call of the host,
 /// recorded in the run's history.
 #[derive(Clone)]
-pub struct WorkflowContext {
+pub struct Context {
     /// The run's logger, muted while a replay walks the recorded history.
     pub log: Log,
     chain: Rc<str>,
 }
 
-impl WorkflowContext {
+impl Context {
     pub(crate) fn new() -> Self {
         Self {
             log: Log(()),

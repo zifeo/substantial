@@ -188,7 +188,9 @@ pub fn step(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
         #vis fn #ident(#(#args: #types),*) -> impl ::core::future::Future<
             Output = ::substantial_guest::Result<#output>,
         > + use<> {
+            // § sfd6dmd7t.a@fv0rw
             let __args = ::substantial_guest::__macro::encode_arguments(&(#(&#args,)*));
+            // § end sfd6dmd7t.a
             async move {
                 ::substantial_guest::__macro::current_context()?
                     .__step::<#output>(#name, __args)

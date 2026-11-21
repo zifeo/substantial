@@ -1,18 +1,18 @@
 use std::time::Duration;
 
-pub const fn duration_seconds(n: u64) -> Duration {
+pub const fn seconds(n: u64) -> Duration {
     Duration::from_secs(n)
 }
 
-pub const fn duration_minutes(n: u64) -> Duration {
+pub const fn minutes(n: u64) -> Duration {
     Duration::from_secs(n * 60)
 }
 
-pub const fn duration_hours(n: u64) -> Duration {
+pub const fn hours(n: u64) -> Duration {
     Duration::from_secs(n * 3600)
 }
 
-pub const fn duration_days(n: u64) -> Duration {
+pub const fn days(n: u64) -> Duration {
     Duration::from_secs(n * 86_400)
 }
 

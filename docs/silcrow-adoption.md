@@ -4,7 +4,9 @@ This tree adopts [Silcrow](https://github.com/zifeo/silcrow): the decisions of S
 
 ## Layout
 
-One Silcrow project, declared in `AGENTS.md` with `decisions="docs/decisions/**/*.md"`, `code="**/*"` and `docs=""`.
+The root Silcrow project, declared in `AGENTS.md` with `decisions="docs/decisions/**/*.md"`, `code="**/*"` and `docs=""`.
+
+The Rust guest SDK, `rust/guest`, is a project of its own with the same block and no notes. A pin reads every declaration of its project, so the SDK, which offers the Rust host's API under the same names (`Context`, `seconds`), would otherwise make the host's pins drift. Its code marks the root's laws qualified with `.:`, which pays no duty: the root's own markers, at the guest macros of `rust/macros` and at the runner, pay it.
 
 | Notes | Laws | Carried by |
 |---|---|---|

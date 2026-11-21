@@ -33,11 +33,11 @@ impl Future for Calling {
     type Output = Result<String, wit::Raised>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // § em5h7z7cg.a@pjrvw
+        // § .:em5h7z7cg.a@pjrvw
         if let Some(make) = self.make.take() {
             self.call = Some(Rc::new(make()));
         }
-        // § end em5h7z7cg.a
+        // § end .:em5h7z7cg.a
         let call = self.call.clone().expect("a call polled after it ended");
         match call.take() {
             Some(ended) => {
@@ -71,10 +71,10 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
             "the code awaits something other than a call of its context, which nothing would end"
         );
         let calls: Vec<&wit::Call> = pending.iter().map(|(call, _)| &**call).collect();
-        // § em5h7z7cg@e4fb4
+        // § .:em5h7z7cg@e4fb4
         for i in wit::wait(&calls) {
             pending[i as usize].1.wake_by_ref();
         }
-        // § end em5h7z7cg
+        // § end .:em5h7z7cg
     }
 }
