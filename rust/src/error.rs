@@ -39,6 +39,7 @@ fn version_hint(error: &Failure) -> String {
 /// JSON object of details the core records with the failures it makes, else `None`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
+    // § r3sd261h4@ze1w6
     pub kind: String,
     pub message: String,
     pub retryable: bool,
@@ -85,6 +86,7 @@ impl From<Failure> for layout::Failure {
     }
 }
 
+// § rabbgjpb2@n6h6h
 /// The errors of I-20 the host raises so far, and the host's own failures around the core.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -97,6 +99,7 @@ pub enum Error {
     /// [`Error::failed`], or an `anyhow::Error` through `?`.
     #[error("{0}")]
     Failed(Failure),
+    // § b7wsejcvb@js60p
     #[error("cancelled: {0}")]
     Cancelled(String),
     /// The undos of a rollback ran; the run ends failed with this reason.
@@ -108,6 +111,7 @@ pub enum Error {
     /// Control flow of `continue_as_new` and `iterate`: returned from the workflow, never handled.
     #[error("continued as new")]
     ContinuedAsNew(Continuation),
+    // § end b7wsejcvb
     #[error("non-determinism: {0}")]
     NonDeterminism(String),
     #[error("run {run} has ended, {status}")]
@@ -164,6 +168,9 @@ pub enum Error {
     /// result, a message, a published value, a loop state.
     #[error("a value of {size} bytes is over the limit of {limit} bytes")]
     ValueTooLarge { size: usize, limit: usize },
+    /// The state of an `iterate` loop does not serialize to JSON at a compression.
+    #[error("not compressible: {0}")]
+    NotCompressible(String),
     /// A step declared with `#[step]` was called outside a workflow.
     #[error("a declared step was called outside a workflow")]
     NotInWorkflow,
@@ -191,6 +198,7 @@ pub enum Error {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
+// § end rabbgjpb2
 
 impl Error {
     /// The same error, for each wait a dead worker fails; an I/O or JSON error keeps its message.
@@ -261,6 +269,7 @@ impl Error {
                 limit: *limit,
             },
             Error::NotInWorkflow => Error::NotInWorkflow,
+            Error::NotCompressible(m) => Error::NotCompressible(m.clone()),
             Error::StoreError(m) => Error::StoreError(m.clone()),
             Error::LayoutError(m) => Error::LayoutError(m.clone()),
             Error::ConfigError(m) => Error::ConfigError(m.clone()),
@@ -291,6 +300,7 @@ impl Error {
 /// any other fails the run as `Error` with its message and causes.
 impl From<anyhow::Error> for Error {
     fn from(e: anyhow::Error) -> Self {
+        // § r3sd261h4.c@346pf
         match e.downcast::<Error>() {
             Ok(e) => e,
             Err(e) => Error::failed("Error", format!("{e:#}")),
@@ -502,6 +512,7 @@ pub(crate) fn run_failed_cause(
     kind: &str,
     details: Option<serde_json::Value>,
 ) -> Result<Option<Box<Failure>>> {
+    // § r3sd261h4.a@p3wxa
     if kind != "StepFailed" {
         return Ok(None);
     }

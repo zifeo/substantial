@@ -178,6 +178,7 @@ class Env(_Client):
     async def _opened_env(cls, ms: int, chaos: Chaos | None, metering: Metering) -> Env:
         world = World(f"testing-{secrets.token_hex(8)}", ms, chaos, metering)
         store = world.store(None)
+        # § bsw9tpftr@fbjpy
         env = await cls._create(store, prices=metering.prices, observe=metering.observe)
         assert isinstance(env, Env)
         env._attach(world)

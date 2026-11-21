@@ -58,6 +58,7 @@ class WorkerClock(Clock):
             self.scan_keys.add(key)
 
     def now(self) -> layout.Time:
+        # § x55x5yqy4.c@gzw2b
         return layout.Time(ms=self.world.time.ms)
 
     def elapsed(self) -> int:
@@ -229,9 +230,11 @@ class EnvWorker(Worker):
         world.check_loop()
         if self._crashed:
             raise RuntimeError(f"worker {self._id} crashed")
+        # § cjtegwkna@qm9ca
         if self._task is None:
             self._start()
         self._drain_until = world.time.ms + millis(within)
+        # § end cjtegwkna
         self._events.put_nowait(("drain", self._drain_until))
         # A worker Chaos replaces drains in its place: `_start` tells the new one.
         await world.time.until_done(

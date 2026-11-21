@@ -10,6 +10,7 @@ from typing import Any
 
 from substantial._proto import run
 from substantial.errors import Failed, Failure, InvalidArgument
+from substantial.names import check_name
 from substantial.scheduler import Shared, decode_json
 
 _JSON_TYPES = (int, float, str, bool, list, dict, type(None))
@@ -54,6 +55,7 @@ def _parameter(fn: Callable[..., Any]) -> tuple[type, ...] | None:
     ]
     if len(params) != 1:
         raise InvalidArgument(f"a handler takes one argument, the message's value: {fn!r}")
+    # § one aeby9bgqd.b@53hc1
     if inspect.iscoroutinefunction(fn):
         raise InvalidArgument(f"a handler is a plain function, not async: {fn!r}")
     return _accepted(params[0].annotation, repr(fn))
@@ -76,6 +78,7 @@ def _handler(fn: Callable[[Any], object]) -> Callable[[run.Message], None]:
     accepted = _parameter(fn)
 
     def handle(m: run.Message) -> None:
+        # § aeby9bgqd.a@6n531
         try:
             value = decode_json(m.value if m.HasField("value") else None)
         except ValueError as e:
@@ -84,9 +87,15 @@ def _handler(fn: Callable[[Any], object]) -> Callable[[run.Message], None]:
             names = ", ".join(t.__name__ for t in accepted)
             raise _decode_failure(m, f"{value!r} is not of {names}")
         try:
-            fn(value)
+            returned = fn(value)
         except Exception as e:
             raise _decode_failure(m, f"{type(e).__name__}: {e}") from None
+        # § aeby9bgqd.c@snhyn
+        if inspect.isawaitable(returned):
+            if inspect.iscoroutine(returned):
+                returned.close()
+            raise _decode_failure(m, "a handler returned an awaitable")
+        # § end aeby9bgqd.c
 
     return handle
 
@@ -95,7 +104,6 @@ def handle(shared: Shared, handlers: Mapping[str, Callable[[Any], object]]) -> N
     """Binds every handler of `handlers` at once, so that the past messages of their names come in
     the order they arrived."""
     for name in handlers:
-        if not isinstance(name, str):
-            raise InvalidArgument(f"a message name is a string, not {name!r}")
+        check_name("message name", name)
     by_name = {name: _handler(fn) for name, fn in handlers.items()}
     shared.bind(list(by_name), lambda m: by_name[m.name](m))

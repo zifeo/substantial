@@ -16,10 +16,12 @@ class Failure:
     """A failure as recorded in a history: a type name, a message, whether a retry may help, and
     the JSON object of details the core records with the failures it makes, else None."""
 
+    # § r3sd261h4@8388n
     type: str
     message: str
     retryable: bool = False
     details: dict[str, Any] | None = field(default=None, hash=False)
+    # § end r3sd261h4
 
     def __str__(self) -> str:
         return f"{self.type}: {self.message}"
@@ -46,13 +48,15 @@ def _object(type_: str, details: Any) -> dict[str, Any] | None:
     raise ProtocolError(f"{type_} with details {details!r}, not an object")
 
 
+# § rabbgjpb2@0tat7
 class SubstantialError(Exception):
     """The base of every error Substantial raises, control flow excepted."""
 
 
 class StepFailed(SubstantialError):
     """A step had no attempt left, or failed with a permanent error; `cause` is the last
-    attempt's failure, such as `StepTimeout`, `ValueTooLarge` or the type of the code's error."""
+    attempt's failure, such as `StepTimeout`, `ValueTooLarge`, `Json` for a value that does not
+    encode, or the type of the code's error."""
 
     def __init__(self, failure: Failure, cause: Failure) -> None:
         super().__init__(failure.message)
@@ -71,6 +75,7 @@ class Failed(SubstantialError):
         self.failure = failure
 
 
+# § b7wsejcvb.a@w838p
 class Control(BaseException):
     """Control flow of Substantial: catch it by name only, never with a bare `except:`."""
 
@@ -106,6 +111,7 @@ class ContinuedAsNew(Control):
         self.version = version
         self.input = input
         self.state = state
+        # § end b7wsejcvb.a
 
 
 class UndoFailed(SubstantialError):
@@ -239,6 +245,9 @@ class ProtocolError(SubstantialError):
     """The core answered with a response this host does not expect at that point."""
 
 
+# § end rabbgjpb2
+
+
 def error_from_failure(f: layout_pb2.Failure) -> SubstantialError:
     """The error a call resolved with a failure raises in the code."""
     if f.type == "RunFailed":
@@ -317,6 +326,7 @@ def _step_failed(f: layout_pb2.Failure, failure: Failure) -> SubstantialError:
 
 def run_failed_cause(type_: str, details: Any) -> Failure | None:
     """The cause of a run failed with `type_`: a `StepFailed`'s wraps it in its details."""
+    # § r3sd261h4.a@27yqd
     if type_ != "StepFailed":
         return None
     cause = _wrapped(details)
@@ -348,4 +358,5 @@ def failure_of(e: BaseException) -> Failure:
         return e.failure
     if isinstance(e, RolledBack):
         return Failure("RolledBack", e.reason)
+    # § one r3sd261h4.c@bmxhk
     return Failure(type(e).__name__, str(e))

@@ -5,14 +5,16 @@
 // skips fires at the end of the gap, and a local time it repeats fires at its first occurrence.
 import type { Context } from "./context.ts";
 import { Duration } from "./durations.ts";
-import { InvalidArgument, ProtocolError } from "./errors.ts";
+import { ConfigError, InvalidArgument, ProtocolError } from "./errors.ts";
 import { RESERVED_STEP as NEXT } from "./names.ts";
+import { encodeCanonical } from "./proto.ts";
 import type { Shared } from "./scheduler.ts";
 import { callStep } from "./step.ts";
 
 /** The message that carries a schedule's config. */
 export const MESSAGE = "schedule";
 /** How many fired instants the published `schedule` value keeps. */
+// § one ey8zhz0kq.d@f2276
 const RECENT = 10;
 
 const MINUTE = 60_000;
@@ -145,6 +147,7 @@ interface Compiled {
 
 /** Whether the day of the local time `w` (ms, read as UTC) matches. */
 function day(c: Compiled, w: Date): boolean {
+  // § d08sxcdv8.a@s62fz
   const dom = c.days.has(w.getUTCDate());
   const dow = c.weekdays.has(w.getUTCDay());
   return c.either ? dom || dow : dom && dow;
@@ -166,7 +169,9 @@ function compile(expr: string, tz: string): Compiled {
     Set<number>,
   ];
   const weekdays = new Set([...dows].map((d) => d % 7));
+  // § d08sxcdv8.a@ym8fq
   const either = !fields[2]?.startsWith("*") && !fields[4]?.startsWith("*");
+  // § end d08sxcdv8.a
   const c = { minutes, hours, days, months, weekdays, either, zone: zone(tz) };
   nextWall(c, Date.UTC(2000, 0, 1), expr);
   return c;
@@ -204,6 +209,7 @@ function offset(zone: Intl.DateTimeFormat, t: number): number {
 /** The instant of the local time `w` (ms, read as UTC): the earlier of two in a repeated hour,
  * the end of the gap for a time a clock change skips. */
 function resolve(zone: Intl.DateTimeFormat, w: number): number {
+  // § d08sxcdv8@max6p
   const before = offset(zone, w - DAY);
   const after = offset(zone, w + DAY);
   const valid = [...new Set([before, after])]
@@ -228,6 +234,7 @@ export function nextFire(cron: Cron, after: number): number {
 
 function next(c: Compiled, expr: string, after: number): number {
   // No local time before the earliest reading of `after` can resolve after it.
+  // § d08sxcdv8@qfcv7
   const least = Math.min(...[-DAY, 0, DAY].map((d) => offset(c.zone, after + d)));
   let w = Math.floor((after + least) / MINUTE) * MINUTE;
   for (;;) {
@@ -264,6 +271,7 @@ export interface Plan {
 /** The fires due by `now` after `after`, at most the `backfill` most recent, those before them
  * skipped, and the next fire after `now`. */
 export function plan(expr: string, tz: string, after: string, now: string, backfill: number): Plan {
+  // § vnykycs34.d@q8kn1
   const c = compile(expr, tz);
   const end = parse(now);
   const due: number[] = [];
@@ -345,6 +353,7 @@ function initial(): State {
 }
 
 function published(st: State): Record<string, unknown> {
+  // § ey8zhz0kq.d@8vhf4
   return {
     revision: st.revision,
     cron: st.cron,
@@ -360,6 +369,7 @@ function published(st: State): Record<string, unknown> {
 const KEYS = ["backfill", "cron", "revision", "tz"];
 
 function received(value: unknown): [number, Cron | null, number] {
+  // § ey8zhz0kq.c@h81nv
   const keys =
     typeof value === "object" && value !== null && !Array.isArray(value)
       ? Object.keys(value).sort()
@@ -378,19 +388,48 @@ function received(value: unknown): [number, Cron | null, number] {
   return [v.revision, cron, v.backfill];
 }
 
+function flat(config: unknown[]): string {
+  return JSON.stringify(config);
+}
+
+/** The id of a config's `schedule` message: its revision and a digest of its canonical JSON, so
+ * that a resend of it is delivered once and another config of the revision reaches the run. */
+export async function messageId(wanted: Config): Promise<string> {
+  const json = encodeCanonical(wanted, "a schedule's config") as Uint8Array<ArrayBuffer>;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", json));
+  const hex = [...digest.slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `schedule-${wanted.revision}-${hex}`;
+}
+
 /** Applies the config of the highest revision received, if higher than the state's. */
 async function apply(c: Context, st: State, configs: unknown[]): Promise<void> {
   const all = configs.map(received);
   configs.length = 0;
+  // § ey8zhz0kq.e@dz6ph
   let highest = all[0] as [number, Cron | null, number];
   for (const r of all) if (r[0] > highest[0]) highest = r;
+  // § end ey8zhz0kq.e
+  // § ey8zhz0kq.f@qqdyv
+  const known = new Map<number, string>();
+  if (st.revision > 0) known.set(st.revision, flat([st.revision, st.cron, st.tz, st.backfill]));
+  for (const r of all) {
+    const text = flat([r[0], r[1]?.expr ?? null, r[1]?.tz ?? null, r[2]]);
+    const seen = known.get(r[0]);
+    if (seen !== undefined && seen !== text) {
+      throw new ConfigError(`schedule revision ${r[0]} came with two configs: ${seen} and ${text}`);
+    }
+    known.set(r[0], text);
+  }
+  // § end ey8zhz0kq.f
   const [revision, cron, backfill] = highest;
+  // § one ey8zhz0kq@x7r0h
   if (revision <= st.revision) return;
   const expr = cron === null ? null : cron.expr;
   const tz = cron === null ? null : cron.tz;
   st.revision = revision;
   st.backfill = backfill;
   if (expr !== st.cron || tz !== st.tz) {
+    // § vnykycs34.c@z9pnp
     // Another cron starts from now: it fires nothing it would have fired before.
     st.cron = expr;
     st.tz = tz;
@@ -417,12 +456,14 @@ export async function* schedule(c: Context, shared: Shared): AsyncGenerator<Date
         continue;
       }
       if (st.cron === null) {
+        // § vnykycs34.c@7t12w
         await c.waitUntil(() => configs.length > 0);
         continue;
       }
       const now = (await c.now()).getTime();
       const args = [st.cron, st.tz, st.after, iso(now), st.backfill];
       const before = st.next;
+      // § vnykycs34.a@et0k1
       const fires = await callStep<Plan>(
         shared,
         NEXT,
@@ -430,6 +471,7 @@ export async function* schedule(c: Context, shared: Shared): AsyncGenerator<Date
         args,
         {},
       );
+      // § end vnykycs34.a
       const skipped = fires.skipped;
       if (fires.due.length > 0) {
         st.pending = fires.due;
@@ -445,15 +487,19 @@ export async function* schedule(c: Context, shared: Shared): AsyncGenerator<Date
       }
       st.next = fires.next;
       if (st.pending.length === 0) {
+        // § one ey8zhz0kq.d@4ffmp
         if (st.next !== before) c.publish(MESSAGE, published(st));
         const wait = new Duration(parse(st.next) - now);
         await c.waitUntil(() => configs.length > 0, { timeout: wait });
       }
     }
+    // § vnykycs34@jddt1
     const at = st.pending.shift() as string;
     st.last = at;
+    // § ey8zhz0kq.d@1zwfk
     st.recent = [...st.recent, at].slice(-RECENT);
     c.publish(MESSAGE, published(st));
+    // § end ey8zhz0kq.d
     yield new Date(parse(at));
     // Before the loop's boundary: only its state crosses a compression.
     if (configs.length > 0) await apply(c, st, configs);

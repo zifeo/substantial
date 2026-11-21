@@ -48,6 +48,7 @@ impl Drop for Handle {
 }
 
 fn unexpected(what: &str, got: impl std::fmt::Debug) -> Error {
+    // § b80k2s0e4.a@zrjhr
     Error::Protocol(format!("expected {what}, got {got:?}"))
 }
 

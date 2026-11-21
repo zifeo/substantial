@@ -44,6 +44,7 @@ async fn cancel_a_running_child() {
         .start()
         .unwrap();
     let run = env.start(&canceller(), ()).await.unwrap();
+    // § t53k37khf.b@nwj63
     let (chain, status, reason) = run.result().await.unwrap();
     assert_eq!(
         (status.as_str(), reason.as_str()),
@@ -60,6 +61,7 @@ async fn cancel_a_running_child() {
         ),
         "{child:?}"
     );
+    // § end t53k37khf.b
     worker.shutdown().await.unwrap();
     done(env).await;
 }
@@ -83,8 +85,10 @@ async fn cancel_a_child_that_ended_raises_run_ended() {
         .start()
         .unwrap();
     let run = env.start(&late_canceller(), ()).await.unwrap();
+    // § t53k37khf.a@857af
     let (chain, message) = run.result().await.unwrap();
     assert_eq!(message, format!("run {chain} has ended, completed"));
+    // § end t53k37khf.a
     worker.shutdown().await.unwrap();
     done(env).await;
 }
@@ -121,6 +125,7 @@ async fn the_cancel_outcome_replays() {
     run.send("resume", ()).await.unwrap();
     let (chain, status) = run.result().await.unwrap();
     assert_eq!(status, "cancelled");
+    // § t53k37khf@09kec
     let history = run.history().await.unwrap();
     let sent: Vec<(&str, &str)> = (history.iter())
         .filter(|e| e.kind == "sent")
@@ -134,6 +139,7 @@ async fn the_cancel_outcome_replays() {
     assert_eq!(sent, [("substantial.cancel", "no longer needed")]);
     let child = env.run(waiter(), &chain).history().await.unwrap();
     assert_eq!(child.iter().filter(|e| e.kind == "cancelled").count(), 1);
+    // § end t53k37khf
     worker.shutdown().await.unwrap();
     done(env).await;
 }

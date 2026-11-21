@@ -1,6 +1,7 @@
 //! The attribute macros of Substantial, re-exported by the `substantial` crate: use them from
 //! there. They expand to its explicit API (`Workflow::new`, `Context::step`).
 
+mod guest;
 mod names;
 mod step;
 mod workflow;
@@ -27,6 +28,36 @@ pub fn workflow(args: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn step(args: TokenStream, item: TokenStream) -> TokenStream {
     step::expand(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `#[workflow]` of the guest SDK, which re-exports it: use it from there.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn guest_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § b4j0mc19d@wjekw
+    guest::workflow(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `#[step]` of the guest SDK, which re-exports it: use it from there.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn guest_step(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § b4j0mc19d@0qatr
+    guest::step(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `export!` of the guest SDK, which re-exports it: use it from there.
+#[doc(hidden)]
+#[proc_macro]
+pub fn guest_export(item: TokenStream) -> TokenStream {
+    // § b4j0mc19d@1ykqy
+    guest::export(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

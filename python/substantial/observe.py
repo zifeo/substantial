@@ -112,6 +112,7 @@ class ObservingStore:
     async def _observed[T](
         self, op: str, call: Callable[[], Awaitable[T]], outcome: Callable[[T], str]
     ) -> T:
+        # § yp7fv5sa7.a@gva6d
         started = time.monotonic()
         try:
             with measured() as sent:
@@ -128,11 +129,14 @@ class ObservingStore:
             seconds=time.monotonic() - started,
             attempts=attempts,
             outcome=outcome,
+            # § one vg9yp9xsf@gkyd9
             cost=None if self._prices is None else self._prices._of(op, attempts),
         )
+        # § one yp7fv5sa7.a@h5jpt
         try:
             self._observe(event)
         except Exception as e:
+            # § yp7fv5sa7.b@pwsj8
             raise ObserverRaised(e) from e
 
     async def create(self, key: str, data: bytes) -> Create:

@@ -67,6 +67,7 @@ impl Incarnation {
     }
 
     pub(crate) fn now(&self) -> Time {
+        // § x55x5yqy4.c@m4x15
         Time {
             ms: self.world.time.now(),
         }

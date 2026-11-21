@@ -133,14 +133,17 @@ async fn declared_workflows_steps_and_handlers() {
     run.send("name", "ada").await.unwrap();
     run.send("up", 2).await.unwrap();
     let (attempt, total, up, names, refused) = run.result().timeout(LONG).await.unwrap();
+    // § one a03w2yqkz@99695
     assert_eq!((attempt, total, up), (2, 10, 3));
     assert_eq!(names, ["ada"]);
+    // § a03w2yqkz.a@zazrk
     assert!(refused.contains("never"), "{refused}");
     assert_eq!(
         ATTEMPTS.load(Ordering::SeqCst),
         3,
         "a permanent error is not retried"
     );
+    // § end a03w2yqkz.a
     worker.shutdown().await.unwrap();
 }
 

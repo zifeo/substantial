@@ -41,6 +41,7 @@ pub(crate) fn unexpected(plan: &str, outcome: plan_step::Step) -> Error {
     Error::Protocol(format!("{plan} plan answered {outcome:?}"))
 }
 
+// § one cq034wpjp@4fzvz
 const CROCKFORD: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
 /// ULIDs: 48 bits of milliseconds then 80 random bits, in lowercase Crockford base32, as run
@@ -48,8 +49,8 @@ const CROCKFORD: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 /// or earlier when the clock went back, is the last plus one, so a client's messages are consumed
 /// in the order sent.
 pub(crate) struct Ulids {
-    /// The time and random part of the last ULID.
-    last: std::sync::Mutex<(u128, u128)>,
+    /// The last ULID.
+    last: std::sync::Mutex<u128>,
     bits: Bits,
 }
 
@@ -66,7 +67,7 @@ static ULIDS: Ulids = Ulids::new(Bits::Random);
 impl Ulids {
     const fn new(bits: Bits) -> Self {
         Self {
-            last: std::sync::Mutex::new((0, 0)),
+            last: std::sync::Mutex::new(0),
             bits,
         }
     }
@@ -77,23 +78,23 @@ impl Ulids {
     }
 
     pub(crate) fn next(&self, ms: i64) -> String {
+        // § gpzydmca3.b@3zt1m
         let ms = u128::try_from(ms).expect("a time after 1970") & ((1 << 48) - 1);
         let mut last = self.last.lock().expect("never poisoned");
-        let ms = ms.max(last.0);
-        let random = if last.0 == ms {
-            let next = last.1 + 1;
-            assert!(next < 1 << 80, "ULIDs of one millisecond exhausted");
-            next
+        // § wtwx1e769.b@bymsc
+        let value = if ms <= *last >> 80 {
+            // Past the random bits the carry goes into the time, as in every host.
+            last.checked_add(1).expect("ULIDs exhausted")
         } else {
             let bits = match self.bits {
                 Bits::Random => u128::from_be_bytes(rand::random::<[u8; 16]>()),
                 #[cfg(feature = "testing")]
                 Bits::Seeded(seed) => crate::testing::ulid_bits(seed, ms),
             };
-            bits & ((1 << 80) - 1)
+            (ms << 80) | (bits & ((1 << 80) - 1))
         };
-        *last = (ms, random);
-        let value = (ms << 80) | random;
+        *last = value;
+        // § end wtwx1e769.b
         (0..26)
             .rev()
             .map(|i| CROCKFORD[((value >> (i * 5)) & 31) as usize] as char)
@@ -132,5 +133,15 @@ mod tests {
         assert_eq!(ids, sorted);
         sorted.dedup();
         assert_eq!(sorted.len(), ids.len());
+    }
+
+    #[test]
+    fn the_random_bits_of_a_millisecond_carry_into_its_time() {
+        let full = (5 << 80) | ((1 << 80) - 1);
+        let ulids = super::Ulids {
+            last: std::sync::Mutex::new(full),
+            bits: super::Bits::Random,
+        };
+        assert_eq!(ulids.next(5), "00000000060000000000000000");
     }
 }

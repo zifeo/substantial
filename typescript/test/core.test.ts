@@ -11,7 +11,7 @@ import {
   ValueTooLarge,
 } from "../src/errors.ts";
 import { AgentMachine, coreError } from "../src/machines.ts";
-import { ulid } from "../src/plan.ts";
+import { ulid, ulids } from "../src/plan.ts";
 import { agent, boundary, time } from "../src/proto.ts";
 
 function nextRequest(): Uint8Array {
@@ -122,4 +122,10 @@ test("ULIDs are monotonic in the process", () => {
   assert.equal(earlier.slice(0, 10), first.slice(0, 10), "a clock gone back keeps the last time");
   assert.equal(later.length, 26);
   assert.equal(later, later.toLowerCase());
+});
+
+test("the random bits of a millisecond carry into its time", () => {
+  const next = ulids(() => (1n << 80n) - 1n);
+  assert.equal(next(5), `0000000005${"z".repeat(16)}`);
+  assert.equal(next(5), `0000000006${"0".repeat(16)}`);
 });

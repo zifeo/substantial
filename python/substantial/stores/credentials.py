@@ -11,6 +11,7 @@ from typing import Literal
 from substantial.errors import ConfigError
 
 # A provider's keys are fetched again by the first request made this close to their expiry.
+# § one kesrnhfsp@71z6a
 REFRESH_BEFORE = timedelta(minutes=5)
 
 
@@ -60,6 +61,7 @@ CredentialsArg = Credentials | Password | Literal["env"] | Provider | None
 
 
 def refuse(url: str, credentials: CredentialsArg) -> None:
+    # § e9ern38bz.c@0d0vp
     if credentials is not None:
         raise ConfigError(f"{url!r} takes no credentials")
 
@@ -76,6 +78,7 @@ def resolve(credentials: CredentialsArg) -> Credentials | Provider:
     for them."""
     if callable(credentials) and not isinstance(credentials, Credentials | Password):
         return credentials
+    # § one e9ern38bz.c@2r02w
     if credentials is None:
         raise ConfigError('an S3 store needs credentials, "env", Credentials(...) or a provider')
     if isinstance(credentials, Credentials):
@@ -86,11 +89,13 @@ def resolve(credentials: CredentialsArg) -> Credentials | Provider:
         raise ConfigError(
             f'credentials are "env", Credentials(...) or a provider, not {credentials!r}'
         )
+    # § kesrnhfsp.b@thzqp
     return Credentials(
         access_key_id=_required("AWS_ACCESS_KEY_ID"),
         secret_access_key=_required("AWS_SECRET_ACCESS_KEY"),
         session_token=os.environ.get("AWS_SESSION_TOKEN") or None,
     )
+    # § end kesrnhfsp.b
 
 
 def resolve_password(credentials: CredentialsArg) -> Password | Provider | None:
@@ -108,6 +113,7 @@ def resolve_password(credentials: CredentialsArg) -> Password | Provider | None:
         raise ConfigError(
             f'a Redis store takes "env", Password(...), a provider or None, not {credentials!r}'
         )
+    # § one kesrnhfsp.b@6mnza
     return Password(_required("REDIS_PASSWORD"), os.environ.get("REDIS_USERNAME") or None)
 
 

@@ -38,6 +38,7 @@ class Backoff {
 
   /** Waits before the next attempt, or fails once every attempt is spent. */
   async next(error: string, wait: boolean): Promise<void> {
+    // § zemxe46k3@fvdjg
     if (this.#attempt >= this.#policy.attempts) {
       const unit = this.#attempt === 1 ? "attempt" : "attempts";
       throw new StoreFailure(`${error} (after ${this.#attempt} ${unit})`);
@@ -60,6 +61,7 @@ export async function withRetry<T>(
   op: () => Promise<T>,
   wait: Sleep = sleep,
 ): Promise<T> {
+  // § zemxe46k3@ntvta
   const backoff = new Backoff(policy, wait);
   for (;;) {
     sent();
@@ -86,6 +88,7 @@ export async function create(
   get: () => Promise<Uint8Array | undefined>,
   wait: Sleep = sleep,
 ): Promise<Create> {
+  // § pnvmmdmz4@hcjxe
   const backoff = new Backoff(policy, wait);
   let ambiguous = false;
   // An earlier attempt left unanswered may land after the get, so a later "exists" is checked.
@@ -123,6 +126,7 @@ export async function create(
       continue;
     }
     if (outcome === "exists" && wasAmbiguous) {
+      // § pnvmmdmz4.a@7ewpc
       ambiguous = true;
       await backoff.next("exists after an ambiguous create", false);
       continue;

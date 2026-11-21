@@ -47,6 +47,7 @@ export const LOOP = "worker ";
 const OP_RETRIES = 5;
 
 function randomSeed(): Uint8Array {
+  // § gpzydmca3.a@fja39
   return crypto.getRandomValues(new Uint8Array(32));
 }
 
@@ -198,6 +199,7 @@ export class Worker {
 
   static {
     wakeWorker = (worker) => worker.#wake();
+    // § one c46hgkfse@y86bj
     wakeWorkerOn = (worker, workflow) => worker.#events.push({ kind: "wakeWorkflow", workflow });
     restartWorker = (worker, incarnation) => worker.#start(incarnation);
     leaveWorker = (worker, graceMs) => worker.#events.push({ kind: "shutdown", graceMs });
@@ -247,6 +249,7 @@ export class Worker {
       try {
         loop.result();
       } catch (error) {
+        // § pgv9r1j12@hnt01
         this.#failure = { error };
         console.error(`substantial: worker ${id} died:`, error);
         this.#hooks.died(error);
@@ -257,11 +260,13 @@ export class Worker {
 
   /** Whether its loop runs: neither shut down nor dead. */
   get alive(): boolean {
+    // § pgv9r1j12.a@pqb36
     return this.#running;
   }
 
   /** The error that killed its loop, else `undefined`: what a readiness probe reads. */
   get error(): unknown {
+    // § pgv9r1j12.a@4g390
     return this.#failure?.error;
   }
 
@@ -274,6 +279,7 @@ export class Worker {
 
   async #ended(): Promise<void> {
     await this.#loop;
+    // § one cjtegwkna.a@3d6pm
     if (this.#failure !== undefined) throw this.#failure.error;
   }
 
@@ -292,6 +298,7 @@ export class Worker {
   }
 
   #drain(within: Duration): void {
+    // § cjtegwkna@tgbam
     this.#drainUntil = this.#clock.now() + within.ms;
     this.#events.push({ kind: "drain", until: this.#drainUntil });
   }
@@ -302,8 +309,11 @@ export class Worker {
 
   /** Runs until a SIGTERM or a Ctrl-C (SIGINT), or until `shutdown()`, then shuts down. */
   async serve(): Promise<void> {
+    // § dh7y75pvn.a@k8e0f
+    // § k6m3smdpk@9nbrx
     const terminate = () => this.#events.push({ kind: "shutdown" });
     process.on("SIGTERM", terminate);
+    // § end k6m3smdpk
     process.on("SIGINT", terminate);
     try {
       await this.#ended();
@@ -363,6 +373,7 @@ export class Worker {
             const event = events.take();
             if (event === undefined) {
               if (graceEnds !== undefined && pastGrace && clock.elapsed() >= graceEnds) {
+                // § dh7y75pvn.b@jwtvp
                 replays.stopAll();
                 graceEnds = clock.elapsed() + grace;
               }
@@ -393,6 +404,7 @@ export class Worker {
                 break;
               case "shutdown":
                 if (graceEnds === undefined) {
+                  // § dh7y75pvn@84cmw
                   grace = event.graceMs ?? this.#settings.shutdownGrace.ms;
                   graceEnds = clock.elapsed() + grace;
                   machine.shutdown();

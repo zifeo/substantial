@@ -294,6 +294,38 @@ test("other calls than the history fail the run", async () => {
   assert.equal((await h.replay(1_000)).failed()?.type, "NonDeterminism");
 });
 
+test("a divergence ends the replay without another attempt", async () => {
+  const seen: string[] = [];
+  const slow = step(
+    "slow",
+    async () => {
+      seen.push("started");
+      if (seen.length === 1) throw new Error("the first attempt fails");
+      await sleep(2_000);
+    },
+    { retry: { maxAttempts: 2, initial: seconds(10), max: seconds(10), multiplier: 2 } },
+  );
+  const { counted: first } = counting("first", 1);
+  const { counted: second } = counting("second", 2);
+  const { counted: renamed } = counting("renamed", 2);
+  const v1 = workflow("diverging", async () => {
+    await Promise.all([slow(), first().then(() => second())]);
+  });
+  const h = new Harness(v1);
+  assert.equal((await h.replay(1_000)).nextWake(), 11_000);
+  const v2 = workflow("diverging", async () => {
+    await Promise.all([slow(), first().then(() => renamed())]);
+  });
+  const h2 = Object.assign(new Harness(v2), { history: h.history, nextN: h.nextN });
+  const started = Date.now();
+  assert.equal((await h2.replay(12_000)).failed()?.type, "NonDeterminism");
+  assert.ok(Date.now() - started < 1_000, "the replay waited on the attempt");
+  // The core executes an attempt only once the replay walked its history, and a call that walk
+  // does not answer is the divergence: the retry due never started.
+  await sleep(100);
+  assert.deepEqual(seen, ["started"]);
+});
+
 test("a lost commit drops the replay", async () => {
   const { counted: a } = counting("a", 1);
   const h = new Harness(workflow("loser", async () => await a()));
@@ -303,6 +335,7 @@ test("a lost commit drops the replay", async () => {
 });
 
 test("a store failing the read of a workflow's send drops the replay", async () => {
+  // § t916k65mb@6m0t3
   const h = new Harness(workflow("sender", async (c: Context) => c.send("other", "note", 1)));
   const failing = new Recording(new MemoryStore(`replay-${token()}`));
   failing.failing = true;

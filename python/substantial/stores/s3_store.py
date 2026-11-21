@@ -61,11 +61,13 @@ class _Keys:
         if isinstance(self._given, Credentials):
             return self._given
         async with self._lock:
+            # § kesrnhfsp@9e8cj
             keys = self._keys
             if keys is None or (
                 keys.expires_at is not None
                 and datetime.now(UTC) >= keys.expires_at - REFRESH_BEFORE
             ):
+                # § one kesrnhfsp.a@3qj3d
                 try:
                     keys = await provide(self._given, Credentials)
                 except Exception as e:
@@ -77,6 +79,7 @@ class _Keys:
 def _proxy(location: S3Location) -> tuple[URL | None, dict[str, str]]:
     """The proxy that `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` name for the endpoint, and the
     `Proxy-Authorization` of the credentials in its URL."""
+    # § e9ern38bz@5kcyp
     scheme = urlsplit(location.endpoint).scheme
     proxy = getproxies().get(scheme)
     if not proxy or proxy_bypass(location.host):
@@ -175,6 +178,7 @@ class S3Store:
             if self._closed:
                 raise Permanent("the store is closed")
             if self._http is None:
+                # § x2qrbh9jk.a@xre9q
                 self._http = aiohttp.ClientSession(
                     # No cap, as in every host: a waiting listing holds its connection up to
                     # 20 s, one per workflow served and per `result` waiter, and a capped pool
@@ -244,6 +248,7 @@ class S3Store:
         return response.headers, answer
 
     async def _put(self, key: str, data: bytes) -> Create:
+        # § gvqb04830@vdy6f
         what = f"create {key}"
         try:
             await self._send(
@@ -265,6 +270,7 @@ class S3Store:
             _, answer = await self._send(f"get {key}", "GET", key)
         except _Refusal as r:
             if r.status == 404 and r.code == "NoSuchKey":
+                # § gvqb04830.a@b3ypm
                 return None
             raise _status_fault(r) from None
         return answer
@@ -272,6 +278,7 @@ class S3Store:
     async def _list_once(
         self, prefix: str, start_after: str | None, max_keys: int, wait: ListWait | None
     ) -> Listing:
+        # § dfd6vt90h.c@dfpyf
         keys: list[str] = []
         etag: str | None = None
         after = self._full(start_after) if start_after is not None else None
@@ -317,6 +324,7 @@ class S3Store:
             sent()
             after = self._full(keys[-1])
         if wait is not None and not etag:
+            # § gvqb04830.c@28qkr
             raise Permanent(f"a waiting listing of {prefix} answered without {LISTING_ETAG}")
         return Listing(keys=keys[:max_keys], etag=etag)
 
@@ -324,6 +332,7 @@ class S3Store:
         try:
             await self._send(f"delete {key}", "DELETE", key)
         except _Refusal as r:
+            # § one dfd6vt90h.d@z62g2
             if r.status == 404 and r.code == "NoSuchKey":
                 return
             raise _status_fault(r) from None

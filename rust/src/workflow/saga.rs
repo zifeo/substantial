@@ -31,28 +31,33 @@ impl Context {
         // Declared steps find their context there, so that they join the saga too.
         let result = with_context(scoped.clone(), f(scoped)).await;
         // Continuing as new is no failure: nothing is undone.
+        // § one ctp0q370t.a@f50bk, ctp0q370t.b@s43d9
         let failed = matches!(&result, Err(e) if !matches!(e, Error::ContinuedAsNew(_)));
         let ended = self.shared.call(Call::SagaEnd(b::call::SagaEnd {
             saga,
             failed,
             parent: self.saga,
         }))?;
+        // § ctp0q370t@xa0g9
         match (failed, ended) {
             (true, ended) => self.run_undos(undos(ended)?).await?,
             (false, Called::Done(_)) => {}
             (false, other) => return Err(Error::Protocol(format!("saga_end answered {other:?}"))),
         }
         result
+        // § end ctp0q370t
     }
 
     /// Runs the undos of every step so far, most recent first; return the error it gives to end
     /// the run failed with `RolledBack`: `return Err(c.rollback(..).await)`.
     pub async fn rollback(&self, reason: &str) -> Error {
+        // § zjw5cess8@3q9jy
         let undone = async {
             let undos = undos(self.shared.call(Call::Rollback(b::Empty {}))?)?;
             self.run_undos(undos).await
         };
         match undone.await {
+            // § one g039jvy6k.c@9063s
             Ok(()) => Error::RolledBack(reason.to_owned()),
             Err(e) => e,
         }
@@ -63,12 +68,14 @@ impl Context {
             let (undo, retry, timeout) = self.shared.undo(u.call).ok_or_else(|| {
                 Error::Protocol(format!("undo of call {} without an undo", u.call))
             })?;
+            // § a5c1mfs8d.a@h7h0d
             let options = b::StepOptions {
                 retry,
                 timeout_ms: Some(timeout),
                 occurrence: Some(u.occurrence),
                 ..Default::default()
             };
+            // § end a5c1mfs8d.a
             let call = Call::Step(b::call::Step {
                 name: u.name.clone(),
                 options: Some(options),
@@ -80,6 +87,7 @@ impl Context {
             match CallFuture::new(self.shared.clone(), call, Some(spec)).await {
                 Ok(_) => {}
                 Err(Error::StepFailed { error, .. }) => {
+                    // § j5gf2r47g@qvh06
                     return Err(Error::UndoFailed {
                         step: u.name,
                         error,

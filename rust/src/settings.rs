@@ -44,6 +44,7 @@ impl StoreRetry {
 /// Refuses a retention, how long a run is kept after its chain's last run ends (I-16), under `min`
 /// or over 100 years.
 pub(crate) fn check_retention(retention: Duration, min: Duration, what: &str) -> Result<()> {
+    // § pn928919v@vy04e
     if retention < min {
         return Err(Error::ConfigError(format!(
             "{what} must be at least {} ms, not {} ms",
@@ -95,6 +96,7 @@ pub(crate) struct Settings {
 }
 
 /// The settings a worker takes; the others keep their preset value, set only by the tests.
+// § yxy5pzfkp@cz4at
 pub(crate) const PUBLIC: [&str; 7] = [
     "concurrency",
     "max_idle",
@@ -104,21 +106,26 @@ pub(crate) const PUBLIC: [&str; 7] = [
     "step_timeout",
     "retention",
 ];
+// § end yxy5pzfkp
 
 /// The least `retention` of the presets, which a `result` wait follows its chain again within
 /// half of (I-17).
+// § one y025f8qen.c@c23wa
 pub(crate) const RETENTION_MIN: Duration = hours(1);
 
 /// The longest retention, 100 years. A collection's due key names its year in 4 digits, which far
 /// longer retentions would pass.
+// § one pn928919v@12fzf
 pub(crate) const RETENTION_MAX: Duration = days(36_500);
 
 /// The retries of every store (I-26).
+// § zemxe46k3@nr61b
 pub const STORE_RETRY: StoreRetry = StoreRetry {
     attempts: 5,
     initial: Duration::from_millis(100),
     max: Duration::from_secs(5),
 };
+// § end zemxe46k3
 
 const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
@@ -129,9 +136,11 @@ impl Settings {
         let service = preset == Preset::Service;
         Self {
             concurrency: if service { 16 } else { 1 },
+            // § one ry26kkc7v.a@49v1b
             commit_every: Duration::ZERO,
             shutdown_grace: seconds(if service { 25 } else { 5 }),
             claim_ttl: seconds(30),
+            // § one ry26kkc7v.b@40z0h
             claim_skew: seconds(5),
             max_idle: match (service, waiting_store) {
                 (false, _) => seconds(1),
@@ -139,6 +148,7 @@ impl Settings {
                 (true, true) => minutes(5),
             },
             wait: seconds(20),
+            // § one ry26kkc7v.e@ej9at
             due_page: 1000,
             due_pages: 10,
             snapshot_every: 64,
@@ -146,9 +156,11 @@ impl Settings {
                 segments: 1000,
                 bytes: 8 * MIB,
             },
+            // § one ry26kkc7v.c@qxwxx
             dedup_window: days(7),
             step_timeout: minutes(5),
             retention: days(30),
+            // § one ry26kkc7v.d@4h0c1
             tombstone: days(7),
             retention_min: RETENTION_MIN,
             recheck: days(1),
@@ -247,6 +259,7 @@ impl Settings {
 }
 
 pub(crate) fn unknown(names: &[&str]) -> Error {
+    // § yxy5pzfkp.a@gqbg5
     Error::ConfigError(format!("unknown settings {names:?}"))
 }
 

@@ -21,6 +21,7 @@ pub struct CoreModule {
 impl CoreModule {
     /// The module shipped in `wasm/`, verified against `wasm/SHA256SUMS` and compiled once.
     pub fn shipped() -> Result<Self> {
+        // § fsvns3j6x@bg3ph
         static SHIPPED: OnceLock<std::result::Result<CoreModule, String>> = OnceLock::new();
         SHIPPED
             .get_or_init(|| Self::precompiled().map_err(|e| e.to_string()))
@@ -31,6 +32,7 @@ impl CoreModule {
     /// The shipped module as the build script compiled it; compiled again when wasmtime finds
     /// that this engine or host cannot run that code, which it checks before loading any.
     fn precompiled() -> Result<Self> {
+        // § hs5x9cc61@v2edx
         verify(WASM, SUMS)?;
         let engine = Engine::default();
         // SAFETY: `COMPILED` comes from this build's script, compiled by this wasmtime from
@@ -55,6 +57,7 @@ impl CoreModule {
     }
 
     fn checked(engine: Engine, module: Module) -> Result<Self> {
+        // § gpzydmca3@t8s2a
         if module.imports().len() != 0 {
             return Err(Error::Module("the core must import nothing".into()));
         }
@@ -104,6 +107,7 @@ struct Abi {
 
 impl Abi {
     fn new(store: &mut Store<()>, instance: &WasmInstance) -> Result<Self> {
+        // § hs5x9cc61@738xn
         let missing = |name: &str| Error::Module(format!("missing export {name}"));
         let func = |store: &mut Store<()>, name: &str| {
             instance
@@ -142,6 +146,7 @@ pub struct Core(Arc<Mutex<Inner>>);
 #[derive(Clone, Copy, Debug)]
 #[repr(u32)]
 pub(crate) enum Kind {
+    // § fsvns3j6x.a@597z6
     Run = 1,
     Agent = 2,
     Plan = 3,
@@ -205,6 +210,7 @@ impl Core {
 
 impl Inner {
     fn trap(&mut self, trap: String) -> Error {
+        // § b80k2s0e4@dv18x
         self.trapped = Some(trap.clone());
         Error::Trap(trap)
     }

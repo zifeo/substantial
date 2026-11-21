@@ -84,6 +84,7 @@ async fn a_chain_ended_before_the_watch_answers_at_once() {
         .start(watcher(), json!({"chain": target.chain()}))
         .await
         .unwrap();
+    // § kqh75fg4a.a@9nvw6
     assert_eq!(run.result().await.unwrap(), json!({"value": 1}));
     worker.shutdown().await.unwrap();
     done(env).await;
@@ -158,6 +159,7 @@ async fn a_chain_that_continued_is_awaited_to_its_last_run() {
     env.settle().await.unwrap();
     assert_eq!(run.status().await.unwrap(), RunStatus::Suspended);
     target.send("go", "second").await.unwrap();
+    // § dgn4hcfv0.b@3hx5g
     assert_eq!(run.result().await.unwrap(), json!({"value": "second"}));
     worker.shutdown().await.unwrap();
     done(env).await;
@@ -198,6 +200,7 @@ async fn a_missing_chain_raises_run_not_found() {
 /// Rust's `WaitTimeout` carries no message, as for its other timeouts.
 fn patient() -> Workflow<Value> {
     Workflow::new("patient", |c: Context, input: Watched| async move {
+        // § dgn4hcfv0.a@j9hnc
         match c.result::<String>(&input.chain).timeout(minutes(5)).await {
             Err(e @ Error::WaitTimeout) => {
                 let at = c.now().await?.to_rfc3339();
@@ -247,6 +250,7 @@ async fn two_watchers_of_one_chain_both_get_its_end() {
     }
     env.settle().await.unwrap();
     target.send("go", "both").await.unwrap();
+    // § one dgn4hcfv0.d@c8w1b, kqh75fg4a@s5aj6
     for run in runs {
         assert_eq!(run.result().await.unwrap(), json!({"value": "both"}));
     }
@@ -276,10 +280,12 @@ async fn waiting_on_its_own_chain_raises_invalid_argument() {
         .unwrap();
     let run = env.start(narcissist(), ()).id("me").await.unwrap();
     let refused = run.result().await.unwrap();
+    // § dgn4hcfv0.c@gf1mw
     assert!(
         refused[0].contains("cannot await its own chain me"),
         "{refused:?}"
     );
+    // § end dgn4hcfv0.c
     assert!(
         refused[1].starts_with(r#"run id "Not An Id" must match"#),
         "{refused:?}"

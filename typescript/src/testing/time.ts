@@ -127,6 +127,7 @@ export class Time {
 
   /** Returns once the gate is open and `owner` not paused. */
   async passing(owner: Owner): Promise<void> {
+    // § x55x5yqy4.a@988ke
     if (!this.open || owner.paused) {
       const done = new Future();
       done.resolve();
@@ -227,6 +228,7 @@ export class Time {
 
   /** Settles, then moves the clock from deadline to deadline until `done()`. */
   async untilDone(paused: () => boolean, done: () => boolean, what: string): Promise<void> {
+    // § x55x5yqy4.d@k34et
     outside();
     return this.#locked(async () => {
       await this.#settle();
@@ -248,6 +250,7 @@ export class Time {
   }
 
   async #move(target: number): Promise<void> {
+    // § x55x5yqy4.b@cdbe3
     while (this.ms < target) {
       this.skip(target);
       const next = Math.min(target, ...this.#deadlines());

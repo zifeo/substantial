@@ -11,6 +11,7 @@ from substantial._proto import layout, run
 from substantial.errors import ConfigError, InvalidArgument, ProtocolError
 
 # The largest amount or limit, as the core counts them.
+# § one cvnf47vy8.a@1ktze
 MAX = (1 << 63) - 1
 
 _KINDS = ("create", "get", "list", "delete")
@@ -103,6 +104,7 @@ class Prices:
 
     def _of(self, op: str, attempts: int) -> Amount:
         """What `attempts` requests of the store operation `op` cost."""
+        # § vg9yp9xsf@98gfz
         per_1000: int = getattr(self, op)
         return Amount(self.currency, -(-per_1000 // 1000) * attempts)
 
@@ -150,6 +152,7 @@ def _amounts(value: object, what: str) -> dict[str, int]:
     if not isinstance(value, dict):
         raise ProtocolError(f"{what} {value!r}")
     out: dict[str, int] = {}
+    # § hzh3dr6yh@v7kz2
     for currency, nano in value.items():
         if not isinstance(nano, str) or not (nano.isascii() and nano.isdigit()):
             raise ProtocolError(f"{what} {value!r}")

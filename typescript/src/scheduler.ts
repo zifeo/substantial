@@ -297,6 +297,7 @@ export class Shared {
       if (answer.case === "pending" && call.call.case === "step") {
         const name = call.call.value.name;
         // A retry keeps the keys of the failed run it resumes, for its half-done effects.
+        // § one b1cj6wtk9.a@snnyt
         const key = `${this.start.line ?? this.run}/${name}/${called.occurrence}`;
         // A step without a retry policy has one attempt (I-6).
         const maxAttempts = call.call.value.options?.retry?.maxAttempts ?? 1;
@@ -339,6 +340,7 @@ export class Shared {
   /** Binds `handler` to `names`: the messages consumed so far first, then each new one. */
   bind(names: string[], handler: Handler): void {
     const past = this.expect(makeCall({ case: "bind", value: { names } }), "messages");
+    // § aeby9bgqd@ds9ca
     try {
       for (const m of past.messages) handler(m);
     } catch (e) {
@@ -368,6 +370,7 @@ export class Shared {
 
   /** Tells the run machine of every wait whose predicate now holds. */
   evaluateWaits(): void {
+    // § k3zma9hjs.a@4rbw2
     if (this.abandoned) return;
     const pending: [bigint, Predicate][] = [];
     for (const [call, predicate] of this.waits) {

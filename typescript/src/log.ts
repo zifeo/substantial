@@ -13,6 +13,7 @@ export function runLog(shared: Shared): Log {
   const level =
     (name: keyof Log) =>
     (...data: unknown[]): void => {
+      // § k3zma9hjs.b@bjsp4
       if (shared.live) console[name](...data);
     };
   return { debug: level("debug"), info: level("info"), warn: level("warn"), error: level("error") };

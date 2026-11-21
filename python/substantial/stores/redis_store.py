@@ -43,7 +43,9 @@ class RedisStore:
         if not isinstance(location, RedisLocation):
             raise ConfigError(f"a Redis store needs a RedisLocation, not {location!r}")
         self._location = location
+        # § htbc4k715.d@yz7v0
         tag = f"{{{location.namespace}}}"
+        # § end htbc4k715.d
         self._object = f"{tag}:o:".encode()
         self._index = f"{tag}:i"
         self._fence = f"{tag}:f"
@@ -112,11 +114,13 @@ class RedisStore:
 
         A separate round trip: with the write in the same pipeline, replicas acknowledge their
         fsync only at their next second."""
+        # § htbc4k715@0hvbz
         fault = Ambiguous if created else Transient
         try:
             replicas = await self._replicas(primary)
         except Transient as e:
             raise fault(f"{what}: {e}") from None
+        # § one dfd6vt90h.e@qraz5
         try:
             waited: Any = await conn.execute_command("WAITAOF", 1, replicas, WAITAOF_MS)
             if waited[0] >= 1 and waited[1] >= replicas:
@@ -138,6 +142,7 @@ class RedisStore:
         if asyncio.get_running_loop().time() - primary.counted_at >= RECOUNT_EVERY:
             await self._count(primary)
         if primary.replicas == 0 and self._location.topology != "standalone":
+            # § htbc4k715.c@cqmb4
             raise Transient(f"{primary.where} has no replica online")
         return primary.replicas
 
@@ -167,6 +172,7 @@ class RedisStore:
         as history keys are deleted too, by collections. `resolving` marks the get that resolves
         an ambiguous create, ambiguous again when the fence falls short."""
         async with primary.client.client() as conn:
+            # § htbc4k715.a@1hd39
             pipe = conn.pipeline(transaction=False)
             pipe.execute_command(*command)
             pipe.incr(self._fence)
@@ -252,6 +258,7 @@ class RedisStore:
     async def delete(self, key: str) -> None:
         async def remove(p: Primary) -> None:
             async with p.client.client() as conn:
+                # § htbc4k715.a@akd7b
                 keys = (self._key(key), self._index, self._fence)
                 await conn.evalsha(DELETE.sha, 3, *keys, key, self._channel, self._publish)
                 await self._durable(p, conn, f"delete {key}", created=False)

@@ -51,6 +51,7 @@ fn sync_dir(dir: &Path) -> std::io::Result<()> {
 
 /// Creates the missing directories between `root` and `dir`, each fsynced in its parent.
 fn ensure_dirs(root: &Path, dir: &Path) -> Result<(), Fault> {
+    // § c7pz5rk26.a@7tbx4
     let mut missing = Vec::new();
     let mut at = dir;
     while at != root && !at.is_dir() {
@@ -76,6 +77,7 @@ fn ensure_dirs(root: &Path, dir: &Path) -> Result<(), Fault> {
 }
 
 fn create(root: &Path, key: &str, bytes: &[u8]) -> Result<Create, Fault> {
+    // § c7pz5rk26@wztwy
     check_key(key)?;
     let path = root.join(key);
     let tmp = root.join(TMP).join(hex::encode(rand::random::<[u8; 16]>()));
@@ -104,6 +106,7 @@ fn create(root: &Path, key: &str, bytes: &[u8]) -> Result<Create, Fault> {
 }
 
 fn get(root: &Path, key: &str) -> Result<Option<Bytes>, Fault> {
+    // § dfd6vt90h.a@p4vya
     check_key(key)?;
     let path = root.join(key);
     match fs::read(&path) {
@@ -121,6 +124,7 @@ fn get(root: &Path, key: &str) -> Result<Option<Bytes>, Fault> {
 }
 
 fn delete(root: &Path, key: &str) -> Result<(), Fault> {
+    // § dfd6vt90h.d@9t8sy
     check_key(key)?;
     let path = root.join(key);
     match fs::remove_file(&path) {

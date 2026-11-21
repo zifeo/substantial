@@ -17,7 +17,7 @@ import { Metering, type Observed } from "./observe.ts";
 import { outcomeOf, planOutcomes, runPlan, ulid } from "./plan.ts";
 import { jsonValue, plan, time } from "./proto.ts";
 import { collectedUntil, type Namespace, Run } from "./run.ts";
-import { type Config, type Cron, checkConfig, config, MESSAGE } from "./schedule.ts";
+import { type Config, type Cron, checkConfig, config, MESSAGE, messageId } from "./schedule.ts";
 import {
   type InternalOptions,
   resolveSettings,
@@ -148,6 +148,7 @@ export async function opening(store: Store, input: plan.PlanInput): Promise<Core
   const outcome = outcomeOf("open", await runPlan(module.instantiate(), store, input), "opened");
   const opened = outcome.opened;
   if (opened.case === "layoutError") throw new LayoutError(opened.value);
+  // § one zemxe46k3.b@2cj8t
   if (opened.case === "failed") throw new StoreError(opened.value.message);
   if (opened.case !== "open") throw new LayoutError("empty open outcome");
   return module;
@@ -281,14 +282,17 @@ export class Substantial {
     input?: I,
     options: StartOptions = {},
   ): Promise<Run<O>> {
+    // § bxb0ygj7m@753fm
     if (!(workflow instanceof Workflow)) {
       throw new InvalidArgument(`start takes a workflow, not ${workflow}`);
     }
+    // § one h8wg39cct.a@xrrp9
     const json = inputObject(input);
     onlyOptions(options, ["id", "budget"], "start");
     checkKey("workflow name", workflow.name);
     const budget = effectiveBudget(options.budget, workflow.budget);
     const at = time(this.#host.now());
+    // § one cq034wpjp@16qwz
     const chain =
       options.id === undefined ? this.#host.ulid(Number(at.ms)) : checkKey("run id", options.id);
     const value = {
@@ -343,6 +347,7 @@ export class Substantial {
     checkConfig(revision, cron, backfill);
     const wanted = config(revision, cron, backfill);
     const published = await this.run(workflow, id).read<Record<string, unknown>>("schedule");
+    // § ey8zhz0kq.b@exs0t
     if (published !== undefined) {
       const applied = {
         revision: published.revision ?? null,
@@ -366,8 +371,11 @@ export class Substantial {
         );
       }
     }
+    // § end ey8zhz0kq.b
+    // § ey8zhz0kq.a@4szdb
     const run = await this.start(workflow, undefined, { id });
-    await run.send(MESSAGE, wanted, { id: `schedule-${revision}` });
+    await run.send(MESSAGE, wanted, { id: await messageId(wanted) });
+    // § end ey8zhz0kq.a
     return run;
   }
 
@@ -391,6 +399,7 @@ export class Substantial {
   /** Wakes the workers of this process serving `workflow`, which then list its due entries at
    * once instead of after `maxIdle`. */
   #wake(workflow: string): void {
+    // § c46hgkfse@4qm43
     for (const worker of this.#workers) wakeOn(worker, workflow);
   }
 }

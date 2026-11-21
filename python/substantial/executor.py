@@ -53,6 +53,7 @@ class Executor:
             asyncio._set_running_loop(outer)
 
     async def close(self) -> None:
+        # § d9818h4m4.a@kss9z
         for task in asyncio.all_tasks(self.loop):
             task.cancel()
         try:

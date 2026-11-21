@@ -20,6 +20,7 @@ export function sent(): void {
  * outside the shared retry layer, the memory store or a test's, sends each operation once. An
  * operation measured inside another, through a store wrapping a store, counts in both. */
 export async function measured<T>(into: Sent, op: () => Promise<T>): Promise<T> {
+  // § zemxe46k3.a@2bcv6
   try {
     return await measuring.run(into, op);
   } finally {

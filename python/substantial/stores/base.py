@@ -37,6 +37,7 @@ class StoreFailure(Exception):
 class Store(Protocol):
     """An adapter scoped to its namespace: keys are relative to it."""
 
+    # § w89qkqkaj@6hfjh
     @property
     def capabilities(self) -> Capabilities: ...
 
@@ -45,6 +46,7 @@ class Store(Protocol):
         connect too when it was not called."""
         ...
 
+    # § one kwvhb7ehw@3k0pj
     async def create(self, key: str, data: bytes) -> Create:
         """Atomic and exclusive: of concurrent creates of a key, exactly one gets "created"."""
         ...
@@ -69,6 +71,7 @@ class Store(Protocol):
 def in_range(keys: Iterable[str], prefix: str, start_after: str | None, max_keys: int) -> list[str]:
     """The keys of a sorted run that lie under `prefix` and after `start_after`, up to
     `max_keys`."""
+    # § dfd6vt90h.b@qatj9
     out: list[str] = []
     for key in keys:
         if len(out) >= max_keys:

@@ -79,6 +79,7 @@ class FaultStore:
             await world.time.passing(clock)
         if world.time.ms < world.outage_until:
             raise Transient("the store is out")
+        # § one hz0ve24df.b@ph0v2
         if clock is not None and world.draw(kind, key, clock):
             n = clock.tries[(kind, key)]
             applied = kind == "create" and unit(world.seed, "applied", key, clock.id, n) < 0.5

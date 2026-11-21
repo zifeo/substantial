@@ -14,6 +14,7 @@ import { parseS3Url, S3Store, type Sdk } from "./s3.ts";
 import { type ListOptions, type Store, StoreFailure } from "./store.ts";
 
 function namespace(url: string, rest: string): string {
+  // § e9ern38bz.b@42848
   if (rest.includes("?")) throw new ConfigError(`${url} takes no query parameters`);
   if (rest === "") throw new ConfigError(`${url} names no namespace`);
   return rest;
@@ -43,6 +44,7 @@ async function loadRedis(url: string): Promise<RedisModule> {
 
 /** The adapter a URL names; the scheme alone picks it, nothing is detected. */
 export async function openStore(url: string, credentials: CredentialsArg): Promise<Store> {
+  // § x2qrbh9jk@06zkh
   if (typeof url !== "string") throw new ConfigError(`a store URL is a string, not ${url}`);
   if (url.startsWith("memory://")) {
     const ns = namespace(url, url.slice("memory://".length));
@@ -70,6 +72,7 @@ export async function openStore(url: string, credentials: CredentialsArg): Promi
   if (planned !== undefined) {
     throw new ConfigError(`${planned} stores are not available in this host yet; ${SUPPORTED}`);
   }
+  // § one e9ern38bz.a@52v76
   throw new ConfigError(`unknown scheme in ${url}; ${SUPPORTED}`);
 }
 
@@ -129,6 +132,7 @@ export async function perform(store: Store, op: boundary.StoreOp): Promise<bound
 }
 
 async function performOnce(store: Store, op: boundary.StoreOp): Promise<boundary.OpResult> {
+  // § pgv9r1j12.b@nkyft
   let message: string;
   try {
     return await performOp(store, op);

@@ -37,6 +37,7 @@ impl Script {
 
 // `redis` is a symlink to the repository's single copy: cargo package follows it, so the
 // published crate carries the scripts themselves.
+// § htbc4k715.e@xwvs2
 pub(super) static CREATE: LazyLock<Script> = LazyLock::new(|| {
     Script::shipped(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -49,6 +50,7 @@ pub(super) static DELETE: LazyLock<Script> = LazyLock::new(|| {
         "/redis/delete.lua"
     )))
 });
+// § end htbc4k715.e
 
 /// How an operation of the adapter failed, before it is classified as a fault of its attempt.
 #[derive(Debug)]
@@ -127,6 +129,7 @@ impl Primary {
     /// An idle connection, or a new one: each operation has its own, since `WAITAOF` blocks the
     /// connection it is sent on and covers the writes sent on it before.
     pub(super) async fn lease(&self, connector: &Connector) -> Result<Lease<'_>, Failure> {
+        // § x2qrbh9jk.a@56xgz
         let idle = self.idle.lock().expect("never poisoned").pop();
         let conn = match idle {
             Some(conn) => conn,
@@ -319,6 +322,7 @@ impl Connector {
             .await;
         match probe {
             Err(e) if answered(&e) && !refused(&e) => {
+                // § htbc4k715.b@z1fz1
                 return Err(Failure::Config(format!(
                     "{at} has no WAITAOF, which needs Redis 7.2: {e}"
                 )));
@@ -355,6 +359,7 @@ impl Connector {
 
     /// The checks at open (I-26): a server that loses or evicts keys is not a store.
     fn check(&self, at: &str, info: &InfoDict) -> Result<(), Failure> {
+        // § htbc4k715.b@e643g
         let topology = self.location.topology;
         if info.get::<i64>("aof_enabled") != Some(1) {
             return Err(Failure::Config(format!(

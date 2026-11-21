@@ -10,13 +10,16 @@ import pytest
 from conftest import LONG, eventually, script
 
 from substantial import (
+    Cancelled,
     Context,
     InvalidArgument,
+    RolledBack,
     RunEnded,
     RunFailed,
     RunNotFound,
     RunStatus,
     Substantial,
+    step,
     step_key,
     workflow,
 )
@@ -25,12 +28,12 @@ from substantial.stores import Store
 
 async def test_now_sleep_until_and_step_keys(store: Store) -> None:
     @workflow
-    async def timed(c: Context) -> tuple[float, list[str]]:
+    async def timed(c: Context) -> list[object]:
         start = await c.now()
         await c.sleep_until(start + timedelta(milliseconds=300))
         end = await c.now()
         keys = [await c.step("keyed", step_key) for _ in range(2)]
-        return (end - start).total_seconds(), keys
+        return [(end - start).total_seconds(), keys]
 
     sub = await Substantial._create(store)
     async with script(sub, [timed]):
@@ -175,6 +178,7 @@ async def test_handlers_bound_together_see_past_messages_in_arrival_order(store:
         await run.send(name, n)
     await run.send("go")
     async with script(sub, [ordered]):
+        # § n4zyj94mr@br7n3
         assert await run.result(timeout=LONG) == {
             "seen": ["add:1", "remove:1", "add:2", "remove:2"],
             "adds": [1, 2],
@@ -210,15 +214,38 @@ async def test_reserved_and_invalid_names_are_refused_in_a_workflow(store: Store
             for call in (lambda b: c.receive(b), lambda b: c.handle(b, print)):
                 try:
                     call(bad)
-                except InvalidArgument:
-                    refused.append(bad)
+                except InvalidArgument as e:
+                    stated = "must match [A-Za-z0-9._-]{1,128}" in str(e)
+                    refused.append(f"{bad} {stated}")
         return refused
 
     sub = await Substantial._create(store)
     async with script(sub, [names]):
         run = await sub.start(names)
         refused = await run.result(timeout=LONG)
-        assert refused == ["substantial.ended"] * 2 + ["a note"] * 2 + [""] * 2
+        assert refused == ["substantial.ended False"] * 2 + ["a note True"] * 2 + [" True"] * 2
+
+
+async def test_reserved_names_are_refused_to_a_client_send_and_a_step(store: Store) -> None:
+    with pytest.raises(InvalidArgument, match="reserved"):
+
+        @step(name="substantial.charge")
+        async def reserved() -> None: ...
+
+    @workflow
+    async def stepper(c: Context) -> bool:
+        try:
+            c.step("substantial.charge", lambda: None)
+        except InvalidArgument:
+            return True
+        return False
+
+    sub = await Substantial._create(store)
+    run = await sub.start(stepper)
+    with pytest.raises(InvalidArgument, match="reserved"):
+        await run.send("substantial.cancel", "forged")
+    async with script(sub, [stepper]):
+        assert await run.result(timeout=LONG) is True
 
 
 async def test_a_run_cancels_itself(store: Store) -> None:
@@ -234,6 +261,27 @@ async def test_a_run_cancels_itself(store: Store) -> None:
             await run.result(timeout=LONG)
         assert failed.value.status == RunStatus.CANCELLED
         assert failed.value.error.message == "enough"
+
+
+async def test_a_caught_cancel_or_rollback_ends_the_run_as_the_code_ends_it(store: Store) -> None:
+    @workflow
+    async def caught(c: Context) -> list[str]:
+        seen = []
+        try:
+            await c.cancel("changed my mind")
+        except Cancelled as e:
+            seen.append(e.reason)
+        try:
+            await c.rollback("not this way")
+        except RolledBack as e:
+            seen.append(e.reason)
+        return seen
+
+    sub = await Substantial._create(store)
+    async with script(sub, [caught]):
+        run = await sub.start(caught)
+        assert await run.result(timeout=LONG) == ["changed my mind", "not this way"]
+        assert await run.status() == RunStatus.COMPLETED
 
 
 async def test_published_values_are_read_by_clients(store: Store) -> None:

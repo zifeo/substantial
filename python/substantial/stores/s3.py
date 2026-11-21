@@ -12,8 +12,10 @@ from substantial.stores.retry import Permanent
 
 # ListObjectsV2 returns at most this many keys a page.
 PAGE = 1000
+# § gvqb04830.b@hyfp9
 CONNECT_TIMEOUT = 5.0
 ATTEMPT_TIMEOUT = 60.0
+# § end gvqb04830.b
 WAIT_SECONDS = "x-substantial-wait-seconds"
 WAIT_ETAG = "x-substantial-wait-etag"
 LISTING_ETAG = "x-substantial-listing-etag"
@@ -44,6 +46,7 @@ class S3Location:
 
     @staticmethod
     def parse(url: str) -> S3Location:
+        # § e9ern38bz.b@6k4dm
         def invalid(why: str) -> ConfigError:
             return ConfigError(f"{url!r}: {why}")
 
@@ -100,6 +103,7 @@ def wait_headers(wait: ListWait | None, max_keys: int) -> dict[str, str]:
     )
     if not graphic:
         raise Permanent(f"the listing etag {wait.etag!r} cannot be sent in {WAIT_ETAG}")
+    # § gvqb04830.c@3z5aq
     headers = {WAIT_SECONDS: str(wait.seconds)}
     if wait.etag is not None:
         headers[WAIT_ETAG] = wait.etag

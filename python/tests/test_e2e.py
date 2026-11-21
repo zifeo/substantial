@@ -186,7 +186,7 @@ async def test_inputs_are_compared_as_canonical_json(store: Store) -> None:
     first = await sub.start(echo, {"b": [1.0, {"d": 2, "c": "é"}], "a": 0.5}, id="same")
     again = await sub.start(echo, {"a": 0.5, "b": [1, {"c": "é", "d": 2.0}]}, id="same")
     assert first.chain == again.chain
-    for bad in (math.nan, math.inf, -math.inf, 2**53, -(2**53), {1: "a"}):
+    for bad in (math.nan, math.inf, -math.inf, 2**53, -(2**53), {1: "a"}, (1, 2)):
         with pytest.raises(InvalidArgument, match="the input is not JSON"):
             await sub.start(echo, {"x": [bad]})
     async with script(sub, [echo]):
@@ -266,6 +266,44 @@ async def test_a_message_no_handler_can_decode_fails_the_run(store: Store) -> No
             await run.result(timeout=LONG)
         assert failed.value.status == RunStatus.FAILED
         assert failed.value.error.type == "MessageDecode", failed.value
+
+
+async def test_a_handler_that_raises_fails_the_run(store: Store) -> None:
+    @workflow
+    async def refusing(c: Context) -> None:
+        def take(n: int) -> None:
+            if n >= 10:
+                raise ValueError(f"{n} is too large")
+
+        c.handle("n", take)
+        await c.receive("never")
+
+    sub = await Substantial._create(store)
+    async with script(sub, [refusing]):
+        run = await sub.start(refusing)
+        await run.send("n", 99)
+        with pytest.raises(RunFailed) as failed:
+            await run.result(timeout=LONG)
+        assert failed.value.error.type == "MessageDecode", failed.value
+        assert "99 is too large" in failed.value.error.message
+
+
+async def test_a_handler_that_returns_an_awaitable_fails_the_run(store: Store) -> None:
+    async def later() -> None: ...
+
+    @workflow
+    async def deferring(c: Context) -> None:
+        c.handle("n", lambda n: later())
+        await c.receive("never")
+
+    sub = await Substantial._create(store)
+    async with script(sub, [deferring]):
+        run = await sub.start(deferring)
+        await run.send("n", 1)
+        with pytest.raises(RunFailed) as failed:
+            await run.result(timeout=LONG)
+        assert failed.value.error.type == "MessageDecode", failed.value
+        assert "a handler returned an awaitable" in failed.value.error.message
 
 
 CHARGES: list[str] = []

@@ -116,6 +116,7 @@ eachAdapter("handlers bound together see past messages in arrival order", async 
   }
   await run.send("go");
   await using _ = script(sub, [ordered]);
+  // § n4zyj94mr@c6nsd
   assert.deepEqual(await run.result({ timeout: LONG }), {
     seen: ["add:1", "remove:1", "add:2", "remove:2"],
     adds: [1, 2],
@@ -157,6 +158,23 @@ eachAdapter("a message no handler can decode fails the run", async (store) => {
   assert.ok(failed instanceof RunFailed, String(failed));
   assert.equal(failed.status, "failed");
   assert.equal(failed.error.type, "MessageDecode", failed.error.message);
+});
+
+eachAdapter("a handler that throws fails the run", async (store) => {
+  const refusing = workflow("refusing", async (c: Context) => {
+    c.handle("n", (n: number) => {
+      if (n >= 10) throw new RangeError(`${n} is too large`);
+    });
+    await c.receive("never");
+  });
+  const sub = await createOn(store);
+  await using _ = script(sub, [refusing]);
+  const run = await sub.start(refusing);
+  await run.send("n", 99);
+  const failed = await run.result({ timeout: LONG }).catch((e) => e);
+  assert.ok(failed instanceof RunFailed, String(failed));
+  assert.equal(failed.error.type, "MessageDecode", failed.error.message);
+  assert.match(failed.error.message, /99 is too large/);
 });
 
 eachAdapter(

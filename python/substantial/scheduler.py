@@ -110,7 +110,9 @@ class Shared:
         self.start = data.start
         # A retry keeps the step keys of the first run of its line, so that a half-done effect
         # keeps its idempotency key.
+        # § b1cj6wtk9.a@6j7wx
         self.line = data.start.line if data.start.HasField("line") else data.run
+        # § end b1cj6wtk9.a
         self.input = input_json
         self.loop = loop
         self.slots: dict[int, tuple[asyncio.Future, Decode]] = {}
@@ -190,7 +192,9 @@ class Shared:
             if not called.HasField("occurrence"):
                 raise self.protocol(f"step call answered without its occurrence: {called}")
             if which == "pending":
+                # § b1cj6wtk9@vbr6w
                 key = f"{self.line}/{call.step.name}/{called.occurrence}"
+                # § end b1cj6wtk9
                 options = call.step.options
                 # A step without a retry policy has one attempt (I-6).
                 attempts = options.retry.max_attempts if options.HasField("retry") else 1
@@ -220,6 +224,7 @@ class Shared:
     def bind(self, names: list[str], handler: Handler) -> None:
         """Binds `handler` to `names`: the messages consumed so far first, then each new one."""
         past = self.expect(run.Call(bind=run.Call.Bind(names=names)), "messages")
+        # § aeby9bgqd@pwhfw
         try:
             for m in past.messages:
                 handler(m)

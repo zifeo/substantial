@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Self
 
-from substantial._proto import json_value, layout, plan
+from substantial._proto import dumps, json_value, layout, plan
 from substantial.child import effective_budget, input_object
 from substantial.clock import REAL, Clock
 from substantial.core import Core
@@ -31,10 +31,10 @@ from substantial.errors import (
     WaitTimeout,
     run_failed_cause,
 )
-from substantial.names import check_key, check_name, check_str
+from substantial.names import check_key, check_sent_name, check_str
 from substantial.observe import Metering, Observe, ObserverRaised
 from substantial.plan import outcome_of, plan_steps, run_plan, ulid
-from substantial.schedule import Cron, check_config, config
+from substantial.schedule import Cron, check_config, config, message_id
 from substantial.scheduler import decode_json
 from substantial.settings import RETENTION_MIN, Settings
 from substantial.stores import Store, StoreFailure, open_store
@@ -113,8 +113,9 @@ def _run_info(info: plan.RunInfo) -> RunInfo:
 
 def _encode(value: Any, what: str) -> bytes:
     try:
-        return json.dumps(value, allow_nan=False).encode()
+        return dumps(value)
     except (TypeError, ValueError) as e:
+        # § z6zyx22ss.c@tzc7x
         raise InvalidArgument(f"{what} is not JSON: {e}") from None
 
 
@@ -202,6 +203,7 @@ class Substantial:
             case, value = outcome_of("open", *await run_plan(core, store, data), "opened")
             if case == "layout_error":
                 raise LayoutError(value)
+            # § one zemxe46k3.b@rxd4g
             if case == "failed":
                 raise StoreError(value.message)
         except BaseException:
@@ -249,11 +251,16 @@ class Substantial:
         """Starts a run of `workflow`, idempotently under `id`, a ULID when none is given, with
         `budget`, else its workflow's (I-28): the same id with another budget is `RunExists`."""
         if not isinstance(workflow, Workflow):
+            # § bxb0ygj7m@xy2ac
             raise InvalidArgument(f"start takes a workflow, not {workflow!r}")
+        # § h8wg39cct.a@kdj6j
         data_input = input_object(input)
+        # § end h8wg39cct.a
         check_key("workflow name", workflow.name)
         at = self._clock.now()
+        # § cq034wpjp@p0fjv
         chain = self._ulid(at.ms) if id is None else check_key("run id", id)
+        # § end cq034wpjp
         data = plan.StartPlan(
             prefix="",
             workflow=workflow.name,
@@ -309,6 +316,7 @@ class Substantial:
         check_config(revision, cron, backfill)
         wanted = config(revision, cron, backfill)
         published = await self.run(workflow, id).read("schedule")
+        # § ey8zhz0kq.b@7yqhq
         if published is not None:
             applied = {k: published.get(k) for k in ("revision", "cron", "tz", "backfill")}
             if applied["revision"] > revision:
@@ -323,8 +331,11 @@ class Substantial:
                     f"schedule {id}: revision {revision} is applied with another config, "
                     f"{applied}, not {wanted}"
                 )
+        # § end ey8zhz0kq.b
+        # § ey8zhz0kq.a@8gep2
         run = await self.start(workflow, id=id)
-        await run.send("schedule", wanted, id=f"schedule-{revision}")
+        await run.send("schedule", wanted, id=message_id(wanted))
+        # § end ey8zhz0kq.a
         return run
 
     def run[R](self, workflow: Workflow[..., R], id: str) -> Run[R]:
@@ -340,6 +351,7 @@ class Substantial:
     def _wake_workers(self, workflow: str) -> None:
         """Wakes the workers of this process serving `workflow`, which then list its due
         entries at once instead of after `max_idle`."""
+        # § c46hgkfse@sxwbb
         for worker in list(self._workers):
             worker._wake_workflow(workflow)
 
@@ -373,6 +385,7 @@ def _check_timeout(timeout: timedelta | None) -> None:
 def _max_interval(max_interval: timedelta | None) -> float:
     """The longest wait between two polls of `result`, in seconds."""
     if max_interval is None:
+        # § y025f8qen@fbg2r
         return 30.0
     if not isinstance(max_interval, timedelta) or max_interval <= timedelta(0):
         raise InvalidArgument(f"max_interval is a positive timedelta, not {max_interval!r}")
@@ -392,6 +405,7 @@ def _collected_until(value: Any) -> datetime | None:
 
 # A wait follows its chain from the first run again this often, as polling one run's `result`
 # never sees that run collected (I-17).
+# § one y025f8qen.c@yanxs
 REFOLLOW = RETENTION_MIN.total_seconds() / 2
 
 
@@ -422,20 +436,24 @@ class Run[R]:
     async def send(self, name: str, value: Any = None, *, id: str | None = None) -> None:
         """Sends a message, delivered once per `id`, a ULID when none is given."""
         check_key("run id", self.chain)
-        check_name("message name", name)
+        check_sent_name(name)
         if id is not None:
             check_key("message id", id)
         at = self._sub._clock.now()
+        # § wtwx1e769@xvnm9
         ord = self._sub._ulid(at.ms)
         data = plan.SendPlan(
             prefix="",
             chain=self.chain,
             name=name,
+            # § one h8wg39cct.a@nzvre
             value=json_value(_encode(value, "the message")),
+            # § one wtwx1e769.a@51554
             id=ord if id is None else id,
             now=at,
             ord=ord,
         )
+        # § end wtwx1e769
         await self._sent(plan.PlanInput(send=data))
 
     async def cancel(self, reason: str) -> None:
@@ -443,6 +461,7 @@ class Run[R]:
         check_key("run id", self.chain)
         check_str("a reason", reason)
         at = self._sub._clock.now()
+        # § wtwx1e769.c@zpm39
         ord = self._sub._ulid(at.ms)
         data = plan.CancelPlan(
             prefix="",
@@ -452,6 +471,7 @@ class Run[R]:
             now=at,
             ord=ord,
         )
+        # § end wtwx1e769.c
         await self._sent(plan.PlanInput(cancel=data))
 
     async def _sent(self, data: plan.PlanInput) -> None:
@@ -554,21 +574,30 @@ class Run[R]:
         self._sub._waits.add(died)
         try:
             async with asyncio.timeout(None if timeout is None else timeout.total_seconds()):
+                # § y025f8qen@pexcx
                 delay, last = min(0.01, cap), None
+                # § end y025f8qen
                 followed = time.monotonic()
                 while True:
+                    # § y025f8qen.b@zbeqc
                     if time.monotonic() - followed >= self._refollow:
+                        # § y025f8qen.c@3km9f
                         last, followed = None, time.monotonic()
                     ended, value = await self._ended(last)
                     if ended:
                         return value
                     last = value.run
+                    # § one y025f8qen.a@5n4b2
                     if self._sub._store.capabilities.wait:
+                        # § y025f8qen.d@s381b
                         left = self._refollow - (time.monotonic() - followed)
                         await self._result_created(value.result_key, died, left)
+                        # § end y025f8qen.d
                     else:
                         await asyncio.wait({died}, timeout=delay)
+                        # § y025f8qen@4krnb
                         delay = min(delay * 2, cap)
+                        # § end y025f8qen
                     if died.done():
                         raise died.result()
         except TimeoutError:

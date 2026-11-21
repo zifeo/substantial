@@ -10,6 +10,7 @@ const WASM_URL = new URL("../../wasm/substantial.wasm", import.meta.url);
 const SUMS_URL = new URL("../../wasm/SHA256SUMS", import.meta.url);
 const U32 = 0xffff_ffff;
 
+// § one fsvns3j6x.a@e133x
 export const Kind = { RUN: 1, AGENT: 2, PLAN: 3 } as const;
 export type Kind = (typeof Kind)[keyof typeof Kind];
 
@@ -42,6 +43,7 @@ function hex(bytes: ArrayBuffer): string {
 
 /** Checks that the sha256 of `wasm` is the one the `substantial.wasm` line of `sums` names. */
 export async function verify(wasm: Uint8Array, sums: string): Promise<void> {
+  // § hs5x9cc61@2cvf1
   let expected: string | undefined;
   for (const line of sums.split("\n")) {
     const match = /^(\S+)\s+\**(.+?)\s*$/.exec(line);
@@ -75,9 +77,11 @@ export class CoreModule {
     try {
       module = await WebAssembly.compile(wasm as Uint8Array<ArrayBuffer>);
     } catch (e) {
+      // § hs5x9cc61@g89g5
       throw new ModuleError(`cannot compile ${WASM_NAME}: ${e instanceof Error ? e.message : e}`);
     }
     if (WebAssembly.Module.imports(module).length > 0) {
+      // § gpzydmca3@8xec2
       throw new ModuleError("the core must import nothing");
     }
     return new CoreModule(module);
@@ -86,6 +90,7 @@ export class CoreModule {
   /** The shipped module, verified and compiled once; a failure is tried again next time. */
   static shipped(): Promise<CoreModule> {
     if (shipped === undefined) {
+      // § one fsvns3j6x@651ny
       const loading = shippedFiles().then(({ wasm, sums }) => CoreModule.fromBytes(wasm, sums));
       shipped = loading;
       loading.catch(() => {
@@ -126,12 +131,14 @@ export class Core {
     const fn = (name: string): Fn => {
       const f = exports[name];
       if (typeof f !== "function") {
+        // § hs5x9cc61@s6mr5
         throw new ModuleError(`missing export ${name}`);
       }
       return f as Fn;
     };
     const memory = exports.memory;
     if (!(memory instanceof WebAssembly.Memory)) {
+      // § hs5x9cc61@has7x
       throw new ModuleError("missing export memory");
     }
     this.#memory = memory;
@@ -149,6 +156,7 @@ export class Core {
   }
 
   #guard(f: Fn, ...args: number[]): unknown {
+    // § b80k2s0e4@jv75q
     if (this.#trapped !== undefined) {
       throw new Trap(this.#trapped);
     }

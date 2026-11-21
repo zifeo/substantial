@@ -147,6 +147,7 @@ class ObservingStore implements Store {
     call: () => Promise<T>,
     outcome: (result: T) => StoreOp["outcome"],
   ): Promise<T> {
+    // § yp7fv5sa7.a@r2z55
     const started = performance.now();
     const sent = new Sent();
     let result: T;
@@ -162,10 +163,13 @@ class ObservingStore implements Store {
 
   #tell(op: Kind, started: number, attempts: number, outcome: StoreOp["outcome"]): void {
     const seconds = (performance.now() - started) / 1000;
+    // § vg9yp9xsf@bd8r3
     const cost = this.#prices === undefined ? undefined : priceOf(this.#prices, op, attempts);
+    // § one yp7fv5sa7.a@93r1d
     try {
       this.#observe(new StoreOp(op, seconds, attempts, outcome, cost));
     } catch (e) {
+      // § yp7fv5sa7.b@xszt0
       throw new ObserverRaised(e);
     }
   }

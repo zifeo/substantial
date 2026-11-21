@@ -33,7 +33,7 @@ impl Context {
 
     /// The state a loop starts from: `init`, or the one a previous run of the chain carried.
     pub(super) fn iteration<S: Serialize + DeserializeOwned>(&self, init: S) -> Result<S> {
-        let initial = json(serde_json::to_vec(&init)?)?;
+        let initial = json(super::to_json(&init)?)?;
         match self.shared.call(Call::Iterate(initial))? {
             Called::Value(v) => decode(Some(v)),
             other => Err(Error::Protocol(format!("iterate answered {other:?}"))),
@@ -43,12 +43,20 @@ impl Context {
     /// A loop's boundary: past the threshold, the error that continues the run as new with the
     /// chain's input and `state`.
     pub(super) fn boundary<S: Serialize>(&self, state: &S) -> Result<()> {
+        // § hy3f1z5jj@mq7kf
         if self.past_threshold()? {
+            // § hy3f1z5jj.b@dfh56
             return Err(Error::ContinuedAsNew(Continuation {
                 workflow: None,
                 version: None,
                 input: self.shared.input(),
-                state: Some(serde_json::to_vec(state)?),
+                // § hy3f1z5jj.a@wprrk
+                state: Some(super::to_json(state).map_err(|e| {
+                    Error::NotCompressible(format!(
+                        "the state of iterate does not serialize to JSON: {e}"
+                    ))
+                })?),
+                // § end hy3f1z5jj.a
             }));
         }
         Ok(())
@@ -83,7 +91,9 @@ impl Context {
 }
 
 fn continuation(workflow: Option<String>, version: Option<u32>, input: impl Serialize) -> Error {
+    // § aaev3rs1q.b@0as6p
     match input_object(input) {
+        // § one gjnefe4w6@nzjpz
         Ok(input) => Error::ContinuedAsNew(Continuation {
             workflow,
             version,

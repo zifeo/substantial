@@ -76,8 +76,10 @@ export class World {
     this.time.skip = (target) => this.skipScans(target);
     this.chaos = chaos;
     this.seed = chaos?.seed ?? 0;
+    // § hz0ve24df@s70eb
     this.coreSeed = derive(this.seed, "core");
     this.ulid = ulids((at) => BigInt(`0x${derive(this.seed, "ulid", at).toString("hex", 0, 10)}`));
+    // § end hz0ve24df
     this.outageUntil = ms;
   }
 
@@ -103,6 +105,7 @@ export class World {
   }
 
   workerId(place: number, replaced: number): string {
+    // § hz0ve24df@kqg30
     return derive(this.seed, "worker", place, replaced).toString("hex", 0, 8);
   }
 
@@ -111,6 +114,7 @@ export class World {
     if (this.chaos === undefined) return false;
     const n = (clock.tries.get(`${kind} ${key}`) ?? 0) + 1;
     clock.tries.set(`${kind} ${key}`, n);
+    // § hz0ve24df.a@azpyq
     return unit(this.seed, kind, key, clock.id, n) < this.chaos.rate;
   }
 

@@ -7,6 +7,8 @@ skips fires at the end of the gap, and a local time it repeats fires at its firs
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -14,7 +16,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from substantial.errors import InvalidArgument, ProtocolError
+import rfc8785
+
+from substantial.errors import ConfigError, InvalidArgument, ProtocolError
 from substantial.names import RESERVED_STEP as NEXT
 from substantial.step import call_step
 
@@ -24,6 +28,7 @@ if TYPE_CHECKING:
 # The message that carries a schedule's config.
 MESSAGE = "schedule"
 # How many fired instants the published `schedule` value keeps.
+# § one ey8zhz0kq.d@g9gcf
 RECENT = 10
 
 _MINUTE = 60_000
@@ -114,6 +119,7 @@ class _Compiled:
     zone: ZoneInfo
 
     def day(self, w: datetime) -> bool:
+        # § d08sxcdv8.a@55a8b
         dom = w.day in self.days
         dow = (w.isoweekday() % 7) in self.weekdays
         return (dom or dow) if self.either else (dom and dow)
@@ -128,7 +134,9 @@ def _compile(expr: str, tz: str) -> _Compiled:
         )
     sets = [_field(expr, t, *spec) for t, spec in zip(fields, _FIELDS, strict=True)]
     weekdays = frozenset(d % 7 for d in sets[4])
+    # § d08sxcdv8.a@9zfdw
     either = not fields[2].startswith("*") and not fields[4].startswith("*")
+    # § end d08sxcdv8.a
     minutes, hours, days, months = (frozenset(v) for v in sets[:4])
     c = _Compiled(minutes, hours, days, months, weekdays, either, _zone(tz))
     _next_wall(c, datetime(2000, 1, 1), expr)
@@ -165,6 +173,7 @@ def _wall_ms(w: datetime) -> int:
 def _resolve(zone: ZoneInfo, w: int) -> int:
     """The instant of the local time `w` (ms, read as UTC): the earlier of two in a repeated
     hour, the end of the gap for a time a clock change skips."""
+    # § d08sxcdv8@2ybt3
     before, after = _offset(zone, w - _DAY), _offset(zone, w + _DAY)
     valid = [w - o for o in {before, after} if _offset(zone, w - o) == o]
     if valid:
@@ -188,6 +197,7 @@ def next_fire(cron: Cron, after: int) -> int:
 
 def _next_fire(c: _Compiled, expr: str, after: int) -> int:
     # No local time before the earliest reading of `after` can resolve after it.
+    # § d08sxcdv8@xerv6
     least = min(_offset(c.zone, after + d) for d in (-_DAY, 0, _DAY))
     w = _NAIVE_EPOCH + timedelta(milliseconds=(after + least) // _MINUTE * _MINUTE)
     while True:
@@ -215,6 +225,7 @@ def parse(text: str) -> int:
 def plan(expr: str, tz: str, after: str, now: str, backfill: int) -> dict[str, Any]:
     """The fires due by `now` after `after`, at most the `backfill` most recent, those before
     them skipped, and the next fire after `now`."""
+    # § vnykycs34.d@s1gcg
     c = _compile(expr, tz)
     t, end = parse(after), parse(now)
     due: list[int] = []
@@ -243,6 +254,13 @@ def config(revision: int, cron: Cron | None, backfill: int) -> dict[str, Any]:
     }
 
 
+def message_id(wanted: dict[str, Any]) -> str:
+    """The id of a config's `schedule` message: its revision and a digest of its canonical JSON,
+    so that a resend of it is delivered once and another config of the revision reaches the run."""
+    digest = hashlib.sha256(rfc8785.dumps(wanted)).hexdigest()[:16]
+    return f"schedule-{wanted['revision']}-{digest}"
+
+
 def check_config(revision: object, cron: object, backfill: object) -> None:
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
         raise InvalidArgument(f"a schedule's revision is a positive int, not {revision!r}")
@@ -268,6 +286,7 @@ def _initial() -> dict[str, Any]:
 
 
 def _published(st: dict[str, Any]) -> dict[str, Any]:
+    # § ey8zhz0kq.d@c232n
     keys = ("revision", "cron", "tz", "backfill", "last", "recent", "skipped")
     return {
         **{k: st[k] for k in keys},
@@ -276,6 +295,7 @@ def _published(st: dict[str, Any]) -> dict[str, Any]:
 
 
 def _received(value: Any) -> tuple[int, Cron | None, int]:
+    # § ey8zhz0kq.c@q9vqt
     if not isinstance(value, dict) or set(value) != {"revision", "cron", "tz", "backfill"}:
         raise InvalidArgument(f"a schedule message is a config of sub.schedule, not {value!r}")
     cron = None if value["cron"] is None else Cron(value["cron"], value["tz"])
@@ -285,16 +305,34 @@ def _received(value: Any) -> tuple[int, Cron | None, int]:
     return value["revision"], cron, value["backfill"]
 
 
+def _flat(revision: int, cron: str | None, tz: str | None, backfill: int | None) -> str:
+    return json.dumps([revision, cron, tz, backfill], separators=(",", ":"))
+
+
 async def _apply(c: Context, st: dict[str, Any], configs: list[Any]) -> None:
     """Applies the config of the highest revision received, if higher than the state's."""
     received = [_received(v) for v in configs]
     configs.clear()
+    # § ey8zhz0kq.e@n0ntt
     revision, cron, backfill = max(received, key=lambda r: r[0])
+    # § end ey8zhz0kq.e
+    # § ey8zhz0kq.f@03mqy
+    known: dict[int, str] = {}
+    if st["revision"] > 0:
+        known[st["revision"]] = _flat(st["revision"], st["cron"], st["tz"], st["backfill"])
+    for r, cron_r, backfill_r in received:
+        text = _flat(r, *((None, None) if cron_r is None else (cron_r.expr, cron_r.tz)), backfill_r)
+        if known.get(r, text) != text:
+            raise ConfigError(f"schedule revision {r} came with two configs: {known[r]} and {text}")
+        known[r] = text
+    # § end ey8zhz0kq.f
+    # § one ey8zhz0kq@5y6t4
     if revision <= st["revision"]:
         return
     expr, tz = (None, None) if cron is None else (cron.expr, cron.tz)
     st["revision"], st["backfill"] = revision, backfill
     if (expr, tz) != (st["cron"], st["tz"]):
+        # § vnykycs34.c@bg94z
         # Another cron starts from now: it fires nothing it would have fired before.
         st["cron"], st["tz"], st["pending"], st["next"] = expr, tz, [], None
         st["after"] = None if cron is None else iso(_ms(await c.now()))
@@ -319,12 +357,15 @@ async def schedule(c: Context) -> AsyncIterator[datetime]:
                 await _apply(c, st, configs)
                 continue
             if st["cron"] is None:
+                # § vnykycs34.c@a7hpd
                 await c.wait_until(lambda: bool(configs))
                 continue
             now = _ms(await c.now())
             args = (st["cron"], st["tz"], st["after"], iso(now), st["backfill"])
             before = st["next"]
+            # § vnykycs34.a@1yfem
             fires = await call_step(c._shared, NEXT, plan, args, {}, None, None, None)
+            # § end vnykycs34.a
             skipped = fires["skipped"]
             if fires["due"]:
                 st["pending"], st["after"] = fires["due"], fires["due"][-1]
@@ -338,14 +379,19 @@ async def schedule(c: Context) -> AsyncIterator[datetime]:
             st["next"] = fires["next"]
             if not st["pending"]:
                 if st["next"] != before:
+                    # § ey8zhz0kq.d@yb0pg
                     c.publish(MESSAGE, _published(st))
                 wait = timedelta(milliseconds=parse(st["next"]) - now)
                 await c.wait_until(lambda: bool(configs), timeout=wait)
+        # § vnykycs34@1bh5t
         at = st["pending"].pop(0)
         st["last"] = at
+        # § ey8zhz0kq.d@yzh9r
         st["recent"] = [*st["recent"], at][-RECENT:]
         c.publish(MESSAGE, _published(st))
+        # § end ey8zhz0kq.d
         yield _EPOCH + timedelta(milliseconds=parse(at))
+        # § end vnykycs34
         # Before the loop's boundary: only its state crosses a compression.
         if configs:
             await _apply(c, st, configs)

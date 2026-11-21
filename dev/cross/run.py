@@ -110,6 +110,7 @@ def pair(cmds: dict[str, list[str]], client: str, worker: str, url: str, logs: P
         return failure + worker_log
     if ran.returncode != 0:
         return f"the client exited with {ran.returncode}\n{ran.stdout}{ran.stderr}{worker_log}"
+    # § sqbjc1adw@cxa2f
     expected = {
         "result": {
             "greeting": "hello ada",
@@ -137,8 +138,10 @@ def pair(cmds: dict[str, list[str]], client: str, worker: str, url: str, logs: P
         got = json.loads(ran.stdout.strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):
         got = None
+    # § one ap5tfnrja.d@pdy9f, bq8tt3bh7@pw6fj, eqpe8dchq@8h5wy, j2xzy4akb@5kd41, fkgsx3gvk.b@fan3r, dgn4hcfv0@45xtq  # noqa: E501
     if got != expected:
         return f"expected {json.dumps(expected)}\n     got {ran.stdout}{ran.stderr}{worker_log}"
+    # § end sqbjc1adw
     if codes != [0, 0]:
         return (
             f"the worker or the watcher did not shut down cleanly on SIGTERM: {codes}{worker_log}"
@@ -157,6 +160,7 @@ def same_input(cmds: dict[str, list[str]], url: str) -> str | None:
             got = json.loads(ran.stdout.strip().splitlines()[-1])
         except (IndexError, json.JSONDecodeError):
             got = None
+        # § ct862686r.a@a0nd7
         if ran.returncode != 0 or got != expected:
             return f"{host}: expected {json.dumps(expected)}\n     got {ran.stdout}{ran.stderr}"
     return None

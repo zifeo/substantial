@@ -14,6 +14,7 @@ use super::schedule::RESERVED_STEP;
 use super::scheduler::{CallFuture, StepBody, StepSpec, Undo};
 use super::{Permanent, Retry, decode};
 use crate::error::{Error, Failure, Result};
+use crate::names::check_step_name;
 use crate::proto::boundary::v1::{self as b, call::Call};
 use crate::proto::layout::v1::Amount;
 use crate::time::millis;
@@ -65,12 +66,15 @@ pub fn charge(currency: &str, nano: u64) -> Result<()> {
     let charges = ATTEMPT
         .try_with(|a| a.charges.clone())
         .expect("charge is called inside a step");
+    // § cvnf47vy8.a@s1aej
     if nano > i64::MAX as u64 {
         return Err(Error::InvalidArgument(format!(
             "a charge of {nano} is over the limit of {}",
             i64::MAX
         )));
     }
+    // § end cvnf47vy8.a
+    // § cvnf47vy8@z24wj
     charges.lock().expect("never poisoned").push(Amount {
         currency: currency.to_owned(),
         nano,
@@ -103,9 +107,11 @@ where
     T: Serialize,
     E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
+    // § epxcjcz4s@zgp55
     match attempt.await {
-        Ok(value) => serde_json::to_vec(&value).map_err(|e| failure("Json", e.to_string(), false)),
+        Ok(value) => super::to_json(&value).map_err(|e| failure("Json", e.to_string(), false)),
         Err(e) => {
+            // § epxcjcz4s.a@paszp
             // An `anyhow::Error` turned into a box hides the error it wraps from `downcast_ref`.
             let wrapped = (&e as &dyn std::any::Any)
                 .downcast_ref::<anyhow::Error>()
@@ -156,6 +162,7 @@ impl Context {
         self.step(name, move || {
             let f = f.clone();
             async move {
+                // § v4n6ja42e.b@zp6wv
                 #[cfg(feature = "testing")]
                 crate::testing::threaded();
                 // The thread runs outside the attempt's task: it takes the attempt along, for
@@ -173,6 +180,22 @@ impl Context {
                 }
             }
         })
+    }
+
+    /// The step `name`, whose attempts run `body`, which gives its outcome as the run machine
+    /// takes it: a guest's step.
+    #[cfg(feature = "guests")]
+    pub(crate) fn step_of<T>(&self, name: &str, body: StepBody) -> Step<T> {
+        Step {
+            ctx: self.clone(),
+            name: name.to_owned(),
+            retry: None,
+            timeout: None,
+            body,
+            undo: None,
+            reserved: false,
+            value: PhantomData,
+        }
     }
 }
 
@@ -238,12 +261,17 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
     type IntoFuture = BoxFuture<'static, Result<T>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        // § vnykycs34.b@b7gk5
         if self.name == RESERVED_STEP && !self.reserved {
             return Box::pin(async {
                 Err(Error::InvalidArgument(format!(
                     "the step name {RESERVED_STEP:?} is reserved for c.schedule()"
                 )))
             });
+        }
+        // § end vnykycs34.b
+        if let Err(e) = check_step_name(&self.name) {
+            return Box::pin(async { Err(e) });
         }
         if let Some(r) = &self.retry
             && let Err(e) = r.check()
@@ -256,7 +284,9 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
             max_ms: millis(r.max),
             multiplier: r.multiplier,
         });
+        // § aym52h8ch@c5z6g
         let timeout = millis(self.timeout.unwrap_or(self.ctx.shared.step_timeout()));
+        // § end aym52h8ch
         let options = b::StepOptions {
             retry,
             timeout_ms: Some(timeout),
@@ -272,7 +302,9 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
             body: self.body,
             undo: self.undo.map(|u| (u, retry, timeout)),
         };
+        // § vjy5p3exq@xregv
         let future = CallFuture::new(self.ctx.shared.clone(), call, Some(spec));
         Box::pin(async move { decode(value(future.await?)?) })
+        // § end vjy5p3exq
     }
 }

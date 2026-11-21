@@ -14,6 +14,7 @@ use super::scheduler::{Answer, CallFuture, Receives, Shared};
 use super::{decode, json};
 use crate::cost::Cost;
 use crate::error::{Error, Result};
+use crate::names::check_name;
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
 use crate::proto::layout::v1::{self as layout, Time, Value};
 use crate::time::millis;
@@ -88,15 +89,17 @@ impl Context {
 
     /// Makes `value` the last one published under `key` by the chain.
     pub fn publish(&self, key: &str, value: impl Serialize) -> Result<()> {
+        // § h8wg39cct.c@75j6j
         let published = layout::Published {
             key: key.to_owned(),
-            value: Some(json(serde_json::to_vec(&value)?)?),
+            value: Some(json(super::argument_json(&value, "the value")?)?),
         };
         done(self.shared.call(Call::Publish(published))?)
     }
 
     /// Ends the run cancelled, once returned as the workflow's error: `return Err(c.cancel(..).await)`.
     pub async fn cancel(&self, reason: &str) -> Error {
+        // § g039jvy6k.c@vfy5j
         Error::Cancelled(reason.to_owned())
     }
 
@@ -166,6 +169,7 @@ impl<T: DeserializeOwned + 'static> IntoFuture for Receive<T> {
             ctx, name, timeout, ..
         } = self;
         Box::pin(async move {
+            check_name("message name", &name)?;
             let counts = ctx.shared.receives(&name);
             let _pending = Pending::new(&counts, &name, timeout.is_some())?;
             let Some(timeout) = timeout else {
@@ -180,6 +184,7 @@ impl<T: DeserializeOwned + 'static> IntoFuture for Receive<T> {
                 })?;
                 counts.lock().expect(POISONED).bound = true;
             }
+            // § p6tzbmjaq@e18c0
             let claimed = Arc::new(AtomicBool::new(false));
             // Claiming in the predicate keeps two receives woken by one message from both taking
             // it.
@@ -194,13 +199,16 @@ impl<T: DeserializeOwned + 'static> IntoFuture for Receive<T> {
                     claimed.load(Ordering::Relaxed)
                 }
             };
+            // § end p6tzbmjaq
             if !claim() {
                 ctx.wait_until(claim).timeout(timeout).await?;
             }
+            // § p6tzbmjaq@5xkmx
             if !claimed.load(Ordering::Relaxed) {
                 return Err(Error::WaitTimeout);
             }
             decode(ctx.resolved(Call::Receive(name)).await?)
+            // § end p6tzbmjaq
         })
     }
 }
@@ -215,6 +223,7 @@ struct Pending {
 
 impl Pending {
     fn new(counts: &Arc<std::sync::Mutex<Receives>>, name: &str, timed: bool) -> Result<Self> {
+        // § p6tzbmjaq.a@8fww6
         let mut c = counts.lock().expect(POISONED);
         if (if timed { c.plain } else { c.timed }) > 0 {
             return Err(Error::InvalidArgument(format!(

@@ -1,5 +1,6 @@
 // Handlers bound to a run's messages (I-9).
 import { Failed, InvalidArgument, messageOf, typeName } from "./errors.ts";
+import { checkName } from "./names.ts";
 import { decodeValue, type run } from "./proto.ts";
 import type { Handler, Shared } from "./scheduler.ts";
 
@@ -17,6 +18,7 @@ function isThenable(value: unknown): boolean {
 
 function checkPlain(fn: unknown): void {
   if (typeof fn !== "function") throw new InvalidArgument(`a handler is a function, not ${fn}`);
+  // § one aeby9bgqd.b@m79y8
   if (fn.constructor.name === "AsyncFunction") {
     throw new InvalidArgument("a handler is a plain function, not async");
   }
@@ -30,12 +32,15 @@ function handler<T>(fn: (value: T) => unknown, decode?: (value: unknown) => T): 
   }
   return (m) => {
     let returned: unknown;
+    // § aeby9bgqd.a@amkyc
     try {
       const json = decodeValue(m.value);
       returned = fn(decode === undefined ? (json as T) : decode(json));
     } catch (e) {
       throw decodeFailure(m, `${typeName(e)}: ${messageOf(e)}`);
     }
+    // § end aeby9bgqd.a
+    // § one aeby9bgqd.c@10yna
     if (isThenable(returned)) throw decodeFailure(m, "a handler returned a promise");
   };
 }
@@ -51,8 +56,7 @@ export function handle<T>(
   fn: (value: T) => unknown,
   options: HandleOptions<T>,
 ): void {
-  if (typeof name !== "string")
-    throw new InvalidArgument(`a message name is a string, not ${name}`);
+  checkName("message name", name);
   const { decode, ...unknown } = options;
   if (Object.keys(unknown).length > 0) {
     throw new InvalidArgument(`unknown handle options ${Object.keys(unknown).join(", ")}`);
@@ -68,6 +72,7 @@ export function handleAll(
 ): void {
   const byName = new Map<string, Handler>();
   for (const [name, fn] of Object.entries(handlers)) {
+    checkName("message name", name);
     byName.set(name, handler(fn as (value: unknown) => unknown));
   }
   shared.bind([...byName.keys()], (m) => (byName.get(m.name) as Handler)(m));

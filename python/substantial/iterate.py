@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 from typing import Any
 
-from substantial._proto import boundary, checked, json_value, run
+from substantial._proto import boundary, checked, dumps, json_value, run
 from substantial.child import encode
 from substantial.errors import ContinuedAsNew, NotCompressible, ProtocolError
 from substantial.scheduler import Shared, decode_json
@@ -26,8 +25,9 @@ def _fields(state: Any) -> Any:
 
 
 def _encode(value: Any, what: str) -> bytes:
+    # § hy3f1z5jj.a@tfz0r
     try:
-        data = json.dumps(value, allow_nan=False).encode()
+        data = dumps(value)
     except (TypeError, ValueError) as e:
         raise NotCompressible(f"{what} does not serialize to JSON: {e}") from None
     return checked(data)
@@ -62,6 +62,8 @@ class Iteration:
             self._state = _decode(type(self._init), decode_json(value))
             return self._state
         if should_continue_as_new(shared):
+            # § hy3f1z5jj@hmwv0
             state = _encode(_fields(self._state), "the state of iterate")
+            # § one hy3f1z5jj.b@h6qq6
             raise ContinuedAsNew(None, None, shared.input, state)
         return self._state

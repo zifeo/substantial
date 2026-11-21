@@ -25,6 +25,7 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     pub fn open(ns: &str) -> Result<Self> {
+        // § e9ern38bz.d@pccb1
         let objects = namespaces().entry(ns.to_owned()).or_default().clone();
         Ok(Self { objects })
     }
@@ -78,6 +79,7 @@ impl Store for MemoryStore {
 
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
         Box::pin(async move {
+            // § dfd6vt90h@4ca4g
             let mut objects = self.objects();
             if objects.contains_key(key) {
                 return Ok(Create::Exists);

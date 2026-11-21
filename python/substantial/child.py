@@ -3,41 +3,50 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import Any
 
 import rfc8785
 
-from substantial._proto import checked, json_value, layout, run
+from substantial._proto import check_json, checked, dumps, json_value, layout, run
 from substantial.cost import budget_proto
 from substantial.durations import millis
 from substantial.errors import InvalidArgument, RunFailed
-from substantial.names import check_key, check_name, check_str
+from substantial.names import check_key, check_sent_name, check_str
 from substantial.scheduler import Shared, decode_json
 from substantial.workflow import Workflow
 
 
 def encode(value: Any, what: str) -> bytes:
     try:
-        data = json.dumps(value, allow_nan=False).encode()
+        data = dumps(value)
     except (TypeError, ValueError) as e:
+        # § z6zyx22ss.c@e22dv
         raise InvalidArgument(f"{what} is not JSON: {e}") from None
+    # § one h8wg39cct.c@ke9f0
     return checked(data)
 
 
 def input_object(input: dict[str, Any] | None) -> bytes:
     """An input as canonical JSON (RFC 8785), as the core compares a start's input byte for
     byte."""
+    # § e1dc4dar4.a@3952h
     if input is None:
         return b"{}"
     if not isinstance(input, dict):
         raise InvalidArgument(f"an input is a JSON object, not {input!r}")
+    # § end e1dc4dar4.a
     try:
+        # § aaev3rs1q@wn64x
+        # § one z6zyx22ss.a@tm9wf
+        # silcrow:follow
+        check_json(input)
         data = rfc8785.dumps(input)
-    except rfc8785.CanonicalizationError as e:
+    except (ValueError, rfc8785.CanonicalizationError) as e:
+        # § one aaev3rs1q.a@kgccx, aaev3rs1q.c@0kpnv
         raise InvalidArgument(f"the input is not JSON: {e}") from None
+    # § one h8wg39cct.c@fp03p
     return checked(data)
 
 
@@ -45,6 +54,7 @@ def effective_budget(
     budget: Mapping[str, int] | None, workflow: Workflow[..., Any]
 ) -> layout.Budget | None:
     """The start's own budget, else its workflow's, else none."""
+    # § evdz71nzb.a@jscav
     if budget is not None:
         return budget_proto(budget)
     if workflow.budget is not None:
@@ -62,9 +72,7 @@ def send(
     shared: Shared, run_id: str, name: str, value: Any, id: str | None
 ) -> asyncio.Future[None]:
     check_key("run id", run_id)
-    check_name("message name", name)
-    if name.startswith("substantial."):
-        raise InvalidArgument(f"message name {name!r} starts with substantial., which is reserved")
+    check_sent_name(name)
     data = run.Call.Send(run=run_id, name=name, value=json_value(encode(value, "the message")))
     if id is not None:
         data.id = check_key("message id", id)
@@ -135,12 +143,15 @@ def start[R](
     budget: Mapping[str, int] | None,
 ) -> asyncio.Future[Child[R]]:
     if not isinstance(workflow, Workflow):
+        # § bxb0ygj7m@b4v9m
         raise InvalidArgument(f"start takes a workflow, not {workflow!r}")
+    # § aaev3rs1q.b@6w1wb
     data = run.Call.Start(
         workflow=workflow.name,
         input=json_value(input_object(input)),
         budget=effective_budget(budget, workflow),
     )
+    # § end aaev3rs1q.b
     if workflow.version is not None:
         data.version = workflow.version
     if id is not None:

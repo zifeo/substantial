@@ -51,6 +51,7 @@ impl Attached {
         self.world.check_runtime()?;
         let store = Arc::new(FaultStore::new(self.world.clone(), None));
         let metering = self.world.metering.clone();
+        // § one bsw9tpftr@bkw67
         attached(store, plan, metering, Some(self)).await
     }
 

@@ -125,9 +125,11 @@ async fn the_debounce_of_the_docs() {
     env.advance(minutes(4)).await.unwrap();
     run.send("event", 2).await.unwrap();
     env.advance(minutes(4)).await.unwrap();
+    // § j6dvbbdrq@cxvy7
     assert_eq!(run.status().await.unwrap(), RunStatus::Suspended);
     env.advance(minutes(1)).await.unwrap();
     assert_eq!(run.result().await.unwrap(), [1, 2]);
+    // § end j6dvbbdrq
     env.check().await.unwrap();
     worker.shutdown().await.unwrap();
     env.close().await;
