@@ -20,7 +20,7 @@ The documentation carries no marker: `README.md` and `docs/*.md` name laws in pr
 
 ## The split rule
 
-A clause is a host law when host code decides it, and then every host that decides it has a marker at the deciding code. What the core decides, the host only passing a value in or reading an answer back, is a core law. The core is the prebuilt `wasm/substantial.wasm`, whose source is not in this tree, so a core law is carried by the conformance tests that exercise the shipped module, and the object layout by its schema. A host law that only restates a core law is cut in favour of the core law, and no marker sits on a line that only passes a value through.
+A clause is a host law when host code decides it, and then every host that decides it has a marker at the deciding code. What the core decides, the host only passing a value in or reading an answer back, is a core law. A core law is carried by the conformance tests that exercise `wasm/substantial.wasm` as shipped, and the object layout by its schema. A host law that only restates a core law is cut in favour of the core law, and no marker sits on a line that only passes a value through.
 
 A marker sits on the block that holds its clause. `§ one` marks the one statement or member that carries a clause whole, and a list of addresses when that statement carries several; `§ end` closes a stretch when the rest of the block is not governed by the clause. A test marker sits on the act and the assert that fail if its clause breaks.
 
@@ -67,6 +67,6 @@ The owner's rule for every gap: hosts are symmetric, a documented promise wins o
 ## Open questions
 
 - S3 has supported conditional writes (`If-Match`, `If-None-Match`) since 2024, so "S3 cannot make an overwrite conditional" is false. The no-overwrite design (`kwvhb7ehw`) does not rest on it today, but a design that assumed S3 could not compare and swap deserves another look.
-- A worker facing a due run of a version it does not serve lists that workflow every half `claim_ttl` and gets the run every `claim_ttl`, whatever its `max_idle`. The core decides it; whether that cost during a rolling deploy is intended is the core repository's call.
+- A worker facing a due run of a version it does not serve lists that workflow every half `claim_ttl` and gets the run every `claim_ttl`, whatever its `max_idle`. The core decides it; whether that cost during a rolling deploy is intended is still to be decided.
 - No CI job runs `silcrow check --all`: Silcrow is not public yet, so a runner cannot install it. The gate is the local hooks, `silcrow install` and the `silcrow` hook of `.pre-commit-config.yaml`, which a contributor without Silcrow skips. A CI job comes once a runner can install it.
 - No CI job runs on macOS, so the platforms law is carried by the signal code alone and the promise for macOS is tested only on maintainers' machines.

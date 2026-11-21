@@ -13,4 +13,4 @@ Engineering principles:
 - Order: make it work, then make it right, then make it fast only when a measured need or a law demands it.
 </silcrow>
 
-The protocol core is the prebuilt `wasm/substantial.wasm`, whose source is not in this repository. Its laws are notes of this project under `docs/decisions/core/`, carried by the conformance tests that exercise the shipped module (`rust/tests/`, `python/tests/`, `typescript/test/`, `dev/cross/`), and the layout it keeps by its schema in `proto/`. Host code carries the host's own laws, at the code that decides them, never at a value it only passes to the core.
+The laws of the protocol core, `wasm/substantial.wasm`, are carried by the conformance tests that exercise it (`rust/tests/`, `python/tests/`, `typescript/test/`, `dev/cross/`), and the layout it keeps by its schema in `proto/`. Host code carries the host's own laws, at the code that decides them, never at a value it only passes to the core.

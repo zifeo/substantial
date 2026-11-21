@@ -50,7 +50,7 @@ A deploy changes code under runs in flight. A version lets old and new code run 
 
 **§ <a id="bxb0ygj7m">bxb0ygj7m</a> Every host starts a run or a child from a declared workflow, never from a name alone, so a workflow that a worker of another language serves is started from a stub: a declaration of the same name, version and input whose body never runs.**
 
-The hosts run where the maintainer supports them: "Substantial runs on Linux and macOS", and on Windows through WSL, "as on Linux" ([README](../../README.md#install)). A worker's `serve()` stops on SIGTERM, a Unix signal, in every host ([dh7y75pvn.a](workers.md#dh7y75pvn)).
+The hosts run where the maintainer supports them: "Substantial runs on Linux, macOS and WSL" ([README](../../README.md#install)). A worker's `serve()` stops on SIGTERM, a Unix signal, in every host ([dh7y75pvn.a](workers.md#dh7y75pvn)).
 
 **§ <a id="k6m3smdpk">k6m3smdpk</a> Every host runs on Linux and macOS.**
 

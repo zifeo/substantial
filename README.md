@@ -170,14 +170,14 @@ Run it with `node checkout.ts` or `deno run -A checkout.ts`. Steps and workflows
 
 ## Install
 
-Substantial runs on Linux and macOS. Windows is not supported: run it in WSL, as on Linux.
+Substantial runs on Linux, macOS and WSL.
 
 Python 3.12 or later:
 
 ```sh
-uv add substantial==0.3.0            # or: pip install substantial==0.3.0
-uv add "substantial[s3]==0.3.0"      # with S3 stores, or: pip install "substantial[s3]==0.3.0"
-uv add "substantial[redis]==0.3.0"   # with Redis stores, or: pip install "substantial[redis]==0.3.0"
+uv add substantial            # or: pip install substantial
+uv add "substantial[s3]"      # with S3 stores, or: pip install "substantial[s3]"
+uv add "substantial[redis]"   # with Redis stores, or: pip install "substantial[redis]"
 ```
 
 The `s3` extra adds aiohttp, which sends the requests of `s3://` stores, and botocore, which signs them; the `redis` extra adds redis-py, which Redis stores need.
@@ -185,19 +185,19 @@ The `s3` extra adds aiohttp, which sends the requests of `s3://` stores, and bot
 Rust 1.97 or later, with what the example uses:
 
 ```sh
-cargo add substantial@0.3.0
+cargo add substantial
 cargo add tokio --features macros,rt-multi-thread
 cargo add serde --features derive
 cargo add anyhow
 ```
 
-Redis stores need the `redis` feature: `cargo add substantial@0.3.0 --features redis`, and [guest workflows](#guest-workflows) the `guests` feature.
+Redis stores need the `redis` feature: `cargo add substantial --features redis`, and [guest workflows](#guest-workflows) the `guests` feature.
 
 TypeScript, on Node 24 or later, or Deno, from [JSR](https://jsr.io/@substantial/substantial):
 
 ```sh
-npx jsr add @substantial/substantial@0.3.0
-deno add jsr:@substantial/substantial@0.3.0
+npx jsr add @substantial/substantial
+deno add jsr:@substantial/substantial
 ```
 
 `s3://` stores also need the AWS SDK: `npm install @aws-sdk/client-s3`, or `deno add npm:@aws-sdk/client-s3`. Redis stores need `@redis/client`: `npm install @redis/client`, or `deno add npm:@redis/client`.
