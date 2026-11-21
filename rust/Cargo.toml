@@ -1,6 +1,6 @@
 [package]
 name = "substantial"
-version = "0.2.1"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -35,7 +35,7 @@ serde = { version = "1.0.60", features = ["derive"] }
 serde_jcs = "0.2"
 serde_json = "1"
 sha2 = "0.11"
-substantial-macros = { version = "0.2.1", path = "macros" }
+substantial-macros = { version = "0.3.0", path = "macros" }
 thiserror = "2"
 tokio = { version = "1.49", features = ["fs", "macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"

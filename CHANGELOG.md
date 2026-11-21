@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Release notes are also published on [GitHub Releases](https://github.com/zifeo/substantial/releases).
 
-## [Unreleased]
+## [0.3.0] - Unreleased
 
 ### Changed
 
