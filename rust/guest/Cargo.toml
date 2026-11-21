@@ -34,6 +34,10 @@ crate-type = ["cdylib"]
 name = "edges"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "verbs"
+crate-type = ["cdylib"]
+
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 wit-bindgen = { version = "0.51", default-features = false, features = ["macros", "realloc", "std"] }

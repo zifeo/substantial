@@ -54,6 +54,12 @@ An embedder, a control plane that runs guests, adds interfaces of its own beside
 
 The embedder adds its interfaces to a wasmtime linker, so the Rust host's API names wasmtime types and its major version follows wasmtime's for guests: a wrapper of its own would hide what an embedder's host functions need, at the price of a second API to keep.
 
+## Guests loaded after the worker started
+
+A worker serves the workflow names it is given when it starts, and a guest published later, such as the procedure of one experiment, should run without a restart. So an embedder serves its guests through one workflow of its own: its run's input names the guest, by the digest of its bytes, and its code loads that guest and runs the guest's code within the run. The input is recorded, so every replay of the run finds the same guest and replays the same code. The cost is that every guest served so shares that workflow's name, its retention and its listing, and that the embedder loads and checks each guest itself, caching it by its digest, as loading compiles it. A worker learning new workflow names at run time was the other way, at the price of a new worker API in every host.
+
+**§ <a id="xvn8jfd26">xvn8jfd26</a> A workflow of the embedder's own may run a guest's workflow code within its own run, given the input it chooses, so that one workflow serves every guest its runs name.**
+
 ## Replaying a guest
 
 A replay calls its workflow function anew ([g4kv2kj51](promises.md#g4kv2kj51)) and drops its code where it waits ([d9818h4m4](workflows.md#d9818h4m4)). For a guest, that is an instance per replay, dropped when the run suspends, and an instance per attempt: a guest's memory never carries a value from one wakeup to the next that its history does not hold, so a guest replays the same on any worker.
@@ -102,5 +108,4 @@ A Rust guest is written as a workflow of the Rust host is, so that moving a work
 
 ## Open questions
 
-- Publishing without a deploy. A worker serves the workflow names it is given when it starts. Two ways serve a guest published later. Its run's input names the artifact's SHA-256, which the worker loads from the bucket, checks and caches: no worker API changes and a run always replays its own artifact, as its input is recorded, but every guest shares one workflow name, so one retention and one listing. Or a worker serves new names at run time, each guest its own name: a new worker API in every host, and every worker must learn the names from the store. The first is recommended.
 - What a guest does not have yet: children and chains, handlers and `wait_until`, sagas, polls, schedules and loops, charges and cost.

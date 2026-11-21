@@ -157,12 +157,12 @@ impl CodeState {
 }
 
 impl Guest {
-    /// One replay of the guest's workflow code.
-    pub(super) async fn run(
-        &self,
-        ctx: Context,
-        input: serde_json::Value,
-    ) -> Result<serde_json::Value> {
+    // § xvn8jfd26@cv0br
+    /// One replay of the guest's workflow code within the run of `ctx`, given `input`: what the
+    /// workflow of [`Guest::workflow`] runs. A workflow of the embedder's own calls it to serve
+    /// a guest loaded after its worker started, such as the one its input names by digest: every
+    /// replay of the run must find the same guest under that name.
+    pub async fn run(&self, ctx: Context, input: serde_json::Value) -> Result<serde_json::Value> {
         let state = CodeState {
             ctx,
             guest: self.clone(),
