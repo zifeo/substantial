@@ -1,12 +1,15 @@
 //! What runs cost: prices, charges, `c.cost()` and budgets, in a test environment.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeZone, Utc};
+use serde_json::json;
 use substantial::testing::Env;
 use substantial::{
-    Budget, Context, Cost, Error, Preset, Prices, RunStatus, Workflow, charge, minutes, step_key,
+    Budget, Context, Cost, Error, Preset, Prices, Retry, RunStatus, Workflow, charge, minutes,
+    step_key,
 };
 
 fn t0() -> DateTime<Utc> {
@@ -171,6 +174,7 @@ async fn charge_refuses_an_amount_past_the_limit_and_runs_only_in_a_step() {
         .unwrap();
     assert!(refused);
     assert_eq!(key, "p/blocking/0");
+    // § one ap5tfnrja.c@dfaw1
     assert_eq!(amounts, usd(2));
     worker.shutdown().await.unwrap();
     env.close().await;
@@ -191,6 +195,7 @@ async fn an_unknown_currency_fails_the_step_with_invalid_argument() {
     });
     let worker = env.worker(&wf).preset(Preset::Service).start().unwrap();
     let kind = env.start(&wf, ()).await.unwrap().result().await.unwrap();
+    // § one ap5tfnrja.a@nhx8d
     assert_eq!(kind, "InvalidArgument");
     worker.shutdown().await.unwrap();
     env.close().await;
@@ -216,8 +221,10 @@ async fn cost_is_recorded_and_replays_the_same() {
     env.advance(minutes(1)).await.unwrap();
     let (before, after) = run.result().await.unwrap();
     let seen = seen.lock().unwrap().clone();
+    // § m0vtdttae.c@mpd42
     assert_eq!(seen, [before, before], "the replay got the recorded value");
     assert!(after > before, "{before} then {after}");
+    // § end m0vtdttae.c
     let history = run.history().await.unwrap();
     assert!(history.iter().all(|e| e.kind != "budget_exceeded"));
     worker.shutdown().await.unwrap();
@@ -251,9 +258,72 @@ async fn a_budget_on_requests_passed_raises_and_fails_the_run() {
     let failed = run.result().await.unwrap_err();
     assert!(is_budget_exceeded(&failed), "{failed:?}");
     assert_eq!(run.status().await.unwrap(), RunStatus::Failed);
+    // § fkgsx3gvk.a@xngpb
     let (meter, limit, used): (String, u64, u64) = run.read("over").await.unwrap().unwrap();
     assert_eq!((meter.as_str(), limit), ("requests", 20));
     assert!(used > 20, "{used}");
+    // § end fkgsx3gvk.a
+    worker.shutdown().await.unwrap();
+    env.check().await.unwrap();
+    env.close().await;
+}
+
+#[tokio::test]
+async fn a_budget_passed_is_recorded_and_raised_at_the_same_place_on_replay() {
+    let env = Env::open(t0()).await.unwrap();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let undos = Arc::new(AtomicU32::new(0));
+    let (s, u) = (seen.clone(), undos.clone());
+    let wf = Workflow::without_input("over", move |c| {
+        let (seen, undos) = (s.clone(), u.clone());
+        async move {
+            // Its undo fails once, then waits a minute for its retry: a replay walks the
+            // history again.
+            c.step("pay", || async { charge("USD", 20) })
+                .retry(Retry {
+                    max_attempts: 2,
+                    initial: minutes(1),
+                    max: minutes(1),
+                    multiplier: 1.0,
+                })
+                .undo(move |_: ()| {
+                    let first = undos.fetch_add(1, Ordering::SeqCst) == 0;
+                    async move {
+                        if first {
+                            return Err(std::io::Error::other("busy"));
+                        }
+                        Ok(())
+                    }
+                })
+                .await?;
+            let after = c.step("after", || async { Ok::<_, Error>(()) }).await;
+            seen.lock().unwrap().push(format!("{after:?}"));
+            Err::<(), _>(c.rollback("over budget").await)
+        }
+    });
+    let worker = env.worker(&wf).preset(Preset::Service).start().unwrap();
+    let run = env.start(&wf, ()).budget([("USD", 10)]).await.unwrap();
+    env.advance(minutes(2)).await.unwrap();
+    let failed = run.result().await.unwrap_err();
+    assert_eq!(undos.load(Ordering::SeqCst), 2);
+    // § j2xzy4akb.a@94rzs
+    let history = run.history().await.unwrap();
+    let passed: Vec<&serde_json::Value> = (history.iter())
+        .filter(|e| e.kind == "budget_exceeded")
+        .map(|e| &e.data)
+        .collect();
+    assert_eq!(passed.len(), 1, "{history:?}");
+    assert_eq!(
+        (&passed[0]["meter"], &passed[0]["limit"], &passed[0]["used"]),
+        (&json!("USD"), &json!("10"), &json!("20")),
+        "{history:?}"
+    );
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(seen[0].contains("BudgetExceeded"), "{seen:?}");
+    assert_eq!(seen[0], seen[1], "the replay raised it at the same call");
+    // § end j2xzy4akb.a
+    assert!(is_budget_exceeded(&failed), "{failed:?}");
     worker.shutdown().await.unwrap();
     env.check().await.unwrap();
     env.close().await;
@@ -314,11 +384,13 @@ async fn a_declared_budget_a_start_overrides_and_the_same_id_with_another() {
         .budget([("get", u64::MAX)])
         .await;
     assert!(matches!(past, Err(Error::InvalidArgument(_))), "{past:?}");
+    // § j2xzy4akb.c@nxfr6
     let unknown = env.start(&wf, input).budget([("QQQ", 1)]).await;
     assert!(
         matches!(unknown, Err(Error::InvalidArgument(_))),
         "{unknown:?}"
     );
+    // § end j2xzy4akb.c
     worker.shutdown().await.unwrap();
     env.check().await.unwrap();
     env.close().await;
@@ -337,9 +409,12 @@ async fn a_retry_with_a_larger_budget_completes_and_keeps_the_cost_spent() {
     let failed = run.result().await.unwrap_err();
     assert!(is_budget_exceeded(&failed), "{failed:?}");
     run.retry().budget([("USD", 100)]).await.unwrap();
+    // § vb6krfmej.b@4z332
     let again = run.retry().budget([("USD", 1000)]).await;
     assert!(matches!(again, Err(Error::InvalidArgument(_))), "{again:?}");
+    // § end vb6krfmej.b
     // The two payments of the failed run, and the retry's.
+    // § one j2xzy4akb.b@p0kk1, m0vtdttae@s59yp
     assert_eq!(run.result().await.unwrap().amounts, usd(18));
     worker.shutdown().await.unwrap();
     env.check().await.unwrap();
@@ -371,9 +446,11 @@ async fn a_childs_cost_reaches_its_parent() {
         .result()
         .await
         .unwrap();
+    // § m0vtdttae.a@n7m0j
     assert_eq!(mine.children.amounts, usd(12));
     assert!(mine.children.requests >= theirs.requests, "{mine:?}");
     assert_eq!(mine.amounts, usd(12));
+    // § end m0vtdttae.a
     assert!(mine.steps.is_empty());
     worker.shutdown().await.unwrap();
     env.close().await;

@@ -13,8 +13,10 @@ export type Sdk = typeof import("@aws-sdk/client-s3");
 
 /** ListObjectsV2 returns at most this many keys a page. */
 export const PAGE = 1000;
+// § gvqb04830.b@av6rt
 const CONNECT_MS = 5_000;
 const ATTEMPT_MS = 60_000;
+// § end gvqb04830.b
 export const WAIT_SECONDS = "x-substantial-wait-seconds";
 export const WAIT_ETAG = "x-substantial-wait-etag";
 export const LISTING_ETAG = "x-substantial-listing-etag";
@@ -41,6 +43,7 @@ export interface S3Location {
 }
 
 export function parseS3Url(url: string): S3Location {
+  // § e9ern38bz.b@e8ght
   const invalid = (why: string) => new ConfigError(`${url}: ${why}`);
   let parsed: URL;
   try {
@@ -98,6 +101,7 @@ export function waitHeaders(wait: ListWait | undefined, maxKeys: number): Record
   if (wait.etag !== undefined && !/^[\x21-\x7e]+$/.test(wait.etag)) {
     throw new Refused(`the listing etag ${JSON.stringify(wait.etag)} cannot be sent`);
   }
+  // § gvqb04830.c@ekjdr
   const headers: Record<string, string> = { [WAIT_SECONDS]: String(wait.seconds) };
   if (wait.etag !== undefined) headers[WAIT_ETAG] = wait.etag;
   return headers;
@@ -183,8 +187,10 @@ export class S3Store implements Store {
         // No cap, as in every host: a waiting listing holds its socket up to 20 s, one per
         // workflow served and per `result` waiter, and the SDK's cap of 50 would
         // queue every other request behind them.
+        // § x2qrbh9jk.a@72sc0
         httpAgent: { maxSockets: Number.POSITIVE_INFINITY },
         httpsAgent: { maxSockets: Number.POSITIVE_INFINITY },
+        // § end x2qrbh9jk.a
       },
       // S3-compatible stores that predate flexible checksums refuse their headers.
       requestChecksumCalculation: "WHEN_REQUIRED",
@@ -229,6 +235,7 @@ export class S3Store implements Store {
   }
 
   async #put(key: string, data: Uint8Array): Promise<Create> {
+    // § gvqb04830@mttyb
     const what = `create ${key}`;
     const command = new this.#sdk.PutObjectCommand({
       Bucket: this.#bucket,
@@ -261,6 +268,7 @@ export class S3Store implements Store {
       ({ Body: body } = await this.#send(what, transient, (o) => this.#client.send(command, o)));
     } catch (e) {
       const r = refusal(what, e);
+      // § one gvqb04830.a@x07cg
       if (r.status === 404 && r.code === "NoSuchKey") return undefined;
       throw statusFault(r);
     }
@@ -273,6 +281,7 @@ export class S3Store implements Store {
   }
 
   async #listOnce(prefix: string, options: ListOptions): Promise<Listing> {
+    // § dfd6vt90h.c@hcw2j
     const { startAfter, maxKeys, wait } = options;
     const keys: string[] = [];
     let etag: string | undefined;
@@ -323,6 +332,7 @@ export class S3Store implements Store {
       after = this.#full(keys[keys.length - 1] as string);
     }
     if (wait !== undefined && !etag) {
+      // § gvqb04830.c@vdrfj
       throw new Refused(`a waiting listing of ${prefix} answered without ${LISTING_ETAG}`);
     }
     return etag === undefined
@@ -340,6 +350,7 @@ export class S3Store implements Store {
       await this.#send(what, transient, (o) => this.#client.send(command, o));
     } catch (e) {
       const r = refusal(what, e);
+      // § one dfd6vt90h.d@bjy4j
       if (r.status === 404 && r.code === "NoSuchKey") return;
       throw statusFault(r);
     }

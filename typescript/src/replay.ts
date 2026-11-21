@@ -53,6 +53,7 @@ export interface ReplayHost {
 
 /** Tells the observer; one that raises stops the worker with its error. */
 function tell(host: ReplayHost, emit: Emit, event: Observed): void {
+  // § yp7fv5sa7.b@dqzkv
   try {
     host.metering.tell(event);
   } catch (error) {
@@ -136,6 +137,7 @@ function quiescent(): Promise<void> {
 type Settled = { ok: true; value: unknown } | { ok: false; error: unknown };
 
 function inputOf(start: layout.Start): unknown {
+  // § e1dc4dar4.a@n8y3f
   const input = start.input?.kind.case === undefined ? {} : decodeValue(start.input);
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     throw new InvalidArgument(`an input is a JSON object, not ${jsonText(input)}`);
@@ -147,6 +149,7 @@ function inputOf(start: layout.Start): unknown {
 function spawn(shared: Shared, workflow: AnyWorkflow): { settled?: Settled } {
   const code: { settled?: Settled } = {};
   const context = new RunContext(shared);
+  // § one g4kv2kj51@3wd0m
   const promise = current.run(shared, async () => workflow.fn(context, inputOf(shared.start)));
   promise.then(
     (value) => {
@@ -160,6 +163,7 @@ function spawn(shared: Shared, workflow: AnyWorkflow): { settled?: Settled } {
 }
 
 function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
+  // § g039jvy6k@eh23v
   if (!settled.ok) {
     const e = settled.error;
     if (e instanceof Cancelled) {
@@ -182,6 +186,7 @@ function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
   try {
     text = jsonText(settled.value);
   } catch (e) {
+    // § g039jvy6k.a@q8xf2
     const error = { type: "Json", message: `the value of ${workflow.name}: ${messageOf(e)}` };
     return create(run.EndSchema, { end: { case: "failed", value: { error } } });
   }
@@ -189,6 +194,7 @@ function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
   try {
     json = capped(new TextEncoder().encode(text), `the value of ${workflow.name}`);
   } catch (e) {
+    // § h8wg39cct.d@vydbn
     return create(run.EndSchema, { end: { case: "failed", value: { error: failureOf(e) } } });
   }
   return create(run.EndSchema, { end: { case: "completed", value: { value: jsonValue(json) } } });
@@ -196,6 +202,7 @@ function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
 
 /** The failure an error of the code ends its run with. */
 function endFailure(e: unknown) {
+  // § r3sd261h4.b@2qwrs
   const failure = endedWith(failureOf(e));
   if (!(e instanceof StepFailed)) return failure;
   const core = stepFailures.get(e);
@@ -240,9 +247,9 @@ function warnEnd(chain: string, c: run.Commit): void {
     const k = event.kind;
     if (k.case === "failed") {
       const error = k.value.error;
-      console.warn(`substantial: run ${chain} failed: ${error?.type}: ${error?.message}`);
+      console.warn(`run ${chain} failed: ${error?.type}: ${error?.message}`);
     } else if (k.case === "cancelled") {
-      console.warn(`substantial: run ${chain} cancelled: ${k.value.reason}`);
+      console.warn(`run ${chain} cancelled: ${k.value.reason}`);
     }
   }
 }
@@ -323,6 +330,7 @@ function spawnAttempt(
 ): Future<Ended> {
   const timeout = e.timeoutMs === undefined ? undefined : Number(e.timeoutMs);
   return clock.spawn(async (): Promise<Ended> => {
+    // § yp7fv5sa7.a@mzt2w
     const started = clock.elapsed();
     // Unless it reaches its outcome: abandoned by a shutdown, a lost claim or a stop.
     let ended: Attempt["outcome"] = "abandoned";
@@ -349,6 +357,7 @@ async function drive(
 ): Promise<agent.ReplayEnd> {
   if (data.start === undefined) throw new ProtocolError(`replay of ${data.run} without start`);
   const machine = new RunMachine(core, data);
+  // § one aym52h8ch@1fd5z
   const stepTimeout = workflow.stepTimeout ?? host.stepTimeout;
   const shared = new Shared(machine, clock, data, data.start, stepTimeout);
   const attempts = new Set<Future<Ended>>();
@@ -357,6 +366,7 @@ async function drive(
   try {
     let code: Code = spawn(shared, workflow);
     for (;;) {
+      // § k3zma9hjs@v7nwv
       code = failCode(shared, code);
       if (code !== undefined) {
         await quiescent();
@@ -368,11 +378,14 @@ async function drive(
           code = undefined;
         }
       }
-      // The core recorded the failure, which `next` commits: the code is abandoned, its steps in
-      // flight never reported.
+      // The core recorded the failure, which `next` commits: the code is abandoned and its
+      // attempts in flight stopped, never reported.
       if (shared.diverged !== undefined) {
         code = undefined;
-        for (const a of attempts) if (a.done) attempts.delete(a);
+        // § v4n6ja42e.a@8k48t
+        abandoned.abort(abandonedReplay());
+        attempts.clear();
+        // § end v4n6ja42e.a
       }
       if (shared.fatal !== undefined) {
         throw new ProtocolError(`a call of the code failed: ${shared.fatal}`);
@@ -427,12 +440,14 @@ async function drive(
           break;
         }
         case "idle":
+          // § one d9818h4m4@gm564
           return create(agent.ReplayEndSchema, { end: { case: "idle", value: next.value } });
         default:
           throw new ProtocolError("empty next");
       }
     }
   } finally {
+    // § one v4n6ja42e.a@k3cp0
     abandoned.abort(abandonedReplay());
     shared.closed = true;
     machine.close();

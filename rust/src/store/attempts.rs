@@ -11,6 +11,7 @@ tokio::task_local! {
 /// Counts one request of the operation being measured; called by the adapters' shared retry
 /// layer for each attempt it makes.
 pub(crate) fn sent() {
+    // § zemxe46k3.a@2k8hb
     let _ = SENT.try_with(|n| n.set(n.get() + 1));
 }
 
@@ -18,6 +19,7 @@ pub(crate) fn sent() {
 /// layer, the memory store or a test's, sends each operation once. An operation measured inside
 /// another, through a store wrapping a store, counts in both.
 pub(crate) async fn measured<T>(op: impl Future<Output = T>) -> (T, u32) {
+    // § zemxe46k3.a@3g27z
     let counted = async {
         let out = op.await;
         (out, SENT.with(Cell::get))

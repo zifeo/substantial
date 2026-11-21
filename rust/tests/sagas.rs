@@ -5,9 +5,11 @@ mod common;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{LONG, namespaces, script};
+use common::{LONG, eventually, namespaces, script};
 use substantial::__internal as internal;
-use substantial::{Context, Error, Failure, Permanent, RunStatus, Step, Substantial, Workflow};
+use substantial::{
+    Context, Error, Failure, Permanent, Retry, RunStatus, Step, Substantial, Workflow,
+};
 
 type Log = Arc<Mutex<Vec<String>>>;
 
@@ -62,7 +64,45 @@ async fn a_rollback_undoes_every_step_most_recent_first() {
             (error.kind.as_str(), error.message.as_str()),
             ("RolledBack", "why")
         );
+        // § ej5k8q6w5@0gse6
         assert_eq!(*log.lock().unwrap(), ["c", "a"], "{}", ns.name);
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Round {
+    round: u32,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rollback_leaves_the_earlier_runs_of_the_chain() {
+    let log = Log::default();
+    let l = log.clone();
+    let w = Workflow::new("continued", move |c: Context, input: Round| {
+        let log = l.clone();
+        async move {
+            if input.round == 0 {
+                undoable(&c, &log, "earlier").await?;
+                return Err(c.continue_as_new(Round { round: 1 }).await);
+            }
+            undoable(&c, &log, "current").await?;
+            Err::<(), _>(c.rollback("why").await)
+        }
+    });
+    for ns in namespaces() {
+        log.lock().unwrap().clear();
+        let sub = internal::create(ns.store).await.unwrap();
+        let worker = script(&sub, &w).start().unwrap();
+        let run = sub.start(&w, Round { round: 0 }).await.unwrap();
+        let result = run.result().timeout(LONG).await;
+        worker.shutdown().await.unwrap();
+        assert!(
+            matches!(&result, Err(Error::RunFailed { error, .. }) if error.kind == "RolledBack"),
+            "{}: {result:?}",
+            ns.name
+        );
+        // § one ej5k8q6w5.a@0pxgz
+        assert_eq!(*log.lock().unwrap(), ["current"], "{}", ns.name);
     }
 }
 
@@ -98,6 +138,7 @@ async fn a_saga_undoes_its_own_steps_then_raises_again() {
         let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}", ns.name);
+        // § sft633bnn@6nb24
         assert_eq!(*log.lock().unwrap(), ["c", "b", "a"], "{}", ns.name);
     }
 }
@@ -114,6 +155,7 @@ async fn an_undo_without_attempts_left_fails_the_run() {
         let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "UndoFailed", "{}: {error}", ns.name);
+        // § dzbz2dz7v@xae3t
         assert!(
             error.message.contains("charge.undo"),
             "{}: {error}",
@@ -135,8 +177,10 @@ async fn a_saga_that_succeeds_leaves_its_steps_to_a_rollback() {
                 .saga(|c| async move { Ok((undoable(&c, &inner, "b").await?, c)) })
                 .await?;
             assert_eq!(value, "b");
+            // § sft633bnn.b@bpmeb
             let late = scoped.step("late", || async { Ok::<_, Error>(()) }).await;
             assert!(matches!(late, Err(Error::InvalidArgument(_))), "{late:?}");
+            // § end sft633bnn.b
             Err::<(), _>(c.rollback("after").await)
         }
     });
@@ -145,6 +189,7 @@ async fn a_saga_that_succeeds_leaves_its_steps_to_a_rollback() {
         let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}: {error}", ns.name);
+        // § sft633bnn.a@f5bq2
         assert_eq!(*log.lock().unwrap(), ["b", "a"], "{}", ns.name);
     }
 }
@@ -219,5 +264,55 @@ async fn an_inner_saga_ended_hands_its_steps_to_the_outer_one() {
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}", ns.name);
         assert_eq!(*log.lock().unwrap(), ["c", "b", "a", "z"], "{}", ns.name);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_step_waiting_for_its_retry_raises_cancelled_and_its_undos_run() {
+    let log = Log::default();
+    let l = log.clone();
+    let w = Workflow::without_input("retrying", move |c| {
+        let log = l.clone();
+        async move {
+            undoable(&c, &log, "a").await?;
+            let retry = Retry {
+                max_attempts: 3,
+                initial: Duration::from_secs(600),
+                max: Duration::from_secs(600),
+                multiplier: 1.0,
+            };
+            let waited = c
+                .step("down", || async {
+                    Err::<(), _>(std::io::Error::other("provider down"))
+                })
+                .retry(retry)
+                .await;
+            match waited {
+                Err(Error::Cancelled(_)) => Err(c.rollback("cancelled").await),
+                other => other,
+            }
+        }
+    });
+    for ns in namespaces() {
+        log.lock().unwrap().clear();
+        let sub = internal::create(ns.store).await.unwrap();
+        let worker = script(&sub, &w).start().unwrap();
+        let run = sub.start(&w, ()).await.unwrap();
+        // § vmk2ydwta.b@xywc4
+        eventually("the step waits for its retry", async || {
+            run.status().await.unwrap() == RunStatus::Suspended
+        })
+        .await;
+        run.cancel("not needed").await.unwrap();
+        match run.result().timeout(LONG).await {
+            Err(Error::RunFailed {
+                status: RunStatus::Cancelled,
+                ..
+            }) => {}
+            other => panic!("{}: {other:?}", ns.name),
+        }
+        assert_eq!(*log.lock().unwrap(), ["a"], "{}: the undo ran", ns.name);
+        // § end vmk2ydwta.b
+        worker.shutdown().await.unwrap();
     }
 }

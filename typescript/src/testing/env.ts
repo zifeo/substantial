@@ -197,6 +197,7 @@ export class Env extends Base {
     const metering = new Metering(prices, observe);
     const world = new World(`testing-${crypto.randomUUID()}`, now.getTime(), chaos);
     const store = metering.wrap(world.store(undefined));
+    // § one bsw9tpftr@45yb8
     const module = await opening(store, createInput());
     const env = new Env(module, world, store, metering);
     world.env = env;

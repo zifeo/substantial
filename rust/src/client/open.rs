@@ -185,6 +185,7 @@ pub(crate) async fn attached(
         }) => match outcome {
             opened::Opened::Open(_) => {}
             opened::Opened::LayoutError(e) => return Err(Error::LayoutError(e)),
+            // § one zemxe46k3.b@nxn4m
             opened::Opened::Failed(f) => return Err(Error::StoreError(f.message)),
         },
         other => return Err(plan::unexpected("open", other)),

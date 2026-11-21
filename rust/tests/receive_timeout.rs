@@ -68,6 +68,7 @@ async fn none_within_the_timeout_raises_wait_timeout_at_its_instant() {
         .unwrap();
     let run = env.start(&receiver(), ()).await.unwrap();
     env.advance(minutes(5)).await.unwrap();
+    // § j6dvbbdrq.a@m3jxz
     assert_eq!(
         run.result().await.unwrap(),
         json!({"timeout": "the timeout passed first", "at": "2030-01-07T09:05:00+00:00"})

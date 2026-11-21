@@ -47,8 +47,10 @@ class Script:
         return Script(text, hashlib.sha1(text).hexdigest())
 
 
+# § htbc4k715.e@05b7v
 CREATE = Script.shipped("create.lua")
 DELETE = Script.shipped("delete.lua")
+# § end htbc4k715.e
 
 
 class ProviderFailed(Exception):
@@ -69,6 +71,7 @@ class _Provided(CredentialProvider):
 
     async def get_credentials_async(self) -> tuple[str, ...]:
         async with self._lock:
+            # § kesrnhfsp.c@j2dk3
             p = self._password
             if p is None or (
                 p.expires_at is not None and datetime.now(UTC) >= p.expires_at - REFRESH_BEFORE
@@ -107,6 +110,9 @@ class Connector:
 
     def client(self, where: str, *, db: int | None = None, auth: bool = True) -> Redis:
         host, _, port = where.rpartition(":")
+        # No cap, as in every host: redis-py's own pool, without `max_connections`, opens a
+        # connection per command in flight, so a waiting listing queues nothing behind it.
+        # § x2qrbh9jk.a@qyr29
         return Redis(
             host=host.strip("[]"),
             port=int(port),
@@ -118,6 +124,7 @@ class Connector:
             protocol=2,
             **(self._auth if auth else {}),
         )
+        # § end x2qrbh9jk.a
 
     async def _address(self) -> str:
         """Where the primary is: the server, or what the sentinels or the cluster nodes say."""
@@ -159,12 +166,14 @@ class Connector:
                 "INFO", "persistence", "memory", "replication", "cluster"
             )
             self._check(where, info)
+            # § htbc4k715.b@8c3rn
             try:
                 await client.execute_command("WAITAOF", 1, 0, WAITAOF_MS)
             except (AuthenticationError, NoPermissionError):
                 raise
             except ResponseError as e:
                 raise ConfigError(f"{where} has no WAITAOF, which needs Redis 7.2: {e}") from e
+            # § end htbc4k715.b
             for script in scripts:
                 if (loaded := await client.script_load(script.text)) != script.sha:
                     raise Permanent(f"{where} loaded a script as {loaded}, not {script.sha}")
@@ -176,6 +185,7 @@ class Connector:
     def _check(self, where: str, info: dict[str, Any]) -> None:
         """The checks at open (I-26): a server that loses or evicts keys is not a store."""
         topology = self._location.topology
+        # § htbc4k715.b@d5p0j
         if info.get("aof_enabled") != 1:
             raise ConfigError(f"{where} has no AOF: set appendonly yes and appendfsync always")
         policy = info.get("maxmemory_policy")

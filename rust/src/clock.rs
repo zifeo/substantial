@@ -190,6 +190,7 @@ impl Tasks {
 
 impl Drop for Tasks {
     fn drop(&mut self) {
+        // § v4n6ja42e.a@y3ppe
         self.0.iter().for_each(Task::abort);
     }
 }
@@ -326,6 +327,7 @@ impl Clock {
         }
         let _ = (name, key);
         match timeout {
+            // § one aym52h8ch@vxf28, v4n6ja42e.a@ea30s
             Some(t) => tokio::time::timeout(t, body).await.ok(),
             None => Some(body.await),
         }

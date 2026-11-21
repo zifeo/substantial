@@ -73,6 +73,7 @@ impl FaultStore {
         if world.time.now() < world.outage_until.load(Ordering::SeqCst) {
             return Err(Fault::Transient("the store is out".into()));
         }
+        // § hz0ve24df.b@w1k0f
         if let Some(inc) = &self.inc
             && let Some(n) = world.draw(kind, key, inc)
         {
@@ -88,6 +89,7 @@ impl FaultStore {
             world.faulted(|f| f.failed += 1);
             return Err(Fault::Transient(format!("chaos: a {kind} failed")));
         }
+        // § end hz0ve24df.b
         apply().await.map_err(|e| Fault::Permanent(e.message))
     }
 

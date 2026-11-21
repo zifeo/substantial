@@ -326,11 +326,8 @@ test("a run that ends failed or cancelled logs one warning", async () => {
     console.warn = warn;
   }
   assert.deepEqual(
-    warnings.filter((w) => w.startsWith("substantial: run ")),
-    [
-      "substantial: run warn-failed failed: RangeError: boom",
-      "substantial: run warn-cancelled cancelled: not needed",
-    ],
+    warnings.filter((w) => w.startsWith("run ")),
+    ["run warn-failed failed: RangeError: boom", "run warn-cancelled cancelled: not needed"],
   );
 });
 

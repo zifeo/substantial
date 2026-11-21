@@ -74,11 +74,13 @@ pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreFailure
 /// The futures are boxed so that a store can be chosen at run time (`Arc<dyn Store>`), which
 /// `async fn` in a trait does not allow.
 pub trait Store: Send + Sync {
+    // § w89qkqkaj@662gx
     fn capabilities(&self) -> Capabilities;
     /// Connects, failing with `ConfigError` on a store the adapter cannot use; the operations
     /// connect too when it was not called.
     fn open(&self) -> BoxFuture<'_, Result<()>>;
     /// Atomic and exclusive: of concurrent creates of a key, exactly one gets `Created`.
+    // § one kwvhb7ehw@dchmx
     fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create>;
     fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>>;
     /// Keys under `prefix` and after `start_after`, in byte order of the full key, at most `max_keys`.
@@ -95,6 +97,7 @@ pub trait Store: Send + Sync {
 
 /// Opens the adapter a URL names (I-16); the scheme alone picks it, nothing is detected.
 pub fn open(url: &str, credentials: &Credentials, retry: StoreRetry) -> Result<Arc<dyn Store>> {
+    // § e9ern38bz@mhpw4
     retry.validate()?;
     if let Some(ns) = url.strip_prefix("memory://") {
         refuse_query(url, ns)?;
@@ -129,9 +132,11 @@ pub fn open(url: &str, credentials: &Credentials, retry: StoreRetry) -> Result<A
             "{scheme} stores are not available in this host yet; {SUPPORTED}"
         )));
     }
+    // § e9ern38bz.a@eys9z
     Err(Error::ConfigError(format!(
         "unknown scheme in {url:?}; {SUPPORTED}"
     )))
+    // § end e9ern38bz.a
 }
 
 const SUPPORTED: &str = "the supported schemes are memory://, file:, s3://, s3+http://, h3://, \
@@ -139,6 +144,7 @@ const SUPPORTED: &str = "the supported schemes are memory://, file:, s3://, s3+h
      rediss+cluster://";
 
 fn refuse_query(url: &str, rest: &str) -> Result<()> {
+    // § e9ern38bz.b@mxnqf
     if rest.contains('?') {
         return Err(Error::ConfigError(format!(
             "{url:?} takes no query parameters"
@@ -152,6 +158,7 @@ fn refuse_query(url: &str, rest: &str) -> Result<()> {
 
 /// Performs one `StoreOp` of the core and answers with its `OpResult`.
 pub(crate) async fn perform(store: &dyn Store, op: b::StoreOp) -> b::OpResult {
+    // § zemxe46k3.a@envxm
     let (result, attempts) = attempts::measured(perform_once(store, op)).await;
     b::OpResult {
         result: Some(result),
@@ -205,6 +212,7 @@ pub(crate) fn in_range<'a>(
     start_after: Option<&str>,
     max_keys: u32,
 ) -> Vec<String> {
+    // § dfd6vt90h.b@npwe0
     keys.filter(|k| k.starts_with(prefix) && start_after.is_none_or(|s| k.as_str() > s))
         .take(max_keys as usize)
         .cloned()

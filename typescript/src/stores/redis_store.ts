@@ -60,6 +60,7 @@ let scripts: Promise<Scripts> | undefined;
 
 /** The scripts of `redis/`, as the package ships them, read once per process. */
 function shippedScripts(): Promise<Scripts> {
+  // § htbc4k715.e@v00yk
   scripts ??= Promise.all([shipped("create.lua"), shipped("delete.lua")]).then(([c, d]) => ({
     create: c,
     delete: d,
@@ -161,6 +162,7 @@ class Pool {
 
   async execute<T>(fn: (conn: Connection) => Promise<T>): Promise<T> {
     if (this.#destroyed) throw new Transient("the connections to the primary were closed");
+    // § x2qrbh9jk.a@b1hex
     let client = this.#idle.pop();
     if (client === undefined) {
       client = this.#open();
@@ -322,12 +324,14 @@ class Connector {
         await pool.sendCommand(["INFO", "persistence", "memory", "replication", "cluster"]),
       );
       this.#check(where, info);
+      // § htbc4k715.b@hccpc
       try {
         await pool.sendCommand(["WAITAOF", "1", "0", String(WAITAOF_MS)]);
       } catch (e) {
         if (!(e instanceof this.#redis.ErrorReply) || isRefusal(e)) throw e;
         throw new ConfigError(`${where} has no WAITAOF, which needs Redis 7.2: ${e.message}`);
       }
+      // § end htbc4k715.b
       for (const script of [scripts.create, scripts.delete]) {
         const loaded = await pool.sendCommand(["SCRIPT", "LOAD", script.text]);
         if (String(loaded) !== script.sha) {
@@ -344,6 +348,7 @@ class Connector {
   /** The checks at open (I-26): a server that loses or evicts keys is not a store. */
   #check(where: string, info: Map<string, unknown>): void {
     const { topology } = this.#location;
+    // § htbc4k715.b@zsm5c
     if (info.get("aof_enabled") !== "1") {
       throw new ConfigError(`${where} has no AOF: set appendonly yes and appendfsync always`);
     }
@@ -647,11 +652,13 @@ export class RedisStore implements Store {
     this.#redis = redis;
     this.#retry = storeRetry;
     this.#waitaofMs = waitaofMs;
+    // § htbc4k715.d@f1kpm
     const tag = `{${location.namespace}}`;
     this.#object = `${tag}:o:`;
     this.#index = `${tag}:i`;
     this.#fence = `${tag}:f`;
     this.#channel = `${tag}:c`;
+    // § end htbc4k715.d
     const cluster = location.topology === "cluster";
     this.#publish = cluster ? "SPUBLISH" : "PUBLISH";
     this.#connector = new Connector(location, credentials, redis);
@@ -727,6 +734,7 @@ export class RedisStore implements Store {
    * A separate round trip: with the write in the same pipeline, replicas acknowledge their fsync
    * only at their next second. */
   async #durable(primary: Primary, conn: Connection, what: string, created: boolean) {
+    // § htbc4k715@3pd85
     const fault = (message: string) => (created ? new Ambiguous(message) : new Transient(message));
     let replicas: number;
     try {
@@ -743,6 +751,7 @@ export class RedisStore implements Store {
         String(replicas),
         String(this.#waitaofMs),
       ])) as [number, number];
+      // § one dfd6vt90h.e@9phzv
       if (local >= 1 && remote >= replicas) return;
       waited = `[${local}, ${remote}]`;
     } catch (e) {
@@ -763,6 +772,7 @@ export class RedisStore implements Store {
     if (replicas !== "all") return replicas;
     if (performance.now() - primary.countedAt >= RECOUNT_EVERY_MS) await this.#count(primary);
     if (primary.replicas === 0 && topology !== "standalone") {
+      // § htbc4k715.c@vc64z
       throw new Transient(`${primary.where} has no replica online`);
     }
     return primary.replicas;
@@ -812,6 +822,7 @@ export class RedisStore implements Store {
     resolving: boolean,
   ): Promise<unknown> {
     return primary.pool.execute(async (conn: Connection) => {
+      // § htbc4k715.a@9ah1h
       const [found] = await Promise.all([
         conn.sendCommand(command, options),
         conn.sendCommand(["INCR", this.#fence]),
@@ -920,6 +931,7 @@ export class RedisStore implements Store {
             this.#channel,
             this.#publish,
           ]);
+          // § htbc4k715.a@44jcs
           await this.#durable(p, conn, `delete ${key}`, false);
         }),
       ),

@@ -1,0 +1,127 @@
+// § j67tqxstm@qdad0
+// § j67tqxstm.a@efxfv
+package substantial:wasm@0.1.0;
+// § end j67tqxstm.a
+
+/// The verbs a Wasm workflow's code calls, each recorded in its run's history. Every value is
+/// JSON text, which the host checks: a message, a published value or a step's arguments that is
+/// not JSON raises `InvalidArgument`. A duration in milliseconds is at most 2^53 - 1, and a longer
+/// one raises `InvalidArgument`.
+interface context {
+    /// A failure, with the fields of every host's. A `Cancelled` carries the reason of the
+    /// cancellation as its message.
+    record failure {
+        kind: string,
+        message: string,
+        retryable: bool,
+        /// JSON.
+        details: option<string>,
+    }
+
+    /// An error a verb raised: its failure, and the failure of its last attempt for a `StepFailed`.
+    record raised {
+        failure: failure,
+        cause: option<failure>,
+    }
+
+    /// A call the code made, ended or not.
+    resource call {
+        /// Its value once it ended, its error once it failed, none before it ended: a call is taken
+        /// once, and none after.
+        take: func() -> option<result<string, raised>>;
+    }
+
+    /// Blocks until one of `calls` at least has ended: the position of each that has, in order. A
+    /// wait on no call traps, as nothing would end it.
+    wait: func(calls: list<borrow<call>>) -> list<u32>;
+
+    record retry {
+        max-attempts: u32,
+        initial-ms: u64,
+        max-ms: u64,
+        multiplier: f64,
+    }
+
+    record step-options {
+        retry: option<retry>,
+        timeout-ms: option<u64>,
+    }
+
+    /// The step `name`, each attempt run by the export `step` with `args`.
+    step: func(name: string, args: string, options: step-options) -> call;
+    sleep: func(ms: u64) -> call;
+    /// Until `ms` milliseconds since the Unix epoch.
+    sleep-until: func(ms: s64) -> call;
+    /// The next message of `name`; with a timeout, `WaitTimeout` once it passed with none.
+    receive: func(name: string, timeout-ms: option<u64>) -> call;
+    send: func(chain: string, name: string, value: string, id: option<string>) -> call;
+    /// The time, a JSON string of RFC 3339 in UTC with milliseconds, such as
+    /// `"2026-11-21T09:30:00.000Z"`.
+    now: func() -> call;
+    /// A float in [0, 1).
+    random: func() -> call;
+    uuid: func() -> call;
+    publish: func(key: string, value: string) -> result<_, raised>;
+    chain: func() -> string;
+
+    enum level {
+        trace,
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    /// Written only once the replay is live.
+    log: func(level: level, message: string);
+}
+
+/// What a step attempt calls.
+interface attempt {
+    /// `<run>/<step>/<occurrence>`, the same for every attempt and replay of the step.
+    step-key: func() -> string;
+}
+
+/// What the workflow code and the steps both call.
+interface panics {
+    /// The message of a panic, given before the module traps, for the failure of its trap.
+    panicked: func(message: string);
+}
+
+/// What a Wasm workflow exports for the runner to call.
+interface workflow {
+    use context.{failure};
+
+    /// How the code's run ends, when it does not return a value. A failure equal, field by field,
+    /// details text included, to one a verb raised ends the run with the error the host raised,
+    /// such as a `StepFailed` with its cause; any other ends it failed with that failure.
+    variant end {
+        failed(failure),
+        cancelled(string),
+    }
+
+    run: func(input: string) -> result<string, end>;
+
+    record step-failure {
+        message: string,
+        permanent: bool,
+    }
+
+    variant step-error {
+        /// The step's own error: `Error`, retryable unless `permanent`.
+        failed(step-failure),
+        /// Its value, which JSON cannot hold: `Json`, not retryable.
+        not-json(string),
+    }
+
+    /// One attempt of the step `name`. Its value is JSON text; one that is not fails the attempt
+    /// with `Json`, not retryable.
+    step: func(name: string, args: string) -> result<string, step-error>;
+}
+
+world module {
+    import context;
+    import attempt;
+    import panics;
+    export workflow;
+}

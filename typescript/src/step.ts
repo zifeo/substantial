@@ -44,10 +44,12 @@ export function charge(currency: string, nano: bigint): void {
   if (typeof currency !== "string") {
     throw new InvalidArgument(`a currency is a string, not ${String(currency)}`);
   }
+  // § one cvnf47vy8.a@8sb9f
   if (typeof nano !== "bigint" || nano < 0n || nano > MAX) {
     const shown = typeof nano === "bigint" ? `${nano}n` : String(nano);
     throw new InvalidArgument(`a charge is a bigint from 0n to ${MAX}n, not ${shown}`);
   }
+  // § one cvnf47vy8@87ckw
   running.charges.push(create(layout.AmountSchema, { currency, nano }));
 }
 
@@ -104,11 +106,13 @@ export function callStep<T>(
   args: unknown[],
   options: DeclaredStepOptions<unknown[], unknown>,
 ): Promise<T> {
+  // § wv67rmrjm@bt5w5
   if (typeof name !== "string") throw new InvalidArgument(`a step name is a string, not ${name}`);
   if (typeof fn !== "function") throw new InvalidArgument(`a step runs a function, not ${fn}`);
   const { retry, timeout, decode, undo } = options;
   const policy = retry === undefined ? undefined : retryPolicy(retry);
   const saga = sagaScope.getStore();
+  // § one aym52h8ch@v3t4w
   const timeoutMs = BigInt((timeout ?? shared.stepTimeout).ms);
   const stepOptions = create(run.StepOptionsSchema, {
     undo: undo !== undefined,
@@ -117,15 +121,19 @@ export function callStep<T>(
     ...(policy === undefined ? {} : { retry: policy }),
   });
   const call = makeCall({ case: "step", value: { name, options: stepOptions } });
+  // § vjy5p3exq@4y1ee
   const decoded = (value: Parameters<typeof decodeValue>[0]) => {
     const json = decodeValue(value);
     return decode === undefined ? json : decode(json);
   };
+  // § end vjy5p3exq
   const body: StepBody = () => fn(...args);
+  // § a5c1mfs8d@tej30
   const undoSpec =
     undo === undefined
       ? undefined
       : { body: (value: unknown) => () => undo(value, ...args), retry: policy, timeoutMs };
+  // § end a5c1mfs8d
   return shared.future<T>(call, decoded, { body, ...(undoSpec ? { undo: undoSpec } : {}) });
 }
 
@@ -181,20 +189,26 @@ export async function attempt(
     abandoned,
   );
   // A copy: an attempt left running charges on, past its end.
+  // § cvnf47vy8@xxq0r
   const charged = [...charges];
+  // § v4n6ja42e@dqdbh
   if (outcome !== undefined) return { outcome, charges: charged, abandoned: false };
+  // § one aym52h8ch@bacsn, epxcjcz4s@gjkb7
   const timedOut = failure("StepTimeout", `attempt past ${timeoutMs} ms`, true);
   return { outcome: timedOut, charges: charged, abandoned: abandoned.aborted };
+  // § end v4n6ja42e
 }
 
 async function outcomeOf(
   body: StepBody,
   running: { key: string; signal: AbortSignal; charges: layout.Amount[] },
 ): Promise<run.Outcome> {
+  // § epxcjcz4s@a84t0
   let value: unknown;
   try {
     value = await current.exit(() => attempts.run(running, async () => await body()));
   } catch (e) {
+    // § epxcjcz4s.a@3zn4v
     return failure(typeName(e), messageOf(e), !(e instanceof Permanent));
   }
   let text: string;
@@ -207,6 +221,7 @@ async function outcomeOf(
   try {
     json = capped(new TextEncoder().encode(text), "the step's value");
   } catch (e) {
+    // § h8wg39cct.b@j1s2q
     return failure(typeName(e), messageOf(e), false);
   }
   return create(run.OutcomeSchema, { outcome: { case: "value", value: jsonValue(json) } });

@@ -18,6 +18,7 @@ _U64 = 0xFFFF_FFFF_FFFF_FFFF
 
 
 class Kind(IntEnum):
+    # § fsvns3j6x.a@j37yx
     RUN = 1
     AGENT = 2
     PLAN = 3
@@ -40,6 +41,7 @@ def shipped_files() -> tuple[bytes, str]:
 
 def verify(wasm: bytes, sums: str) -> None:
     """Checks that the sha256 of `wasm` is the one the `substantial.wasm` line of `sums` names."""
+    # § hs5x9cc61@ez33j
     expected = None
     for line in sums.splitlines():
         parts = line.split(maxsplit=1)
@@ -57,18 +59,23 @@ class CoreModule:
     """The compiled core module, shared by every instance of the process."""
 
     def __init__(self, wasm: bytes, sums: str) -> None:
+        # § one hs5x9cc61@s0c2t
+        # silcrow:follow
         verify(wasm, sums)
         self._engine = wasmtime.Engine()
         try:
             self._module = wasmtime.Module(self._engine, wasm)
         except wasmtime.WasmtimeError as e:
+            # § hs5x9cc61@610xf
             raise ModuleError(str(e)) from e
         if self._module.imports:
+            # § gpzydmca3@42de3
             raise ModuleError("the core must import nothing")
 
     @staticmethod
     @functools.cache
     def shipped() -> CoreModule:
+        # § fsvns3j6x@pz291
         return CoreModule(*shipped_files())
 
     def instantiate(self) -> Core:
@@ -98,6 +105,7 @@ class Core:
         def export(name: str, kind: type) -> object:
             item = exports.get(name)
             if not isinstance(item, kind):
+                # § hs5x9cc61@xfxwy
                 raise ModuleError(f"missing export {name}")
             return item
 
@@ -115,6 +123,7 @@ class Core:
         return CoreModule.shipped().instantiate()
 
     def _guard(self, func: object, *args: int) -> int:
+        # § b80k2s0e4@4d060
         if self._trapped is not None:
             raise Trap(self._trapped)
         try:

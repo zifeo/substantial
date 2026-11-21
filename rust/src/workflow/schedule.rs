@@ -16,6 +16,7 @@ use chrono::{
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::context::Context;
 use crate::error::{Error, Result};
@@ -25,7 +26,9 @@ pub(crate) const MESSAGE: &str = "schedule";
 /// The inline step `Context::schedule` records its fires in.
 pub(crate) const RESERVED_STEP: &str = "schedule.next";
 /// How many fired instants the published `schedule` value keeps.
+// § ey8zhz0kq.d@vmfe3
 const RECENT: usize = 10;
+// § end ey8zhz0kq.d
 
 const MINUTE: i64 = 60_000;
 const DAY: i64 = 86_400_000;
@@ -195,6 +198,7 @@ fn has(set: u64, v: u32) -> bool {
 
 impl Compiled {
     fn day(&self, w: &NaiveDateTime) -> bool {
+        // § d08sxcdv8.a@s5hfx
         let dom = has(self.days, w.day());
         let dow = has(self.weekdays, w.weekday().num_days_from_sunday());
         if self.either { dom || dow } else { dom && dow }
@@ -215,7 +219,9 @@ fn compile(expr: &str, tz: &str) -> Result<Compiled> {
     }
     // 7 is Sunday too.
     let weekdays = (sets[4] & 0x7f) | (sets[4] >> 7 & 1);
+    // § d08sxcdv8.a@4abpf
     let either = !fields[2].starts_with('*') && !fields[4].starts_with('*');
+    // § end d08sxcdv8.a
     let c = Compiled {
         minutes: sets[0],
         hours: sets[1],
@@ -273,6 +279,7 @@ fn wall_ms(w: NaiveDateTime) -> i64 {
 /// The instant of the local time `w` (ms, read as UTC): the earlier of two in a repeated hour,
 /// the end of the gap for a time a clock change skips.
 fn resolve(zone: Tz, w: i64) -> i64 {
+    // § d08sxcdv8@p0gmq
     let (before, after) = (offset(zone, w - DAY), offset(zone, w + DAY));
     let offsets = if before == after {
         vec![before]
@@ -303,6 +310,7 @@ pub fn next_fire(cron: &Cron, after: i64) -> Result<i64> {
 }
 
 fn next(c: &Compiled, expr: &str, after: i64) -> Result<i64> {
+    // § d08sxcdv8@4r3zf
     // No local time before the earliest reading of `after` can resolve after it.
     let least = [-DAY, 0, DAY]
         .into_iter()
@@ -350,6 +358,7 @@ pub struct Plan {
 /// The fires due by `now` after `after`, at most the `backfill` most recent, those before them
 /// skipped, and the next fire after `now`.
 pub fn plan(expr: &str, tz: &str, after: &str, now: &str, backfill: u64) -> Result<Plan> {
+    // § vnykycs34.d@t9qnn
     let c = compile(expr, tz)?;
     let (mut t, end) = (parse(after)?, parse(now)?);
     let mut due: std::collections::VecDeque<i64> = Default::default();
@@ -386,6 +395,27 @@ pub(crate) fn config(revision: u64, cron: Option<&Cron>, backfill: u64) -> Value
         "tz": cron.map(Cron::tz),
         "backfill": backfill,
     })
+}
+
+/// The id of a config's `schedule` message: its revision and a digest of its canonical JSON, so
+/// that a resend of it is delivered once and another config of the revision reaches the run.
+pub(crate) fn message_id(wanted: &Value) -> Result<String> {
+    let json = serde_jcs::to_vec(wanted)?;
+    let digest = Sha256::digest(&json);
+    Ok(format!(
+        "schedule-{}-{}",
+        wanted["revision"],
+        hex::encode(&digest[..8])
+    ))
+}
+
+fn flat(
+    revision: u64,
+    cron: &Option<String>,
+    tz: &Option<String>,
+    backfill: Option<u64>,
+) -> String {
+    json!([revision, cron, tz, backfill]).to_string()
 }
 
 pub(crate) fn check_config(revision: u64, backfill: u64) -> Result<()> {
@@ -433,6 +463,7 @@ fn initial() -> State {
 }
 
 fn published(st: &State) -> Value {
+    // § ey8zhz0kq.d@pph2d
     json!({
         "revision": st.revision,
         "cron": st.cron,
@@ -446,6 +477,7 @@ fn published(st: &State) -> Value {
 }
 
 fn received(value: &Value) -> Result<(u64, Option<Cron>, u64)> {
+    // § ey8zhz0kq.c@3jf60
     let refused = || {
         Error::InvalidArgument(format!(
             "a schedule message is a config of sub.schedule, not {value}"
@@ -513,6 +545,7 @@ impl Context {
                     move || !lock(&c).is_empty()
                 };
                 let Some(cron) = st.cron.clone() else {
+                    // § vnykycs34.c@h7fc2
                     self.wait_until(any(&configs)).await?;
                     continue;
                 };
@@ -523,6 +556,7 @@ impl Context {
                         "a schedule state with a cron and without its tz, after or backfill".into(),
                     ));
                 };
+                // § vnykycs34.a@5eb4c
                 let now = self.now().await?.timestamp_millis();
                 let fires: Plan = self
                     .step(RESERVED_STEP, move || {
@@ -531,6 +565,7 @@ impl Context {
                     })
                     .reserved()
                     .await?;
+                // § end vnykycs34.a
                 if let Some(last) = fires.due.last() {
                     st.after = Some(last.clone());
                     st.pending = fires.due.clone();
@@ -547,6 +582,7 @@ impl Context {
                 let changed = st.next.as_ref() != Some(&fires.next);
                 st.next = Some(fires.next);
                 if st.pending.is_empty() {
+                    // § ey8zhz0kq.d@r5j4k
                     if changed {
                         self.publish(MESSAGE, published(&st))?;
                     }
@@ -557,12 +593,15 @@ impl Context {
                     self.wait_until(any(&configs)).timeout(wait).await?;
                 }
             }
+            // § vnykycs34@sfdew
             let at = st.pending.remove(0);
             st.last = Some(at.clone());
+            // § ey8zhz0kq.d@8z2qf
             st.recent.push(at.clone());
             let over = st.recent.len().saturating_sub(RECENT);
             st.recent.drain(..over);
             self.publish(MESSAGE, published(&st))?;
+            // § end ey8zhz0kq.d
             if body(self.clone(), instant(parse(&at)?)).await?.is_break() {
                 return Ok(());
             }
@@ -577,24 +616,54 @@ impl Context {
     /// Applies the config of the highest revision received, if higher than the state's.
     async fn apply(&self, st: &mut State, configs: &Configs) -> Result<()> {
         let values = std::mem::take(&mut *lock(configs));
-        let mut highest: Option<(u64, Option<Cron>, u64)> = None;
-        for v in &values {
-            let r = received(v)?;
-            if highest.as_ref().is_none_or(|h| r.0 > h.0) {
+        let all = values.iter().map(received).collect::<Result<Vec<_>>>()?;
+        let mut highest: Option<&(u64, Option<Cron>, u64)> = None;
+        // § ey8zhz0kq.e@1w66k
+        for r in &all {
+            if highest.is_none_or(|h| r.0 > h.0) {
                 highest = Some(r);
             }
         }
-        let Some((revision, cron, backfill)) = highest else {
+        // § end ey8zhz0kq.e
+        // § ey8zhz0kq.f@x25nt
+        let mut known = std::collections::HashMap::new();
+        if st.revision > 0 {
+            known.insert(
+                st.revision,
+                flat(st.revision, &st.cron, &st.tz, st.backfill),
+            );
+        }
+        for (r, cron, backfill) in &all {
+            let text = flat(
+                *r,
+                &cron.as_ref().map(|c| c.expr.clone()),
+                &cron.as_ref().map(|c| c.tz.clone()),
+                Some(*backfill),
+            );
+            if let Some(seen) = known.get(r)
+                && *seen != text
+            {
+                return Err(Error::ConfigError(format!(
+                    "schedule revision {r} came with two configs: {seen} and {text}"
+                )));
+            }
+            known.insert(*r, text);
+        }
+        // § end ey8zhz0kq.f
+        let Some((revision, cron, backfill)) = highest.cloned() else {
             return Ok(());
         };
+        // § ey8zhz0kq@n8sn0
         if revision <= st.revision {
             return Ok(());
         }
+        // § end ey8zhz0kq
         let expr = cron.as_ref().map(|c| c.expr.clone());
         let tz = cron.as_ref().map(|c| c.tz.clone());
         st.revision = revision;
         st.backfill = Some(backfill);
         if (&expr, &tz) != (&st.cron, &st.tz) {
+            // § vnykycs34.c@mzjqk
             // Another cron starts from now: it fires nothing it would have fired before.
             (st.cron, st.tz, st.next) = (expr, tz, None);
             st.pending.clear();
@@ -608,5 +677,21 @@ impl Context {
             }
         }
         self.publish(MESSAGE, published(st))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_ids_are_the_same_in_every_host() {
+        let hourly = Cron::new("0 * * * *", "UTC").unwrap();
+        let id = |wanted| message_id(&wanted).unwrap();
+        assert_eq!(
+            id(config(1, Some(&hourly), 5)),
+            "schedule-1-0a984120fb588a41"
+        );
+        assert_eq!(id(config(2, None, 1)), "schedule-2-1669c891556cdd13");
     }
 }

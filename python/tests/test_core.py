@@ -118,3 +118,11 @@ def test_ulids_are_monotonic_in_the_process() -> None:
     assert value(earlier) - value(same) == 1, "so does an earlier one"
     assert earlier[:10] == first[:10], "a clock gone back keeps the last time"
     assert len(later) == 26 and later == later.lower()
+
+
+def test_the_random_bits_of_a_millisecond_carry_into_its_time() -> None:
+    from substantial.plan import Ulids
+
+    ulids = Ulids(lambda _: (1 << 80) - 1)
+    assert ulids(5) == "0000000005" + "z" * 16
+    assert ulids(5) == "0000000006" + "0" * 16

@@ -138,6 +138,7 @@ export class Workflows {
       const what = `the retention of workflow ${JSON.stringify(w.name)}`;
       if (w.retention !== undefined) checkRetention(w.retention, retentionMin, what);
       if (!retentions.has(w.name)) retentions.set(w.name, w.retention);
+      // § one pn928919v.a@qtyw6
       if (!sameRetention(retentions.get(w.name), w.retention)) {
         throw new ConfigError(
           `the versions of workflow ${JSON.stringify(w.name)} give different retentions`,
@@ -146,6 +147,7 @@ export class Workflows {
     }
   }
 
+  // § pjrbw31h4@fxqwr
   static #key(name: string, version: number | undefined): string {
     return `${name}/${version ?? ""}`;
   }
@@ -153,6 +155,7 @@ export class Workflows {
   get(name: string, version: number | undefined): AnyWorkflow | undefined {
     return this.#byKey.get(Workflows.#key(name, version));
   }
+  // § end pjrbw31h4
 
   /** Each name served: its versions, whether its runs without a version are, and the retention
    * its workflows give. */

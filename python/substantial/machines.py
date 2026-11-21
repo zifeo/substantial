@@ -74,6 +74,7 @@ class _Machine:
     def _expect(self, request: Message, response: type[Message], expected: str) -> Any:
         which, value = self._request(request, response)
         if which != expected:
+            # § b80k2s0e4.a@6yybn
             raise ProtocolError(f"expected {expected}, got {which}: {value}")
         return value
 

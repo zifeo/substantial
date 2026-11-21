@@ -78,9 +78,11 @@ impl Substantial {
 
     /// Starts a run of `workflow`, idempotently under `.id(..)`, a ULID when none is given.
     pub fn start<W: AsWorkflow>(&self, workflow: W, input: impl Serialize) -> StartRun<W::Output> {
+        // § bxb0ygj7m@dg747
         let workflow = workflow.workflow();
         StartRun {
             sub: self.clone(),
+            // § one evdz71nzb.a@gc69j
             budget: workflow.budget().cloned(),
             workflow,
             input: input_object(input),
@@ -164,6 +166,7 @@ impl Substantial {
     /// Wakes the workers of this process serving `workflow`, which then list its due entries at
     /// once instead of after `max_idle`.
     fn wake_workers(&self, workflow: &str) {
+        // § c46hgkfse@n0pkt
         let workers = self.0.workers.lock().expect("never poisoned");
         for worker in workers.iter().filter_map(Weak::upgrade) {
             worker.wake_workflow(workflow);
@@ -212,8 +215,11 @@ impl<O: 'static> IntoFuture for StartRun<O> {
                 check_key("run id", id)?;
             }
             let budget = self.budget.as_ref().map(Budget::to_proto).transpose()?;
+            // § cq034wpjp@g1pap
             let now = self.sub.now();
             let id = self.id.unwrap_or_else(|| self.sub.ulid(now.ms));
+            // § end cq034wpjp
+            // § h8wg39cct.a@tpvr4
             let start = b::StartPlan {
                 prefix: String::new(),
                 workflow: self.workflow.name().to_owned(),
@@ -223,6 +229,7 @@ impl<O: 'static> IntoFuture for StartRun<O> {
                 now: Some(now),
                 budget,
             };
+            // § end h8wg39cct.a
             match self.sub.plan(Plan::Start(start)).await? {
                 Step::Started(b::Started {
                     started: Some(outcome),
@@ -275,6 +282,7 @@ impl<O: 'static> IntoFuture for ScheduleRun<O> {
             schedule::check_config(revision, self.backfill)?;
             let wanted = schedule::config(revision, self.cron.as_ref(), self.backfill);
             let run = self.sub.run(&self.workflow, id);
+            // § ey8zhz0kq.b@hkjnf
             let published: Option<serde_json::Value> = run.read(schedule::MESSAGE).await?;
             if let Some(published) = published {
                 let applied: serde_json::Map<_, _> = ["revision", "cron", "tz", "backfill"]
@@ -300,10 +308,12 @@ impl<O: 'static> IntoFuture for ScheduleRun<O> {
                     )));
                 }
             }
+            // § end ey8zhz0kq.b
+            // § ey8zhz0kq.a@c9ffn
             let run = self.sub.start(&self.workflow, ()).id(id).await?;
-            run.send(schedule::MESSAGE, wanted)
-                .id(&format!("schedule-{revision}"))
-                .await?;
+            let message = schedule::message_id(&wanted)?;
+            run.send(schedule::MESSAGE, wanted).id(&message).await?;
+            // § end ey8zhz0kq.a
             Ok(run)
         })
     }
@@ -353,9 +363,11 @@ impl WorkerBuilder {
     }
 
     fn settings(&self) -> Result<Settings> {
+        // § yxy5pzfkp.a@g7tye
         let preset = self.preset.ok_or_else(|| {
             Error::ConfigError("a worker needs a preset, Script or Service".into())
         })?;
+        // § yxy5pzfkp.b@t10r2
         let unknown: Vec<&str> = self
             .overrides
             .iter()
@@ -365,6 +377,7 @@ impl WorkerBuilder {
         if !unknown.is_empty() {
             return Err(settings::unknown(&unknown));
         }
+        // § end yxy5pzfkp.b
         let mut settings = Settings::preset(preset, self.sub.0.store.capabilities().wait);
         for o in &self.overrides {
             settings.apply(&o.name, &o.value)?;

@@ -170,12 +170,14 @@ Run it with `node checkout.ts` or `deno run -A checkout.ts`. Steps and workflows
 
 ## Install
 
+Substantial runs on Linux, macOS and WSL.
+
 Python 3.12 or later:
 
 ```sh
-uv add substantial==0.2.0            # or: pip install substantial==0.2.0
-uv add "substantial[s3]==0.2.0"      # with S3 stores, or: pip install "substantial[s3]==0.2.0"
-uv add "substantial[redis]==0.2.0"   # with Redis stores, or: pip install "substantial[redis]==0.2.0"
+uv add substantial            # or: pip install substantial
+uv add "substantial[s3]"      # with S3 stores, or: pip install "substantial[s3]"
+uv add "substantial[redis]"   # with Redis stores, or: pip install "substantial[redis]"
 ```
 
 The `s3` extra adds aiohttp, which sends the requests of `s3://` stores, and botocore, which signs them; the `redis` extra adds redis-py, which Redis stores need.
@@ -183,19 +185,19 @@ The `s3` extra adds aiohttp, which sends the requests of `s3://` stores, and bot
 Rust 1.97 or later, with what the example uses:
 
 ```sh
-cargo add substantial@0.2.0
+cargo add substantial
 cargo add tokio --features macros,rt-multi-thread
 cargo add serde --features derive
 cargo add anyhow
 ```
 
-Redis stores need the `redis` feature: `cargo add substantial@0.2.0 --features redis`.
+Redis stores need the `redis` feature: `cargo add substantial --features redis`, and the [Wasm runner](#wasm-workflows) the `wasm-runner` feature.
 
 TypeScript, on Node 24 or later, or Deno, from [JSR](https://jsr.io/@substantial/substantial):
 
 ```sh
-npx jsr add @substantial/substantial@0.2.0
-deno add jsr:@substantial/substantial@0.2.0
+npx jsr add @substantial/substantial
+deno add jsr:@substantial/substantial
 ```
 
 `s3://` stores also need the AWS SDK: `npm install @aws-sdk/client-s3`, or `deno add npm:@aws-sdk/client-s3`. Redis stores need `@redis/client`: `npm install @redis/client`, or `deno add npm:@redis/client`.
@@ -373,7 +375,7 @@ await register(webhook, c.chain);
 
 </details>
 
-Messages come from clients (`run.send`) or other runs (`c.send`), and a message id makes a resend delivered once. Sending to a run that ended raises `RunEnded`, to a chain that does not exist `RunNotFound`, from a run too. Handlers bound together see their past messages in arrival order, across names. A run consumes its messages in the order sent; across a continue as new, a message that arrives as the run continues may be consumed after one sent later. More in [I-9].
+Messages come from clients (`run.send`) or other runs (`c.send`), and a message id makes a resend delivered once. Sending to a run that ended raises `RunEnded`, to a chain that does not exist `RunNotFound`, from a run too. Handlers bound together see their past messages in arrival order, across names. A run consumes one sender's messages in the order sent; across a continue as new, a message that arrives as the run continues may be consumed after one sent later. More in [I-9].
 
 ### Children
 
@@ -620,7 +622,7 @@ try {
 
 </details>
 
-`runs` reads a workflow's queue, never its histories: ended runs are not listed. `retry` starts a new run of the chain that replays the failed one without its failure, so a payment that succeeded is not charged again and the failed step gets a fresh retry budget; `s.step_key()` stays the same. More in [I-17].
+`runs` reads a workflow's queue, never its histories: ended runs are not listed, though one that just ended may be for a moment. `retry` starts a new run of the chain that replays the failed one without its failure, so a payment that succeeded is not charged again and the failed step gets a fresh retry budget; `s.step_key()` stays the same. More in [I-17].
 
 ### Cost, budgets and observing
 
@@ -760,7 +762,7 @@ const sub = await s.Substantial.open(redisUrl, {
 
 </details>
 
-S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Redis takes none, `"env"` (`REDIS_PASSWORD`, `REDIS_USERNAME`), a password, or such a function returning one (`s::Credentials::password_provider` in Rust). Ended runs are deleted 30 days after their chain ends, or after the `retention` a worker or a workflow sets, at most 100 years; never delete keys under a namespace yourself, by hand or with a lifecycle rule. More in [I-16].
+S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Redis takes none, `"env"` (`REDIS_PASSWORD`, `REDIS_USERNAME`), a password, or such a function returning one (`s::Credentials::password_provider` in Rust). Ended runs are deleted 30 days after they end, or after the `retention` a worker or a workflow sets, at most 100 years; never delete keys under a namespace yourself, by hand or with a lifecycle rule. More in [I-16].
 
 ### Workers
 
@@ -809,6 +811,56 @@ await sub.worker([nightly, report], { preset: "script" }).drain({ within: s.minu
 
 `drain` serves every run due now or within 2 minutes, takes over the runs of crashed workers whose claims expire by then, and returns once nothing is due within that horizon and nothing is in flight; between two jobs no worker lists the store. A schedule it serves needs a `backfill` of at least the job's period divided by the cron's. More in [I-18] and the [integration] guide.
 
+### Wasm workflows
+
+A Rust worker also serves workflows compiled to WebAssembly, which it loads from their bytes when it starts or later: a workflow's code changes without a rebuild of the worker, and runs isolated from it. A Wasm workflow is written with the crate `substantial` itself, as a `cdylib`, and the same source also builds as a native workflow, as long as its `#[workflow]` takes no option, since the worker gives a Wasm workflow its name and settings:
+
+```rust
+use serde::Deserialize;
+use substantial as s;
+
+#[derive(Deserialize)]
+struct Input {
+    name: String,
+}
+
+#[s::step]
+async fn greet(name: &str) -> Result<String, std::io::Error> {
+    Ok(format!("hello {name}"))
+}
+
+#[s::workflow]
+async fn greeting(c: s::Context, input: Input) -> s::Result<String> {
+    c.sleep(s::days(1)).await?;
+    greet(&input.name).await
+}
+
+s::export!(greeting, steps = [greet]);
+```
+
+It is compiled for `wasm32-unknown-unknown`, then made a component of the world in [`wit/workflow.wit`](wit/workflow.wit):
+
+```sh
+cargo build --release --target wasm32-unknown-unknown
+wasm-tools component new target/wasm32-unknown-unknown/release/greeting.wasm -o greeting.wasm
+```
+
+A worker with the `wasm-runner` feature loads it and serves it as any workflow, within the memory and the time between two verbs it is given:
+
+```rust
+use substantial::wasm::{Limits, Module};
+
+let limits = Limits { memory: 64 << 20, code_time: s::seconds(1) };
+let module = Module::new(&std::fs::read("greeting.wasm")?, limits, |_| Ok(()))?;
+let greeting = module.workflow("greeting");
+let worker = sub.worker(greeting.clone()).preset(s::Preset::Service).start()?;
+sub.start(&greeting, serde_json::json!({ "name": "Ada" })).await?;
+```
+
+A module loaded after its worker started runs within a workflow of the worker's own, which calls `Module::run` with the run's context, for instance on the module its input names by digest.
+
+A Wasm workflow has no network, clock or filesystem: its workflow code calls only Substantial's verbs, each recorded, and its steps only the interfaces the worker adds with the closure of `Module::new`, a wasmtime linker, whose functions may be async. Each replay and each step attempt runs in an instance of its own, and a module that traps, or passes its memory or its code's time, fails what it ran with `WasmTrap` while the worker goes on: a step past its timeout fails with `StepTimeout` as any step, and an error of the worker's own interface traps its step, so a failure that may pass comes back as a value of that interface. Its workflow code calls steps, with their retry and timeout, `sleep`, `sleep_until`, `receive`, with its timeout, `send`, `publish`, `now`, `random`, `uuid` and `c.log`, and a step calls `s::step_key()`. A value JSON cannot hold, such as a NaN, is refused before it leaves the module, as in every host. The decisions are in [the Wasm workflow notes](docs/decisions/wasm-workflows.md).
+
 ## How it works
 
 - **No broker, no server.** Workers and clients coordinate through the store alone, with four operations: an exclusive create, a get, a list and a delete. A run's history is a sequence of keys, each created once and never overwritten. A worker takes a run with a claim, an exclusive create it renews while it works, and finds due runs, timers and messages by listing the due entries of each workflow it serves, one prefix per workflow.
@@ -839,7 +891,7 @@ cargo test --workspace  # or uv run pytest, or npm test
 
 Each host has two examples on a file or memory store, `first_workflow` and `backup`: `cargo run -p substantial --example first_workflow -- /tmp/demo`, `uv run python/examples/first_workflow.py /tmp/demo-py`, `node --conditions=substantial-source typescript/examples/first_workflow.ts /tmp/demo-ts`.
 
-`rust/wasm` and `rust/proto` are symlinks to `wasm/` and `proto/`, so that the published crate carries them (on Windows, clone with `git clone -c core.symlinks=true`). `npm run gen` regenerates the TypeScript protobuf code from `proto/`.
+`rust/wasm` and `rust/proto` are symlinks to `wasm/` and `proto/`, so that the published crate carries them. `npm run gen` regenerates the TypeScript protobuf code from `proto/`.
 
 ## License
 

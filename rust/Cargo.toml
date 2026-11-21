@@ -1,6 +1,6 @@
 [package]
 name = "substantial"
-version = "0.2.1"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,8 +17,20 @@ exclude = ["examples/cross.rs"]
 testing = []
 # Redis and Valkey stores: `redis://`, `redis+sentinel://`, `redis+cluster://` and their TLS forms.
 redis = ["dep:redis", "dep:crc16"]
+# `substantial::wasm`, the Wasm runner: Wasm workflows, compiled to WebAssembly components,
+# loaded at run time.
+wasm-runner = ["wasmtime/component-model", "wasmtime/async"]
 
 [dependencies]
+serde = { version = "1.0.60", features = ["derive"] }
+serde_json = "1"
+substantial-macros = { version = "0.3.0", path = "macros" }
+
+# Built for wasm32, the crate is the API of a Wasm workflow, which the Wasm runner loads.
+[target.'cfg(target_family = "wasm")'.dependencies]
+substantial-wasm-sdk = { version = "0.3.0", path = "wasm-sdk" }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 anyhow = "1.0.49"
 aws-credential-types = "1"
 aws-sdk-s3 = { version = "1.120", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio"] }
@@ -31,11 +43,8 @@ hex = "0.4"
 prost = "0.14"
 rand = "0.10"
 redis = { version = "1.8", optional = true, default-features = false, features = ["script", "tokio-comp", "tokio-rustls-comp"] }
-serde = { version = "1.0.60", features = ["derive"] }
 serde_jcs = "0.2"
-serde_json = "1"
 sha2 = "0.11"
-substantial-macros = { version = "0.2.1", path = "macros" }
 thiserror = "2"
 tokio = { version = "1.49", features = ["fs", "macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
@@ -47,12 +56,47 @@ prost-build = "0.14"
 protox = "0.10"
 wasmtime = { version = "50", default-features = false, features = ["cranelift", "std"] }
 
-[dev-dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tempfile = "3"
+wat = "1"
+wit-component = "0.244"
 tokio = { version = "1.49", features = ["full", "test-util"] }
+
+# The Wasm workflows of the runner's tests, in examples/, built for wasm32-unknown-unknown.
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+wit-bindgen = { version = "0.51", default-features = false, features = ["macros", "realloc", "std"] }
+
+[[example]]
+name = "sleep_then_step"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "receive_with_timeout"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "bounds"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "edges"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "verbs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "same_source"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "failures"
+crate-type = ["cdylib"]
 
 [[test]]
 name = "redis"
@@ -65,6 +109,14 @@ required-features = ["redis"]
 [[test]]
 name = "redis_failover"
 required-features = ["redis"]
+
+[[test]]
+name = "wasm"
+required-features = ["wasm-runner"]
+
+[[test]]
+name = "children"
+required-features = ["testing"]
 
 [[test]]
 name = "runs"

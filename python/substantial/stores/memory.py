@@ -20,10 +20,12 @@ class MemoryStore:
     def __init__(self, ns: str) -> None:
         if not isinstance(ns, str) or not ns:
             raise ConfigError(f"a memory store needs a namespace, not {ns!r}")
+        # § one e9ern38bz.d@scjka
         with _LOCK:
             self._objects = _NAMESPACES.setdefault(ns, {})
 
     async def create(self, key: str, data: bytes) -> Create:
+        # § dfd6vt90h@w691c
         if key in self._objects:
             return "exists"
         self._objects[key] = bytes(data)

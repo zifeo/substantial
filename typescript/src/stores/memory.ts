@@ -32,6 +32,7 @@ export class MemoryStore implements Store {
     if (typeof ns !== "string" || ns === "") {
       throw new ConfigError(`a memory store needs a namespace, not ${ns}`);
     }
+    // § e9ern38bz.d@jayty
     let objects = namespaces.get(ns);
     if (objects === undefined) {
       objects = new Map();
@@ -41,6 +42,7 @@ export class MemoryStore implements Store {
   }
 
   async create(key: string, data: Uint8Array): Promise<Create> {
+    // § dfd6vt90h@m0787
     if (this.#objects.has(key)) return "exists";
     this.#objects.set(key, data.slice());
     return "created";

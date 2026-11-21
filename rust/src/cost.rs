@@ -66,6 +66,7 @@ impl Prices {
 
     /// What `attempts` requests of the store operation `op` cost.
     pub(crate) fn of(&self, op: &str, attempts: u32) -> Amount {
+        // § vg9yp9xsf@f6w2c
         let per_1000 = match op {
             "create" => self.create,
             "get" => self.get,
@@ -133,6 +134,7 @@ pub struct Cost {
 
 /// Amounts as decimal strings, as they may pass 2^53.
 mod decimal {
+    // § hzh3dr6yh@sp5ww
     use std::collections::BTreeMap;
 
     use serde::{Deserialize, Deserializer, Serializer};
@@ -235,6 +237,7 @@ mod tests {
     #[test]
     fn the_named_table_and_its_shares() {
         let p = Prices::named("aws-s3-standard-us-east-1-2026-11-09").unwrap();
+        // § vg9yp9xsf@pnr4n
         assert_eq!(p.of("create", 2).nano, 10_000);
         assert_eq!(p.of("get", 1).nano, 400);
         assert_eq!(p.of("delete", 3).nano, 0);
@@ -253,6 +256,7 @@ mod tests {
             "store": {"create": 1, "get": 2, "list": 3, "delete": 0, "requests": 6, "amounts": {}},
             "steps": {"pay": {"USD": "5"}},
             "children": {"create": 0, "get": 0, "list": 0, "delete": 0, "requests": 0, "amounts": {}}}"#;
+        // § hzh3dr6yh@cgzqa
         let cost: Cost = serde_json::from_str(json).unwrap();
         assert_eq!(cost.amounts["USD"], 9_007_199_254_740_993);
         assert_eq!(cost.steps["pay"]["USD"], 5);

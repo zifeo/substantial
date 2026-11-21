@@ -62,6 +62,7 @@ def agent_config(
         due_pages=s.due_pages,
         snapshot_every=s.snapshot_every,
         op_retries=OP_RETRIES,
+        # § one gpzydmca3.a@gntpn
         seed=secrets.token_bytes(32) if seed is None else seed,
         settings=run.RunSettings(
             commit_every_ms=millis(s.commit_every),
@@ -99,8 +100,10 @@ class _Replays:
 
     def spawn(self, run_id: str, data: run.RunInput, due_at: layout.Time | None) -> None:
         start = data.start
+        # § pjrbw31h4@pkz5m
         version = start.version if start.HasField("version") else None
         workflow = self.workflows.get(start.workflow, version)
+        # § end pjrbw31h4
         if workflow is None:
             log.error(
                 "replay of %s: this worker does not serve %s version %s",
@@ -172,11 +175,13 @@ class Worker:
     @property
     def alive(self) -> bool:
         """Whether its loop runs: started, and neither stopped nor dead."""
+        # § pgv9r1j12.a@1br9f
         return self._task is not None and not self._task.done()
 
     @property
     def error(self) -> BaseException | None:
         """The error that killed its loop, else `None`."""
+        # § pgv9r1j12.a@kz0n5
         task = self._task
         if task is None or not task.done() or task.cancelled():
             return None
@@ -211,6 +216,7 @@ class Worker:
     def _stopped(self, task: asyncio.Task) -> None:
         """Makes a worker that dies loud at once: its error is logged and fails the waits of
         its namespace, before `shutdown` raises it again."""
+        # § pgv9r1j12@evfba
         if task.cancelled() or (error := task.exception()) is None:
             return
         log.error("worker %s stopped: %s", self._id, error, exc_info=error)
@@ -225,6 +231,7 @@ class Worker:
     def _wake_workflow(self, workflow: str) -> None:
         """Wakes the agent at once on `workflow`, as after a start or a send from this
         process: it lists that workflow's due entries alone."""
+        # § c46hgkfse@6979v
         self._events.put_nowait(("wake_workflow", workflow))
 
     async def shutdown(self) -> None:
@@ -239,20 +246,26 @@ class Worker:
         of a crashed worker whose claim expires by then, then stops as `shutdown` does once
         nothing is due by then and nothing is in flight; raises the worker's error if it died.
         Starts the worker if it was not."""
+        # § cjtegwkna@f1y96
         if not isinstance(within, timedelta) or within < timedelta(0):
             raise InvalidArgument(f"within is a timedelta, not negative, not {within!r}")
         task = self._task if self._task is not None else self._start()
         self._events.put_nowait(("drain", self._clock.now().ms + millis(within)))
+        # § end cjtegwkna
+        # § cjtegwkna.a@4wczd
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             await self.shutdown()
             raise
+        # § end cjtegwkna.a
 
     async def serve(self) -> None:
         """Runs until a SIGTERM or a Ctrl-C (SIGINT), or until cancelled, then shuts down."""
+        # § dh7y75pvn.a@43yec
         task = self._start()
         loop = asyncio.get_running_loop()
+        # § one k6m3smdpk@ky9m4
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._events.put_nowait, ("shutdown",))
         try:
@@ -313,6 +326,7 @@ class Worker:
                         await clock.wait({events.signal()}, at)
                     if events.empty():
                         if past_grace and clock.elapsed() >= grace_ends:  # type: ignore[operator]
+                            # § dh7y75pvn.b@rgya1
                             replays.stop_all()
                             grace_ends = clock.elapsed() + grace
                         continue
@@ -335,6 +349,7 @@ class Worker:
                     elif kind == "drain":
                         machine.drain(layout.Time(ms=event[1]))
                     elif kind == "shutdown" and grace_ends is None:
+                        # § dh7y75pvn@d39hx
                         grace = millis(self._settings.shutdown_grace)
                         grace_ends = clock.elapsed() + grace
                         machine.shutdown()

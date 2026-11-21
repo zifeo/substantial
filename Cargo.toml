@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["rust", "rust/macros"]
+members = ["rust", "rust/wasm-sdk", "rust/macros"]
 
 [workspace.package]
 edition = "2024"

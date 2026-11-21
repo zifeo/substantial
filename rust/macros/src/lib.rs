@@ -3,6 +3,7 @@
 
 mod names;
 mod step;
+mod wasm;
 mod workflow;
 
 use proc_macro::TokenStream;
@@ -27,6 +28,46 @@ pub fn workflow(args: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn step(args: TokenStream, item: TokenStream) -> TokenStream {
     step::expand(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `export!(workflow, steps = [a, b])` makes a Wasm workflow of a source built for wasm32: natively,
+/// it only checks that the workflow and its steps exist, so that the same source builds both ways.
+#[proc_macro]
+pub fn export(item: TokenStream) -> TokenStream {
+    // § c7aw13gws.b@vbtc4
+    wasm::checked(item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `#[workflow]` of a Wasm workflow, which `substantial` re-exports for wasm32: use it from there.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn wasm_workflow(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § c7aw13gws@ncede
+    wasm::workflow(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `#[step]` of a Wasm workflow, which `substantial` re-exports for wasm32: use it from there.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn wasm_step(args: TokenStream, item: TokenStream) -> TokenStream {
+    // § c7aw13gws@dnszs
+    wasm::step(args.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `export!` of a Wasm workflow, which `substantial` re-exports for wasm32: use it from there.
+#[doc(hidden)]
+#[proc_macro]
+pub fn wasm_export(item: TokenStream) -> TokenStream {
+    // § c7aw13gws.b@r4vqe
+    wasm::export(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

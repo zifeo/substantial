@@ -80,6 +80,7 @@ async def test_a_run_knows_its_chain_as_its_parent_and_clients_do(store: Store) 
         run = await sub.start(asker)
         mine, kid, answered = await run.result(timeout=LONG)
         assert mine == run.chain
+        # § yb61qtt3s@dyz0c
         assert kid == answered != mine, "a derived id, the child's own chain"
         assert await sub.run(whoami, kid).result(timeout=LONG) == kid
 

@@ -17,6 +17,7 @@ class Log:
         self._shared = shared
 
     def log(self, level: int, msg: object, *args: Any, **kwargs: Any) -> None:
+        # § k3zma9hjs.b@7exxc
         if self._shared.live:
             kwargs.setdefault("extra", {})["run"] = self._shared.run
             kwargs["stacklevel"] = kwargs.get("stacklevel", 1) + 2

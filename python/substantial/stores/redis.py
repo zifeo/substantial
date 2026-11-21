@@ -52,6 +52,7 @@ class RedisLocation:
 
     @staticmethod
     def parse(url: str) -> RedisLocation:
+        # § e9ern38bz.b@bya5j
         def invalid(why: str) -> ConfigError:
             return ConfigError(f"{url!r}: {why}")
 
@@ -106,6 +107,7 @@ def _replicas(value: str, topology: Topology, invalid) -> int | None:
     if value == "all":
         return None
     # Sentinel and Cluster promote a replica on failover: a create one of them misses is lost.
+    # § one htbc4k715.c@4w4zh
     if topology != "standalone":
         raise invalid("replicas is all on Sentinel and Cluster, so a failover keeps every create")
     if not _DIGITS.fullmatch(value):

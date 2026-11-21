@@ -71,6 +71,7 @@ def outcome_of(name: str, which: str, outcome: Any, expected: str) -> tuple[str,
     return case, getattr(outcome, case)
 
 
+# § one cq034wpjp@hh6rr
 _CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
 
 
@@ -91,13 +92,16 @@ class Ulids:
             raise ValueError("a time after 1970")
         with self._lock:
             value = ((ms & ((1 << 48) - 1)) << 80) | self._bits(ms)
+            # § wtwx1e769.b@php44
             if value >> 80 <= self._last >> 80:
                 value = self._last + 1
             if value >> 128:
                 raise ValueError("ULIDs exhausted")
             self._last = value
+            # § end wtwx1e769.b
         return "".join(_CROCKFORD[(value >> (i * 5)) & 31] for i in reversed(range(26)))
 
 
 # The ULIDs of the process, monotonic across its clients.
+# § one gpzydmca3.b@27519
 ulid = Ulids(lambda _: secrets.randbits(80))

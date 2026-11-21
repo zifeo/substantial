@@ -4,10 +4,14 @@
 --
 -- An existing key may be another writer's create not yet fsynced: the fence written here puts a
 -- write behind it, so the WAITAOF that follows on this connection covers it too.
+-- § dfd6vt90h@2knrw
 if redis.call('SET', KEYS[1], ARGV[2], 'NX') then
   redis.call('ZADD', KEYS[2], 0, ARGV[1])
   redis.call(ARGV[4], ARGV[3], ARGV[1])
   return 1
 end
+-- § end dfd6vt90h
+-- § htbc4k715.e@32jf2
 redis.call('INCR', KEYS[3])
 return 0
+-- § end htbc4k715.e

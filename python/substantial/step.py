@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
-import json
 import weakref
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, overload
 
-from substantial._proto import json_value, layout, run
+from substantial._proto import dumps, json_value, layout, run
 from substantial.clock import Clock
 from substantial.cost import MAX
 from substantial.durations import millis
@@ -63,12 +62,14 @@ def charge(currency: str, nano: int) -> None:
     """Adds `nano` nano-units of `currency` to the charges of the step attempt running, recorded
     with its outcome and counted in the run's cost; a currency outside ISO 4217 fails the step at
     once with `InvalidArgument`, once the attempt ended."""
+    # § cvnf47vy8@z6wnv
     try:
         running = _ATTEMPT.get()
     except LookupError:
         raise NotInWorkflow("charge is called inside a step") from None
     if not isinstance(currency, str):
         raise InvalidArgument(f"a currency is a string, not {currency!r}")
+    # § one cvnf47vy8.a@ebbwf
     if isinstance(nano, bool) or not isinstance(nano, int) or not 0 <= nano <= MAX:
         raise InvalidArgument(f"a charge is an int from 0 to {MAX}, not {nano!r}")
     running.charges.append(layout.Amount(currency=currency, nano=nano))
@@ -97,6 +98,7 @@ def body_of(fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any
 
 
 async def _in_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    # § v4n6ja42e.b@0w0bc
     task = asyncio.current_task()
     if task is not None:
         THREADED.add(task)
@@ -116,9 +118,11 @@ def call_step(
     """Calls the step `name`: its occurrence is taken now, and its value comes from its attempts
     or from the history."""
     check_options(retry, timeout, undo)
+    # § aym52h8ch@fktmd
     options = run.StepOptions(
         timeout_ms=shared.step_timeout_ms if timeout is None else millis(timeout)
     )
+    # § end aym52h8ch
     if retry is not None:
         options.retry.CopyFrom(retry.policy())
     undo_spec: tuple[UndoBody, run.StepOptions] | None = None
@@ -126,12 +130,15 @@ def call_step(
         u = undo
         undo_options = run.StepOptions()
         undo_options.CopyFrom(options)
+        # § a5c1mfs8d@5nbyt
         undo_spec = (lambda value: body_of(u, (value, *args), kwargs), undo_options)
+        # § end a5c1mfs8d
         options.undo = True
     saga = SAGA.get()
     if saga is not None:
         options.saga = saga
     call = run.Call(step=run.Call.Step(name=name, options=options))
+    # § one wv67rmrjm@6tz97, vjy5p3exq@d9xr9
     return shared.future(call, decode_json, StepSpec(body_of(fn, args, kwargs), undo_spec))
 
 
@@ -220,26 +227,31 @@ async def attempt(
     _ATTEMPT.set(running)
     outcome = await clock.attempt(name, key, lambda: _outcome(body), timeout_ms)
     if outcome is None:
+        # § one aym52h8ch@neswp, v4n6ja42e@rm3qs
         outcome = _failure("StepTimeout", f"attempt past {timeout_ms} ms", True)
     # A copy: an attempt left running in its thread charges on, past its end.
+    # § one cvnf47vy8@c476t
     return outcome, list(running.charges)
 
 
 async def _outcome(body: StepBody) -> run.Outcome:
+    # § epxcjcz4s@7fkhd
     try:
         value = await body()
         # A sync function such as `lambda: charge(card)` may return a coroutine to await.
         if inspect.isawaitable(value):
             value = await value
     except Permanent as e:
+        # § epxcjcz4s.a@dw1d2
         return _failure(type(e).__name__, str(e), False)
     except Exception as e:
         return _failure(type(e).__name__, str(e), True)
     try:
-        data = json.dumps(value, allow_nan=False).encode()
+        data = dumps(value)
     except (TypeError, ValueError) as e:
         return _failure("Json", str(e), False)
     try:
         return run.Outcome(value=json_value(data))
     except ValueTooLarge as e:
+        # § h8wg39cct.b@5myfc
         return _failure(type(e).__name__, str(e), False)

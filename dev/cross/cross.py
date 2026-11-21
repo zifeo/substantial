@@ -96,7 +96,8 @@ async def scheduled(sub: Substantial) -> dict:
     """Configures `cross-ticks`, served by another host, until it publishes the config; the same
     call again does nothing, an older revision is refused."""
     run = await sub.schedule(ticks, "cross-ticks", NIGHTLY, revision=2, backfill=3)
-    while (published := await run.read("schedule")) is None or published["revision"] != 2:
+    # Another host writes what this polls: no event of this process tells it.
+    while (published := await run.read("schedule")) is None or published["revision"] != 2:  # noqa: ASYNC110
         await asyncio.sleep(0.05)
     await sub.schedule(ticks, "cross-ticks", NIGHTLY, revision=2, backfill=3)
     try:
@@ -129,7 +130,8 @@ async def watched(sub: Substantial, language: str) -> dict:
     `language`, which awaits it; once the watcher waits, lets `cross-awaited` end."""
     run = await sub.start(awaited, id="cross-awaited")
     watch = await sub.start(watcher(language), {"chain": run.chain}, id="cross-watch")
-    while await watch.status() != "suspended":
+    # Another host writes what this polls: no event of this process tells it.
+    while await watch.status() != "suspended":  # noqa: ASYNC110
         await asyncio.sleep(0.05)
     await run.send("go", "now")
     return await watch.result(timeout=minutes(1))
@@ -139,6 +141,7 @@ async def waits_on_messages(sub: Substantial) -> None:
     """Until `cross-1`, served by another host, is listed waiting on messages alone."""
     while True:
         async for i in sub.runs(cross):
+            # § j08c2ntyv@rajmb
             if (i.run, i.waiting_on) == ("cross-1", "message"):
                 return
         await asyncio.sleep(0.05)

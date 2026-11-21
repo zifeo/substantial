@@ -1,6 +1,12 @@
 use std::path::PathBuf;
 
 fn main() {
+    // Built for wasm32, the crate is the API of a Wasm workflow, which holds neither the core nor
+    // the protocol.
+    let family = std::env::var("CARGO_CFG_TARGET_FAMILY").expect("CARGO_CFG_TARGET_FAMILY");
+    if family.split(',').any(|f| f == "wasm") {
+        return;
+    }
     // Read when the script runs, not when it is compiled: a shared target dir reuses one script
     // binary across checkouts. `proto` and `wasm` are symlinks to the repository's single
     // copies: cargo package follows them, so the published crate carries the files themselves.

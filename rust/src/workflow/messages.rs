@@ -1,5 +1,7 @@
 //! Handlers bound to a run's messages (I-9).
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use serde::de::DeserializeOwned;
 
 use super::context::Context;
@@ -7,6 +9,7 @@ use super::decode;
 use super::scheduler::Handler;
 use super::step::failure;
 use crate::error::{Error, Result};
+use crate::names::check_name;
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
 
 fn handler<T, F>(mut f: F) -> Handler
@@ -14,16 +17,24 @@ where
     T: DeserializeOwned,
     F: FnMut(T) + Send + 'static,
 {
+    // § aeby9bgqd.a@03e35
     Box::new(move |m: &b::Message| {
-        let value = decode(m.value.clone()).map_err(|e| {
+        let failed = |why: String| {
             failure(
                 "MessageDecode",
-                format!("message {:?} {}: {e}", m.name, m.id),
+                format!("message {:?} {}: {why}", m.name, m.id),
                 false,
             )
-        })?;
-        f(value);
-        Ok(())
+        };
+        let value = decode(m.value.clone()).map_err(|e| failed(e.to_string()))?;
+        catch_unwind(AssertUnwindSafe(|| f(value))).map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("a panic without a message");
+            failed(format!("the handler panicked: {message}"))
+        })
     })
 }
 
@@ -36,8 +47,8 @@ impl Handlers {
         Self::default()
     }
 
-    /// Adds `f` as the handler of `name`; a message whose value does not decode as a `T` fails
-    /// the run.
+    /// Adds `f` as the handler of `name`; a message whose value does not decode as a `T`, or a
+    /// panic of `f`, fails the run with `MessageDecode`.
     pub fn on<T, F>(mut self, name: &str, f: F) -> Self
     where
         T: DeserializeOwned,
@@ -50,7 +61,8 @@ impl Handlers {
 
 impl Context {
     /// Binds `f` to the messages of `name`: every one consumed so far, in order, then each new one.
-    /// A message whose value does not decode as a `T` fails the run.
+    /// A message whose value does not decode as a `T`, or a panic of `f`, fails the run with
+    /// `MessageDecode`.
     pub fn handle<T, F>(&self, name: &str, f: F) -> Result<()>
     where
         T: DeserializeOwned,
@@ -64,6 +76,9 @@ impl Context {
     pub fn handle_all(&self, handlers: Handlers) -> Result<()> {
         let Handlers(mut handlers) = handlers;
         let names: Vec<String> = handlers.iter().map(|(n, _)| n.clone()).collect();
+        for name in &names {
+            check_name("message name", name)?;
+        }
         if let Some(name) = names
             .iter()
             .enumerate()
@@ -78,6 +93,7 @@ impl Context {
             Called::Messages(m) => m.messages,
             other => return Err(Error::Protocol(format!("bind answered {other:?}"))),
         };
+        // § aeby9bgqd@rcys9
         for m in &past {
             let (_, h) = handlers
                 .iter_mut()
@@ -91,6 +107,7 @@ impl Context {
         for (name, h) in handlers {
             self.shared.add_handler(name, h);
         }
+        // § end aeby9bgqd
         Ok(())
     }
 }

@@ -31,6 +31,7 @@ def measured() -> Iterator[Sent]:
     """Measures the store operation performed inside, failed or not. An adapter outside the shared
     retry layer, the memory store or a test's, sends each operation once. An operation measured
     inside another, through a store wrapping a store, counts in both."""
+    # § zemxe46k3.a@wspab
     measuring = Sent()
     token = _SENT.set(measuring)
     try:

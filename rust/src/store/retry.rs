@@ -43,6 +43,7 @@ where
 
     /// Waits before the next attempt, or fails once every attempt is spent.
     async fn next(&mut self, error: &str, sleep: bool) -> Result<(), StoreFailure> {
+        // § zemxe46k3@md5fc
         if self.attempt >= self.policy.attempts {
             let unit = if self.attempt == 1 {
                 "attempt"
@@ -76,6 +77,7 @@ where
     S: FnMut(Duration) -> SF,
     SF: Future<Output = ()>,
 {
+    // § zemxe46k3@q4wf5
     let mut backoff = Backoff::new(policy, sleep);
     loop {
         sent();
@@ -104,6 +106,7 @@ where
     S: FnMut(Duration) -> SF,
     SF: Future<Output = ()>,
 {
+    // § pnvmmdmz4@z70rt
     let mut backoff = Backoff::new(policy, sleep);
     let mut ambiguous = false;
     // An earlier attempt left unanswered may have landed after the get, so a later `Exists` is
@@ -126,6 +129,7 @@ where
         sent();
         match create().await {
             Ok(Create::Exists) if was_ambiguous => {
+                // § pnvmmdmz4.a@hfxgt
                 ambiguous = true;
                 backoff
                     .next("exists after an ambiguous create", false)
@@ -225,6 +229,7 @@ mod tests {
         use crate::store::attempts::measured;
         let steps = script(vec![Err(Fault::Transient("a".into())), Ok(7)]);
         let op = || async { steps.lock().unwrap().pop_front().unwrap() };
+        // § zemxe46k3.a@hs48v
         let (out, sent) = measured(with_retry(POLICY, op, tokio::time::sleep)).await;
         assert_eq!((out, sent), (Ok(7), 2));
         let lost = vec![Err(Fault::Ambiguous("timeout".into()))];

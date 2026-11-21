@@ -2,7 +2,7 @@
 import { type Budget, effectiveBudget } from "./cost.ts";
 import { Duration } from "./durations.ts";
 import { InvalidArgument, onlyOptions, RunFailed } from "./errors.ts";
-import { checkKey, checkName } from "./names.ts";
+import { checkKey, checkSentName } from "./names.ts";
 import { decodeValue, encodeCanonical, encodeJson, jsonValue, type layout } from "./proto.ts";
 import { makeCall, type Shared } from "./scheduler.ts";
 import { type AnyWorkflow, Workflow } from "./workflow.ts";
@@ -22,21 +22,13 @@ export interface ChildOptions {
 /** The canonical JSON bytes (RFC 8785) of an input, as the core compares a start's input byte
  * for byte: an object, `{}` when none is given. */
 export function inputObject(input: unknown): Uint8Array {
+  // § e1dc4dar4.a@6sk3g
   const object = input === undefined ? {} : input;
   if (typeof object !== "object" || object === null || Array.isArray(object)) {
     throw new InvalidArgument(`an input is a JSON object, not ${JSON.stringify(object)}`);
   }
+  // § one aaev3rs1q@evgsa
   return encodeCanonical(object, "the input");
-}
-
-function reservable(name: string): string {
-  checkName("message name", name);
-  if (name.startsWith("substantial.")) {
-    throw new InvalidArgument(
-      `message name ${JSON.stringify(name)} starts with substantial., which is reserved`,
-    );
-  }
-  return name;
 }
 
 export function send(
@@ -51,7 +43,7 @@ export function send(
     case: "send",
     value: {
       run: checkKey("run id", runId),
-      name: reservable(name),
+      name: checkSentName(name),
       value: jsonValue(encodeJson(value, "the message")),
       ...(options.id === undefined ? {} : { id: checkKey("message id", options.id) }),
     },
@@ -149,6 +141,7 @@ export function start<I, O>(
   input: I | undefined,
   options: ChildOptions,
 ): Promise<Child<O>> {
+  // § bxb0ygj7m@nfjfp
   if (!(workflow instanceof Workflow)) {
     throw new InvalidArgument(`start takes a workflow, not ${workflow}`);
   }
@@ -160,6 +153,7 @@ export function start<I, O>(
     value: {
       workflow: w.name,
       ...(w.version === undefined ? {} : { version: w.version }),
+      // § one aaev3rs1q.b@yvjpn
       input: jsonValue(inputObject(input)),
       ...(options.id === undefined ? {} : { id: checkKey("run id", options.id) }),
       ...(budget === undefined ? {} : { budget }),

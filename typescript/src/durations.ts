@@ -11,9 +11,11 @@ export class Duration {
       );
     }
     this.ms = Math.round(ms);
+    // § b60bm4szk@tvmc6
     if (!Number.isSafeInteger(this.ms)) {
       throw new InvalidArgument(`a duration of ${ms} ms is too long`);
     }
+    // § end b60bm4szk
   }
 
   toString(): string {

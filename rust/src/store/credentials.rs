@@ -172,6 +172,7 @@ fn sdk_keys(
 
 impl Credentials {
     pub(crate) fn refuse(&self, url: &str) -> Result<()> {
+        // § e9ern38bz.c@nghk4
         match self {
             Credentials::None => Ok(()),
             _ => Err(Error::ConfigError(format!("{url:?} takes no credentials"))),
@@ -180,9 +181,11 @@ impl Credentials {
 
     pub(crate) fn s3(&self) -> Result<S3Auth> {
         match self {
+            // § e9ern38bz.c@4vggn
             Credentials::None => Err(Error::ConfigError(
                 "an S3 store needs credentials, Env, explicit or a provider".into(),
             )),
+            // § end e9ern38bz.c
             Credentials::Password { .. } | Credentials::PasswordProvider(_) => {
                 Err(Error::ConfigError(
                     "an S3 store takes Env, explicit keys or a provider, not a Redis password"
@@ -190,6 +193,7 @@ impl Credentials {
                 ))
             }
             Credentials::Env => {
+                // § kesrnhfsp.b@1tehr
                 let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
                 let required = |name: &str| {
                     var(name).ok_or_else(|| Error::ConfigError(format!("{name} is not set")))
@@ -235,6 +239,7 @@ impl Credentials {
         match self {
             Credentials::None => Ok(RedisAuth::None),
             Credentials::Env => {
+                // § kesrnhfsp.b@tjsrs
                 let password = std::env::var("REDIS_PASSWORD")
                     .ok()
                     .filter(|v| !v.is_empty())
@@ -287,6 +292,7 @@ impl PasswordRefresh {
     /// The password and username a new connection authenticates with; the provider's error is
     /// the connection's.
     pub(crate) async fn fresh(&self) -> std::result::Result<(String, Option<String>), String> {
+        // § kesrnhfsp.c@2se7j
         let mut held = self.held.lock().await;
         let usable = held.as_ref().is_some_and(|p| {
             p.expires_at
@@ -306,6 +312,7 @@ impl PasswordRefresh {
 }
 
 /// Keys this close to their expiry are refreshed before a request.
+// § one kesrnhfsp@5jf1t
 const REFRESH_BEFORE: TimeDelta = TimeDelta::minutes(5);
 
 /// The keys of a provider, refreshed before a request when they near their expiry.
@@ -324,6 +331,7 @@ impl std::fmt::Debug for Refresh {
 
 impl Refresh {
     fn usable(&self) -> bool {
+        // § kesrnhfsp@r59r4
         match &*self.held.lock().expect("never poisoned") {
             None => false,
             Some((_, None)) => true,
@@ -335,6 +343,7 @@ impl Refresh {
 
     /// Calls the provider unless the keys held are usable; its error is the request's.
     pub(crate) async fn fresh(&self) -> std::result::Result<(), String> {
+        // § kesrnhfsp.a@h16fy
         if self.usable() {
             return Ok(());
         }

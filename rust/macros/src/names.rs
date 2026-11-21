@@ -6,6 +6,7 @@ use syn::LitStr;
 pub fn key(lit: &LitStr) -> syn::Result<()> {
     let name = lit.value();
     let allowed = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b);
+    // § one px8dv58y7.b@818aa
     if (1..=100).contains(&name.len())
         && name.bytes().all(allowed)
         && name != "."
@@ -23,11 +24,16 @@ pub fn key(lit: &LitStr) -> syn::Result<()> {
 /// Step and message names: `[A-Za-z0-9._-]{1,128}`, `substantial.` being reserved.
 pub fn call(lit: &LitStr, what: &str) -> syn::Result<()> {
     let name = lit.value();
+    // § px8dv58y7.c@5zh4k
+    if name.starts_with("substantial.") {
+        return Err(syn::Error::new(
+            lit.span(),
+            format!("{what} name {name:?} starts with substantial., which is reserved"),
+        ));
+    }
+    // § end px8dv58y7.c
     let allowed = |b: u8| b.is_ascii_alphanumeric() || b"._-".contains(&b);
-    if (1..=128).contains(&name.len())
-        && name.bytes().all(allowed)
-        && !name.starts_with("substantial.")
-    {
+    if (1..=128).contains(&name.len()) && name.bytes().all(allowed) {
         return Ok(());
     }
     Err(syn::Error::new(
@@ -39,6 +45,7 @@ pub fn call(lit: &LitStr, what: &str) -> syn::Result<()> {
 /// `schedule.next` is the step `c.schedule()` records its fires in.
 pub fn not_reserved(lit: &LitStr) -> syn::Result<()> {
     const RESERVED: &str = "schedule.next";
+    // § vnykycs34.b@9wf75
     if lit.value() != RESERVED {
         return Ok(());
     }

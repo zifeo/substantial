@@ -76,6 +76,7 @@ class Replay:
 
     def tell(self, event: observe.Observed) -> None:
         """Tells the observer; one that raises stops the worker with its error."""
+        # § yp7fv5sa7.b@2tszk
         try:
             self.metering.tell(event)
         except Exception as e:
@@ -123,6 +124,7 @@ async def replay(
 def _input_bytes(start: layout.Start) -> bytes:
     which = start.input.WhichOneof("kind")
     if which is None:
+        # § e1dc4dar4.a@5jdxd
         return b"{}"
     if which == "json":
         return start.input.json
@@ -138,15 +140,20 @@ async def _drive(
     input_json = _input_bytes(data.start)
     machine = RunMachine(r.core, data)
     executor = Executor()
+    # § aym52h8ch@1mzzx
     step_timeout = workflow.step_timeout if workflow.step_timeout is not None else r.step_timeout
+    # § end aym52h8ch
     shared = Shared(machine, clock, data, input_json, executor.loop, millis(step_timeout))
     attempts: set[asyncio.Task] = set()
     try:
         c = Context(shared)
         context = contextvars.Context()
         context.run(CURRENT.set, c)
+        # § g4kv2kj51@y8qjq
         code: asyncio.Task | None = executor.spawn(workflow.run(c, input_json), context)
+        # § end g4kv2kj51
         while True:
+            # § k3zma9hjs@e1sma
             code = _fail_code(shared, code)
             if code is not None:
                 await executor.run()
@@ -160,9 +167,11 @@ async def _drive(
                 if code is not None:
                     code.cancel()
                     code = None
+                # § v4n6ja42e.a@hm0hs
                 for task in attempts:
                     task.cancel()
                 attempts.clear()
+                # § end v4n6ja42e.a
             code = _fail_code(shared, code)
             if shared.fatal is not None:
                 raise ProtocolError(f"a call of the code failed: {shared.fatal}")
@@ -170,9 +179,11 @@ async def _drive(
                 return dropped()
             if not channel.committed.empty():
                 raise ProtocolError("committed without a commit")
+            # § k3zma9hjs.a@chvnp
             shared.evaluate_waits()
             if shared.code_failure is not None:
                 continue
+            # § end k3zma9hjs.a
             for task in [t for t in attempts if t.done()]:
                 attempts.discard(task)
                 shared.step_ended(*task.result())
@@ -212,13 +223,16 @@ async def _drive(
             else:
                 raise ProtocolError(f"empty next: {nxt}")
     finally:
+        # § one v4n6ja42e.a@8aw2r
         for task in attempts:
             task.cancel()
         shared.closed = True
+        # § d9818h4m4.a@9mpen
         try:
             await executor.close()
         finally:
             machine.close()
+        # § end d9818h4m4.a
 
 
 async def _read(r: Replay, op: boundary.StoreOp) -> boundary.OpResult | None:
@@ -293,6 +307,7 @@ def _spawn_attempt(
     timeout_ms = e.timeout_ms if e.HasField("timeout_ms") else None
 
     async def run_attempt() -> tuple[int, int, run.Outcome, list[layout.Amount]]:
+        # § yp7fv5sa7.a@ks0e6
         started = shared.clock.seconds()
         # Unless it reaches its outcome: cancelled by a shutdown, a lost claim or a crash.
         ended = "abandoned"
@@ -313,8 +328,11 @@ def _spawn_attempt(
 def _end_run(shared: Shared, code: asyncio.Task) -> None:
     """Records the end of the code: its value, its failure, its cancellation or its
     continuation."""
+    # § g039jvy6k@yhnck
     if code.cancelled():
+        # § g039jvy6k.b@nmg0p
         end = run.End(failed=layout.Failed(error=layout.Failure(type="CancelledError")))
+        # § end g039jvy6k.b
     elif (e := code.exception()) is None:
         end = run.End(completed=layout.Completed(value=json_value(code.result())))
     elif isinstance(e, Cancelled):
@@ -331,6 +349,7 @@ def _end_run(shared: Shared, code: asyncio.Task) -> None:
     else:
         f = failure_of(e)
         failure = layout.Failure(type=f.type, message=f.message, retryable=f.retryable)
+        # § one r3sd261h4.b@0kh1g
         if isinstance(e, StepFailed) and e._details is not None:
             failure.details.CopyFrom(e._details)
         elif isinstance(e, StepFailed):

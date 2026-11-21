@@ -22,7 +22,7 @@ import {
 import { Iteration } from "./iterate.ts";
 import { type Log, runLog } from "./log.ts";
 import { type HandleOptions, handle, handleAll } from "./messages.ts";
-import { checkStepName } from "./names.ts";
+import { checkName, checkStepName } from "./names.ts";
 import { decodeValue, encodeJson, jsonValue, type layout, time } from "./proto.ts";
 import { rollback, saga } from "./saga.ts";
 import { schedule } from "./schedule.ts";
@@ -223,10 +223,13 @@ export class RunContext implements Context {
     if (decode !== undefined && typeof decode !== "function") {
       throw new InvalidArgument("decode is a function");
     }
+    // § one c5kkpjdz5.a@er3yc
     const deadline = (await this.now()).getTime() + timeout.ms;
     for (;;) {
       // Not ready is the recorded `null`, which `decode` never sees.
+      // § one c5kkpjdz5.b@71v9z
       const value = await this.step(name, fn, retry === undefined ? {} : { retry });
+      // § c5kkpjdz5@3rxfp
       if (value !== null && value !== undefined) {
         return decode === undefined ? (value as T) : decode(value);
       }
@@ -273,7 +276,7 @@ export class RunContext implements Context {
   }
 
   receive<T = unknown>(name: string, options: ReceiveOptions<T> = {}): Promise<T> {
-    text(name, "a message name");
+    checkName("message name", name);
     const { decode, timeout } = known(options, ["decode", "timeout"], "receive");
     if (decode !== undefined && typeof decode !== "function") {
       throw new InvalidArgument("decode is a function");
@@ -287,12 +290,16 @@ export class RunContext implements Context {
     };
     const counts = this.#shared.receivesOf(name);
     if (timeout !== undefined) {
+      // § one p6tzbmjaq.a@1cddj
       if (counts.plain > 0) throw bothPending(name);
       return this.#receiveWithin(name, timeout, decoded, counts);
     }
+    // § one p6tzbmjaq.a@3hzmx
     if (counts.timed > 0) throw bothPending(name);
+    // § p6tzbmjaq@3skc2
     const received = this.#shared.future<T>(makeCall({ case: "receive", value: name }), decoded);
     counts.taken += 1;
+    // § end p6tzbmjaq
     counts.plain += 1;
     const done = () => {
       counts.plain -= 1;
@@ -328,6 +335,7 @@ export class RunContext implements Context {
       });
       counts.bound = true;
     }
+    // § p6tzbmjaq@ctavy
     let claimed = false;
     // Claiming in the predicate keeps two receives woken by one message from both taking it.
     const claim = () => {
@@ -402,7 +410,9 @@ export class RunContext implements Context {
 
   async continueAsNew<I>(input?: I, options: ContinueOptions<I> = {}): Promise<never> {
     const { workflow } = known(options, ["workflow"], "continueAsNew");
+    // § one aaev3rs1q.b@pymxt
     const data = inputObject(input);
+    // § gjnefe4w6@cd17b
     if (workflow === undefined) throw new ContinuedAsNew(undefined, undefined, data);
     if (!(workflow instanceof Workflow)) {
       throw new InvalidArgument(`continueAsNew takes a workflow, not ${workflow}`);
@@ -411,6 +421,7 @@ export class RunContext implements Context {
   }
 
   async cancel(reason: string): Promise<never> {
+    // § g039jvy6k.c@z98jd
     throw new Cancelled(text(reason, "a reason"));
   }
 }

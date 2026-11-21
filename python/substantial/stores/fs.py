@@ -52,6 +52,7 @@ def _sync_dir(path: Path) -> None:
 def _ensure_dirs(root: Path, directory: Path) -> None:
     """Creates the missing directories between `root` and `directory`, each fsynced in its
     parent."""
+    # § c7pz5rk26.a@r1554
     missing = []
     at = directory
     while at != root and not at.is_dir():
@@ -73,6 +74,7 @@ def _ensure_dirs(root: Path, directory: Path) -> None:
 
 
 def _create(root: Path, key: str, data: bytes) -> Create:
+    # § c7pz5rk26@16pzk
     check_key(key)
     path = root / key
     tmp = root / TMP / secrets.token_hex(16)
@@ -105,6 +107,7 @@ def _create(root: Path, key: str, data: bytes) -> Create:
 
 
 def _get(root: Path, key: str) -> bytes | None:
+    # § dfd6vt90h.a@xxcnr
     check_key(key)
     path = root / key
     try:
@@ -116,6 +119,7 @@ def _get(root: Path, key: str) -> bytes | None:
 
 
 def _delete(root: Path, key: str) -> None:
+    # § dfd6vt90h.d@z3b71
     check_key(key)
     path = root / key
     try:

@@ -6,6 +6,7 @@ import {
   type Context,
   isControl,
   milliseconds,
+  RolledBack,
   RunFailed,
   workflow,
 } from "../src/mod.ts";
@@ -43,6 +44,34 @@ eachAdapter("a cancelled run may roll back and still ends cancelled", async (sto
   assert.equal(failed.error.message, "not needed");
   assert.deepEqual(undone, ["payment"]);
 });
+
+eachAdapter(
+  "a caught c.cancel or rollback ends the run as the code ends it",
+  async (store) => {
+    const caught = workflow("caught", async (c: Context) => {
+      const seen = [];
+      try {
+        await c.cancel("changed my mind");
+      } catch (e) {
+        if (!(e instanceof Cancelled)) throw e;
+        seen.push(e.message);
+      }
+      try {
+        await c.rollback("not this way");
+      } catch (e) {
+        if (!(e instanceof RolledBack)) throw e;
+        seen.push(e.message);
+      }
+      return seen;
+    });
+    const sub = await createOn(store);
+    await using _ = script(sub, [caught]);
+    const run = await sub.start(caught);
+    assert.deepEqual(await run.result({ timeout: LONG }), ["changed my mind", "not this way"]);
+    assert.equal(await run.status(), "completed");
+  },
+  ["memory"],
+);
 
 eachAdapter(
   "a saga that sees Cancelled undoes its steps",

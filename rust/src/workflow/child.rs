@@ -15,9 +15,9 @@ use super::{AsWorkflow, decode, input_object, json};
 use crate::client::RunStatus;
 use crate::cost::Budget;
 use crate::error::{Error, Result};
-use crate::names::{check_key, check_name};
+use crate::names::{check_key, check_sent_name};
 use crate::proto::boundary::v1::{self as b, call::Call, called::Called};
-use crate::time::millis;
+use crate::time::call_millis;
 
 /// A run started by this one, whose result is an `O`.
 pub struct Child<O> {
@@ -44,13 +44,16 @@ impl Context {
         workflow: &W,
         input: impl Serialize,
     ) -> StartChild<W::Output> {
+        // § bxb0ygj7m@rwh17
         let workflow = workflow.workflow();
         StartChild {
             ctx: self.clone(),
             workflow: workflow.name().to_owned(),
             version: workflow.version(),
+            // § one aaev3rs1q.b@7p1j9
             input: input_object(input),
             id: None,
+            // § one evdz71nzb@rnddn
             budget: workflow.budget().cloned(),
             output: PhantomData,
         }
@@ -63,7 +66,7 @@ impl Context {
             ctx: self.clone(),
             run: run.to_owned(),
             name: name.to_owned(),
-            value: serde_json::to_vec(&value).map_err(Error::from),
+            value: super::argument_json(&value, "the message"),
             id: None,
         }
     }
@@ -106,7 +109,7 @@ impl<T: DeserializeOwned + 'static> IntoFuture for ChainResult<T> {
             check_key("run id", &self.chain)?;
             let call = b::call::ChainResult {
                 chain: self.chain.clone(),
-                timeout_ms: self.timeout.map(millis),
+                timeout_ms: self.timeout.map(call_millis),
             };
             let resolved = self.ctx.resolved(Call::ChainResult(call)).await;
             failure_read(&self.ctx, &self.chain, &resolved);
@@ -147,6 +150,7 @@ impl<O> StartChild<O> {
 
     /// The child's budget, instead of its workflow's.
     pub fn budget(mut self, budget: impl Into<Budget>) -> Self {
+        // § evdz71nzb@wbgcg
         self.budget = Some(budget.into());
         self
     }
@@ -205,13 +209,7 @@ impl IntoFuture for SendFromWorkflow {
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             check_key("run id", &self.run)?;
-            check_name("message name", &self.name)?;
-            if self.name.starts_with("substantial.") {
-                return Err(Error::InvalidArgument(format!(
-                    "message name {:?} starts with substantial., which is reserved",
-                    self.name
-                )));
-            }
+            check_sent_name(&self.name)?;
             if let Some(id) = &self.id {
                 check_key("message id", id)?;
             }

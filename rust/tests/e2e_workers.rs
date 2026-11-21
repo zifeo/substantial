@@ -70,6 +70,7 @@ async fn concurrency_bounds_the_replays_at_once() {
         for run in runs {
             run.result().timeout(LONG).await.unwrap();
         }
+        // § rb377j7db@64ymw
         assert_eq!(
             probe.most.load(Ordering::SeqCst),
             concurrency,
@@ -151,6 +152,7 @@ async fn a_shutdown_past_its_grace_interrupts() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_past_the_grace_loses_the_step_in_flight() {
+    // § ftq7bbgff.a@8bx46
     for ns in namespaces() {
         let probe = Probe::default();
         let workflow = probe.workflow(|attempt| if attempt == 1 { 30_000 } else { 10 });
@@ -219,6 +221,7 @@ async fn a_timer_fires_while_a_step_is_in_flight() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_workers_racing_for_a_commit() {
+    // § czkkbyhe0@bqbss
     for ns in namespaces() {
         let started = Arc::new(Notify::new());
         let attempts = Arc::new(AtomicU32::new(0));
@@ -264,6 +267,7 @@ async fn two_workers_racing_for_a_commit() {
             .unwrap();
         assert_eq!(value, 2, "{}: the second worker's attempt won", ns.name);
         thaw.send(true).unwrap();
+        // § czkkbyhe0.b@v0rz8
         eventually("the frozen commit", async || {
             slow.created()
                 .iter()

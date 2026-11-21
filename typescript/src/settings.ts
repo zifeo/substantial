@@ -10,14 +10,17 @@ export type Preset = (typeof PRESETS)[number];
 
 /** The least retention of the presets; a `result` wait follows its chain again within half of
  * it. */
+// § one y025f8qen.c@rha6g
 export const RETENTION_MIN = hours(1);
 
 /** The longest retention, 100 years. A collection's due key names its year in 4 digits, which
  * far longer retentions would pass. */
+// § one pn928919v@vmk10
 export const RETENTION_MAX = days(36_500);
 
 /** Refuses a retention that is not a Duration from `minimum` to `RETENTION_MAX`. */
 export function checkRetention(retention: unknown, minimum: Duration, what: string): void {
+  // § pn928919v@estyn
   if (!(retention instanceof Duration)) {
     throw new ConfigError(`${what} must be a Duration, not ${String(retention)}`);
   }
@@ -81,6 +84,7 @@ export interface WorkerOptions {
   readonly retention?: Duration;
 }
 
+// § one yxy5pzfkp@r3hqt
 const PUBLIC = [
   "concurrency",
   "maxIdle",
@@ -99,6 +103,7 @@ export type InternalOptions = { readonly preset: Preset } & {
 };
 
 /** The adapters' retries of transient failures (I-26). */
+// § one zemxe46k3@xt5aq
 export const STORE_RETRY: StoreRetry = Object.freeze({
   attempts: 5,
   initial: milliseconds(100),
@@ -113,19 +118,24 @@ export function presetSettings(preset: Preset, waitingStore: boolean): Settings 
   const service = preset === "service";
   return {
     concurrency: service ? 16 : 1,
+    // § one ry26kkc7v.a@t1qyy
     commitEvery: milliseconds(0),
     shutdownGrace: seconds(service ? 25 : 5),
     claimTtl: seconds(30),
+    // § one ry26kkc7v.b@h84nz
     claimSkew: seconds(5),
     maxIdle: !service ? seconds(1) : waitingStore ? minutes(5) : seconds(30),
     wait: seconds(20),
+    // § one ry26kkc7v.e@d9b8m
     duePage: 1000,
     duePages: 10,
     snapshotEvery: 64,
     continueAsNewAfter: { segments: 1000, bytes: 8 * MIB },
+    // § one ry26kkc7v.c@jt7nk
     dedupWindow: days(7),
     stepTimeout: minutes(5),
     retention: days(30),
+    // § one ry26kkc7v.d@6krsm
     tombstone: days(7),
     retentionMin: RETENTION_MIN,
     recheck: days(1),
@@ -216,17 +226,20 @@ export function resolveSettings(
   waitingStore: boolean,
   internal: boolean,
 ): Settings {
+  // § yxy5pzfkp.a@gw8w8
   if (typeof options !== "object" || options === null || !("preset" in options)) {
     throw new ConfigError("a worker needs a preset, script or service");
   }
   const { preset, ...overrides } = options;
   const base = presetSettings(preset, waitingStore) as unknown as Record<string, unknown>;
+  // § yxy5pzfkp.b@ce2t5
   const unknown = Object.keys(overrides).filter(
     (name) => !(name in base) || !(internal || PUBLIC.includes(name)),
   );
   if (unknown.length > 0) {
     throw new ConfigError(`unknown settings ${JSON.stringify(unknown)}`);
   }
+  // § end yxy5pzfkp.b
   const merged: Record<string, unknown> = { ...base, ...overrides };
   if (merged.continueAsNewAfter === 0) {
     merged.continueAsNewAfter = { segments: 0, bytes: 0 };

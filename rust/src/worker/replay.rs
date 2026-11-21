@@ -122,6 +122,7 @@ impl Attempted {
     }
 }
 
+// § one yp7fv5sa7.a@5n973
 impl Drop for Attempted {
     fn drop(&mut self) {
         self.host.tell(&self.events, || {
@@ -171,14 +172,18 @@ async fn drive(
         input_json.clone(),
         step_timeout,
     );
+    // § g4kv2kj51@6j5xw
     let mut code: Option<WorkflowFuture> =
         Some(workflow.start(Context::new(shared.clone()), input_json));
+    // § end g4kv2kj51
     let executor = Executor::new();
     // Aborted when dropped, which drops the outcomes of the attempts in flight.
+    // § one v4n6ja42e.a@s9bba
     let mut attempts = Tasks::default();
     let attempted: Arc<Inbox<Attempt>> = Arc::default();
     let told: Arc<dyn Ready> = inbox.clone();
     loop {
+        // § k3zma9hjs@gddpy
         fail_code(&shared, &mut code)?;
         if let Some(future) = code.as_mut()
             && let Poll::Ready(result) = executor.run(future.as_mut())
@@ -192,8 +197,10 @@ async fn drive(
             // The core recorded the failure, which `next` commits. Dropping the future and the
             // attempts in flight stops the code where it is.
             code = None;
+            // § v4n6ja42e.a@k5ad5
             attempts = Tasks::default();
             while attempted.pop().is_some() {}
+            // § end v4n6ja42e.a
         }
         fail_code(&shared, &mut code)?;
         if let Some(e) = shared.fatal() {
@@ -220,6 +227,7 @@ async fn drive(
                 })?;
                 let timeout = e.timeout_ms.map(Duration::from_millis);
                 let (clock, done) = (host.clock.clone(), attempted.clone());
+                // § yp7fv5sa7.a@exz0y
                 let observed = Attempted {
                     host: host.clone(),
                     events: events.clone(),
@@ -229,6 +237,7 @@ async fn drive(
                     started: host.clock.seconds(),
                     outcome: "abandoned",
                 };
+                // § end yp7fv5sa7.a
                 let label = step.key.clone();
                 let task = host
                     .clock
@@ -238,10 +247,12 @@ async fn drive(
                         let attempt = clock.attempt(&step.name, &step.key, Box::pin(body), timeout);
                         let ended = match AssertUnwindSafe(attempt).catch_unwind().await {
                             Ok(Some(outcome)) => outcome,
+                            // § one v4n6ja42e@cwptt
                             Ok(None) => timed_out(timeout),
                             Err(panic) => return done.push(Err(panicked(&*panic))),
                         };
                         observed.end(attempt_outcome(&ended, e.attempt, step.max_attempts));
+                        // § cvnf47vy8@p48x9
                         done.push(Ok((e.call, e.attempt, ended, running.charges())));
                     });
                 attempts.push(task);
@@ -290,6 +301,7 @@ async fn drive(
                 let signals = [attempted.clone() as Arc<dyn Ready>, told.clone()];
                 host.clock.wait(&signals, wait.until).await;
             }
+            // § one d9818h4m4@s6xzt
             Next::Idle(idle) => return Ok(replay_end::End::Idle(idle)),
             Next::Store(op) => {
                 let (store, events) = (host.store.clone(), events.clone());
@@ -329,6 +341,7 @@ async fn drive(
 
 /// The outcome of an attempt as the run machine takes it; a value over the limit fails it.
 fn outcome(result: Result<Vec<u8>, Failure>) -> Outcome {
+    // § h8wg39cct.b@gjkqs
     match result.and_then(|bytes| json(bytes).map_err(too_large)) {
         Ok(value) => Outcome::Value(value),
         Err(f) => Outcome::Error(f.into()),
@@ -336,6 +349,7 @@ fn outcome(result: Result<Vec<u8>, Failure>) -> Outcome {
 }
 
 fn timed_out(timeout: Option<Duration>) -> Outcome {
+    // § aym52h8ch@7stkz
     outcome(Err(Failure {
         kind: "StepTimeout".into(),
         message: format!("attempt past {:?}", timeout.unwrap_or_default()),
@@ -355,6 +369,7 @@ fn fail_code(shared: &Shared, code: &mut Option<WorkflowFuture>) -> Result<()> {
 }
 
 fn input_bytes(input: Option<layout::Value>) -> Result<Vec<u8>> {
+    // § e1dc4dar4.a@tq85w
     match input.and_then(|v| v.kind) {
         None => Ok(b"{}".to_vec()),
         Some(value::Kind::Json(bytes)) => Ok(bytes),
@@ -379,6 +394,7 @@ fn failed_end(segment: &layout::Segment) -> Option<String> {
 
 /// A step value over the limit fails the step at once: another attempt would return it again.
 fn too_large(e: Error) -> Failure {
+    // § h8wg39cct.b@335x1
     Failure {
         kind: "ValueTooLarge".into(),
         message: e.to_string(),
@@ -390,6 +406,7 @@ fn too_large(e: Error) -> Failure {
 /// Records the end of the code: its value, its failure, its cancellation, or its continuation;
 /// a value over the limit fails the run instead.
 fn end_run(shared: &Shared, result: Result<Vec<u8>>) -> Result<()> {
+    // § g039jvy6k@f19hy
     let end = match result.and_then(completed) {
         Ok(end) => end,
         Err(Error::Cancelled(reason)) => end::End::Cancelled(layout::Cancelled { reason }),
@@ -401,6 +418,7 @@ fn end_run(shared: &Shared, result: Result<Vec<u8>>) -> Result<()> {
 }
 
 fn completed(bytes: Vec<u8>) -> Result<end::End> {
+    // § h8wg39cct.d@ktfyj
     Ok(end::End::Completed(layout::Completed {
         value: Some(json(bytes)?),
     }))
@@ -416,6 +434,7 @@ fn continued(c: Continuation) -> Result<end::End> {
 }
 
 fn failed(shared: &Shared, e: &Error) -> end::End {
+    // § r3sd261h4.b@dqb8q
     let error = match e {
         Error::StepFailed { error, cause } => match shared.step_failure(error, cause) {
             Some(details) => layout::Failure {

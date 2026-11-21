@@ -61,6 +61,7 @@ async def test_ambiguous_creates_are_resolved_with_a_get() -> None:
 
 
 async def test_every_request_is_counted_the_read_back_too() -> None:
+    # § czph3f9yv.a@ka9h6
     with measured() as sent:
         assert await r.with_retry(POLICY, script([Transient("a"), 7])) == 7
     assert sent.n == 2

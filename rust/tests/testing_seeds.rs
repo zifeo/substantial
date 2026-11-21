@@ -241,6 +241,7 @@ async fn ids(chaos: Option<Chaos>, takeover: bool) -> Ids {
 
 #[tokio::test]
 async fn ids_and_randoms_are_drawn_from_the_seed_and_what_they_name() {
+    // § twravbm6m.b@dpz38
     let plain = ids(None, false).await;
     assert_eq!(plain, ids(None, false).await);
     assert_eq!(plain, ids(Some(Chaos { seed: 0, rate: 0.0 }), true).await);

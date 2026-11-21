@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use super::Substantial;
 use crate::cost::Budget;
 use crate::error::{Error, Failure, Result, run_failed_cause};
-use crate::names::{check_key, check_name};
+use crate::names::{check_key, check_sent_name};
 use crate::plan;
 use crate::proto::boundary::v1::{
     self as b, history, plan_input::Plan, plan_step::Step, read_value, retried, run_result,
@@ -133,7 +133,7 @@ impl<O> Run<O> {
             sub: self.sub.clone(),
             chain: self.chain.clone(),
             name: name.to_owned(),
-            value: serde_json::to_vec(&value).map_err(Error::from),
+            value: crate::workflow::argument_json(&value, "the message"),
             id: None,
         }
     }
@@ -142,6 +142,7 @@ impl<O> Run<O> {
     pub async fn cancel(&self, reason: &str) -> Result<()> {
         self.check_chain()?;
         let now = self.sub.now();
+        // § wtwx1e769.c@yvbnz
         let ord = self.sub.ulid(now.ms);
         let cancel = b::CancelPlan {
             prefix: String::new(),
@@ -151,6 +152,7 @@ impl<O> Run<O> {
             now: Some(now),
             ord,
         };
+        // § end wtwx1e769.c
         self.sent(Plan::Cancel(cancel)).await
     }
 
@@ -423,21 +425,25 @@ impl IntoFuture for SendMessage {
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             check_key("run id", &self.chain)?;
-            check_name("message name", &self.name)?;
+            check_sent_name(&self.name)?;
             if let Some(id) = &self.id {
                 check_key("message id", id)?;
             }
             let now = self.sub.now();
+            // § wtwx1e769@zy8s5
             let ord = self.sub.ulid(now.ms);
             let send = b::SendPlan {
                 prefix: String::new(),
                 chain: self.chain.clone(),
                 name: self.name,
+                // § one h8wg39cct.a@ncvyy
                 value: Some(json(self.value?)?),
+                // § one wtwx1e769.a@0yr00
                 id: self.id.unwrap_or_else(|| ord.clone()),
                 now: Some(now),
                 ord,
             };
+            // § end wtwx1e769
             sent(&self.sub, &self.chain, Plan::Send(send)).await
         })
     }
@@ -473,10 +479,13 @@ impl<T> ResultWait<T> {
     }
 }
 
+// § y025f8qen@kkdg6
 const FIRST_POLL: Duration = Duration::from_millis(10);
 const MAX_POLL: Duration = Duration::from_secs(30);
+// § end y025f8qen
 /// A wait follows its chain from the first run again this often, as polling one run's `result`
 /// never sees that run collected (I-17).
+// § one y025f8qen.c@ge12p
 const REFOLLOW: Duration = Duration::from_secs(crate::settings::RETENTION_MIN.as_secs() / 2);
 
 impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
@@ -500,12 +509,15 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
         }
         Box::pin(async move {
             let mut died = self.run.sub.0.died.subscribe();
+            // § y025f8qen.b@gc5pb
             let store = &*self.run.sub.0.store;
             let polled = async {
+                // § y025f8qen@avm71
                 let (mut delay, mut last) = (FIRST_POLL.min(cap), None);
                 let mut followed = tokio::time::Instant::now();
                 loop {
                     if followed.elapsed() >= self.refollow {
+                        // § y025f8qen.c@btd82
                         (last, followed) = (None, tokio::time::Instant::now());
                     }
                     let live = match self.run.ended(last.take()).await? {
@@ -514,11 +526,14 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
                     };
                     last = Some(live.run);
                     if store.capabilities().wait {
+                        // § y025f8qen.a@qk5en
                         let created = h3::result_created(store, &live.result_key);
+                        // § y025f8qen.d@mq8c6
                         let left = self.refollow.saturating_sub(followed.elapsed());
                         if let Ok(created) = tokio::time::timeout(left, created).await {
                             created.map_err(|e| Error::StoreError(e.message))?;
                         }
+                        // § end y025f8qen.d
                     } else {
                         tokio::time::sleep(delay).await;
                         delay = (delay * 2).min(cap);

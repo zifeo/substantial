@@ -13,6 +13,7 @@ from substantial.errors import ConfigError
 KIB = 1024
 MIB = 1024 * KIB
 PRESETS = ("script", "service")
+# § yxy5pzfkp@4w1p8
 PUBLIC = (
     "concurrency",
     "max_idle",
@@ -22,14 +23,18 @@ PUBLIC = (
     "step_timeout",
     "retention",
 )
+# § end yxy5pzfkp
 # The least retention of the presets; a `result` wait follows its chain again within half of it.
+# § one y025f8qen.c@x5cy6
 RETENTION_MIN = timedelta(hours=1)
 # The longest retention, 100 years. A collection's due key names its year in 4 digits, which far
 # longer retentions would pass.
+# § one pn928919v@genfj
 RETENTION_MAX = timedelta(days=36_500)
 
 
 def check_retention(retention: object, minimum: timedelta, what: str) -> None:
+    # § pn928919v@bfmpy
     if not isinstance(retention, timedelta):
         raise ConfigError(f"{what} must be a timedelta, not {retention!r}")
     if retention < minimum:
@@ -93,19 +98,24 @@ class Settings:
             max_idle = timedelta(minutes=5) if waiting_store else timedelta(seconds=30)
         return Settings(
             concurrency=16 if service else 1,
+            # § one ry26kkc7v.a@v7cjr
             commit_every=timedelta(0),
             shutdown_grace=timedelta(seconds=25 if service else 5),
             claim_ttl=timedelta(seconds=30),
+            # § one ry26kkc7v.b@q7q8g
             claim_skew=timedelta(seconds=5),
             max_idle=max_idle,
             wait=timedelta(seconds=20),
+            # § one ry26kkc7v.e@5h1jf
             due_page=1000,
             due_pages=10,
             snapshot_every=64,
             continue_as_new_after=ContinueAsNewAfter(segments=1000, bytes=8 * MIB),
+            # § one ry26kkc7v.c@vz2tr
             dedup_window=timedelta(days=7),
             step_timeout=timedelta(minutes=5),
             retention=timedelta(days=30),
+            # § one ry26kkc7v.d@shggd
             tombstone=timedelta(days=7),
             retention_min=RETENTION_MIN,
             recheck=timedelta(days=1),
@@ -119,6 +129,7 @@ class Settings:
         boundary; `retention` a `timedelta`.
         """
         unknown = sorted(set(settings) - set(PUBLIC))
+        # § one yxy5pzfkp.a@skspq, yxy5pzfkp.b@c3vrg
         if unknown:
             raise ConfigError(f"unknown settings {unknown}")
         if settings.get("continue_as_new_after") == 0 and _is_int(

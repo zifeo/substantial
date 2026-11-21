@@ -108,9 +108,11 @@ export type CredentialsArg =
   | PasswordProvider
   | undefined;
 
+// § one kesrnhfsp@wvsx0
 const REFRESH_MS = 5 * 60_000;
 
 export function refuse(url: string, credentials: CredentialsArg): void {
+  // § e9ern38bz.c@en3sv
   if (credentials !== undefined) {
     throw new ConfigError(`${url} takes no credentials`);
   }
@@ -125,11 +127,13 @@ function required(name: string): string {
 }
 
 function fixed(credentials: CredentialsArg): Credentials | undefined {
+  // § e9ern38bz.c@1hhz9
   if (credentials === undefined) {
     throw new ConfigError(
       'an S3 store needs credentials, "env", new Credentials(...) or a provider',
     );
   }
+  // § end e9ern38bz.c
   if (credentials instanceof Credentials) return credentials;
   if (typeof credentials === "function") return undefined;
   if (credentials !== "env") {
@@ -137,12 +141,14 @@ function fixed(credentials: CredentialsArg): Credentials | undefined {
       `credentials are "env", new Credentials(...) or a provider, not ${credentials}`,
     );
   }
+  // § kesrnhfsp.b@ssv1c
   const sessionToken = process.env.AWS_SESSION_TOKEN;
   return new Credentials({
     accessKeyId: required("AWS_ACCESS_KEY_ID"),
     secretAccessKey: required("AWS_SECRET_ACCESS_KEY"),
     ...(sessionToken ? { sessionToken } : {}),
   });
+  // § end kesrnhfsp.b
 }
 
 /** A Redis store's password given once, explicit or read from `REDIS_PASSWORD` and
@@ -157,11 +163,13 @@ export function resolvePassword(
       `a Redis store takes "env", new Password(...), a provider or undefined, not ${credentials}`,
     );
   }
+  // § kesrnhfsp.b@h7v56
   const username = process.env.REDIS_USERNAME;
   return new Password({
     password: required("REDIS_PASSWORD"),
     ...(username ? { username } : {}),
   });
+  // § end kesrnhfsp.b
 }
 
 /** What a provider returned last, asked again from 5 minutes before it expires: one call at a
@@ -192,6 +200,7 @@ class Refreshed<T> {
   }
 
   get(): Promise<T> {
+    // § kesrnhfsp@8379g
     const c = this.#current;
     if (c !== undefined && (c.expiresAt === undefined || c.expiresAt - Date.now() >= REFRESH_MS)) {
       return Promise.resolve(c.value);
@@ -225,6 +234,7 @@ class Refreshed<T> {
 }
 
 async function ask<T>(provider: () => T | Promise<T>): Promise<T> {
+  // § kesrnhfsp.a@rv112
   try {
     return await provider();
   } catch (e) {
@@ -267,6 +277,7 @@ export class Keys extends Refreshed<Credentials> {
 /** The password of a Redis store's connections, explicit or from a provider. */
 export class Passwords extends Refreshed<Password> {
   constructor(credentials: Password | PasswordProvider, timeoutMs: number) {
+    // § kesrnhfsp.c@vejmb
     const provider = credentials as PasswordProvider;
     super(
       async () => {

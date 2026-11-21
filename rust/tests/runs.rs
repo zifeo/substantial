@@ -6,8 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeZone, Utc};
 use futures::{StreamExt, TryStreamExt};
+use prost::Message;
 use serde::Deserialize;
 use serde_json::json;
+use substantial::__internal::layout;
 use substantial::testing::Env;
 use substantial::{
     Context, Error, Permanent, Preset, RunInfo, WaitingOn, Workflow, minutes, step_key,
@@ -212,6 +214,73 @@ async fn retry_resumes_a_failed_run_keeping_its_recorded_steps_and_step_keys() {
         matches!(&unknown, Err(Error::RunNotFound { chain, .. }) if chain == "nobody"),
         "{unknown:?}"
     );
+    worker.shutdown().await.unwrap();
+    done(env).await;
+}
+
+/// Fails at its step while `refuse` is set, else ends with its version.
+fn flaky(version: u32, refuse: Arc<AtomicBool>) -> Workflow<String> {
+    Workflow::without_input("flaky", move |c| {
+        let refuse = refuse.clone();
+        async move {
+            c.step("try", move || {
+                let refused = refuse.load(Ordering::SeqCst);
+                async move {
+                    if refused {
+                        return Err(Permanent::new(std::io::Error::other("down")));
+                    }
+                    Ok(())
+                }
+            })
+            .await?;
+            Ok(format!("v{version}"))
+        }
+    })
+    .with_version(version)
+}
+
+#[tokio::test]
+async fn a_retry_runs_the_failed_runs_version_and_has_no_parent() {
+    let env = Env::open(t0()).await.unwrap();
+    let refuse = Arc::new(AtomicBool::new(true));
+    let (one, two) = (flaky(1, refuse.clone()), flaky(2, refuse.clone()));
+    let kid = two.clone();
+    let parent = Workflow::without_input("parent", move |c| {
+        let kid = kid.clone();
+        async move {
+            let child = c.start(&kid, ()).id("kid").await?;
+            Ok(matches!(child.result().await, Err(Error::RunFailed { .. })))
+        }
+    });
+    let worker = env
+        .worker((parent.clone(), one.clone(), two.clone()))
+        .preset(Preset::Service)
+        .start()
+        .unwrap();
+    let run = env.start(&parent, ()).id("p").await.unwrap();
+    assert!(run.result().await.unwrap(), "the child failed");
+    refuse.store(false, Ordering::SeqCst);
+    // A handle of version 1: the retry takes the failed run's version, not the handle's.
+    let child = env.run(&one, "kid");
+    child.retry().await.unwrap();
+    // § vb6krfmej.c@yjwc8
+    assert_eq!(child.result().await.unwrap(), "v2");
+    let history = child.history().await.unwrap();
+    let retry = &history.last().unwrap().run;
+    assert_ne!(retry, "kid", "{history:?}");
+    let objects = env.__objects();
+    let start = |run: &str| {
+        let (_, bytes) = (objects.iter())
+            .find(|(k, _)| *k == format!("runs/{run}/start"))
+            .unwrap();
+        layout::Start::decode(bytes.as_slice()).unwrap()
+    };
+    assert_eq!(start("kid").parent.unwrap().run, "p");
+    let start = start(retry);
+    assert_eq!(start.resumes.as_deref(), Some("kid"));
+    assert_eq!(start.version, Some(2));
+    assert_eq!(start.parent, None, "{start:?}");
+    // § end vb6krfmej.c
     worker.shutdown().await.unwrap();
     done(env).await;
 }
