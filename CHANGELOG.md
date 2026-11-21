@@ -6,11 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Release notes are also published on [GitHub Releases](https://github.com/zifeo/substantial/releases).
 
-## [0.3.0] - Unreleased
+## [Unreleased]
+
+## [0.3.0] - 2026-11-21
+
+Wasm guest workflows on the Rust worker, and every host refusing what another would read otherwise. See the [README](https://github.com/zifeo/substantial/blob/v0.3.0/README.md).
 
 ### Added
 
-- Wasm guest workflows: a workflow compiled to a WebAssembly component of the world `substantial:guest/guest` (`wit/guest.wit`) runs on a Rust worker loaded at run time, without a redeploy. The Rust crate's `guests` feature loads and replays it with wasmtime, and the new crate `substantial-guest` writes it in Rust with the API of the Rust host: `#[s::workflow]`, `#[s::step]`, `c.sleep`, `c.receive`, `c.send`. A guest has no network, clock or filesystem: its workflow code calls only Substantial's verbs, and its steps only the interfaces the embedder adds. An embedder may also call exports of its own beside the workflow, and gives each guest its bounds: a memory per instance and a time for its workflow code between two waits, past which it traps.
+- Wasm guest workflows: a workflow compiled to a WebAssembly component of the world `substantial:guest/guest` (`wit/guest.wit`) runs on a Rust worker, which loads it from its bytes when it starts, so its code ships without a rebuild of the worker. The Rust crate's `guests` feature loads and replays it with wasmtime, and the new crate `substantial-guest` writes it in Rust with the API of the Rust host: `#[s::workflow]`, `#[s::step]`, `c.sleep`, `c.receive`, `c.send`. A guest has no network, clock or filesystem: its workflow code calls only Substantial's verbs, and its steps only the interfaces the embedder adds. An embedder may also call exports of its own beside the workflow, and gives each guest its bounds: a memory per instance and a time for its workflow code between two waits, past which it traps.
 
 ### Changed
 
@@ -25,6 +29,9 @@ Release notes are also published on [GitHub Releases](https://github.com/zifeo/s
 - Rust raises `InvalidArgument` for a message or a published value JSON cannot hold, and fails a run whose loop state does not serialize with the new `NotCompressible` variant, as Python and TypeScript do.
 - `receive` and `handle` refuse a message name outside the naming rules with `InvalidArgument` stating the rule, in every host, and Rust checks an inline step's name against the full rule.
 - A Python message handler that returns an awaitable fails the run with `MessageDecode`, as a TypeScript one returning a promise does.
+- Every host refuses a duration past 2^53 - 1 milliseconds with `InvalidArgument`, as TypeScript did: in Rust, a longer sleep or timeout stopped the worker instead of failing its run.
+
+[0.3.0]: https://github.com/zifeo/substantial/compare/v0.2.0...v0.3.0
 
 ## [0.2.0] - 2026-11-17
 

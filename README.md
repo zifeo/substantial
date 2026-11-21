@@ -175,9 +175,9 @@ Substantial runs on Linux and macOS. Windows is not supported: run it in WSL, as
 Python 3.12 or later:
 
 ```sh
-uv add substantial==0.2.0            # or: pip install substantial==0.2.0
-uv add "substantial[s3]==0.2.0"      # with S3 stores, or: pip install "substantial[s3]==0.2.0"
-uv add "substantial[redis]==0.2.0"   # with Redis stores, or: pip install "substantial[redis]==0.2.0"
+uv add substantial==0.3.0            # or: pip install substantial==0.3.0
+uv add "substantial[s3]==0.3.0"      # with S3 stores, or: pip install "substantial[s3]==0.3.0"
+uv add "substantial[redis]==0.3.0"   # with Redis stores, or: pip install "substantial[redis]==0.3.0"
 ```
 
 The `s3` extra adds aiohttp, which sends the requests of `s3://` stores, and botocore, which signs them; the `redis` extra adds redis-py, which Redis stores need.
@@ -185,19 +185,19 @@ The `s3` extra adds aiohttp, which sends the requests of `s3://` stores, and bot
 Rust 1.97 or later, with what the example uses:
 
 ```sh
-cargo add substantial@0.2.0
+cargo add substantial@0.3.0
 cargo add tokio --features macros,rt-multi-thread
 cargo add serde --features derive
 cargo add anyhow
 ```
 
-Redis stores need the `redis` feature: `cargo add substantial@0.2.0 --features redis`.
+Redis stores need the `redis` feature: `cargo add substantial@0.3.0 --features redis`, and [guest workflows](#guest-workflows) the `guests` feature.
 
 TypeScript, on Node 24 or later, or Deno, from [JSR](https://jsr.io/@substantial/substantial):
 
 ```sh
-npx jsr add @substantial/substantial@0.2.0
-deno add jsr:@substantial/substantial@0.2.0
+npx jsr add @substantial/substantial@0.3.0
+deno add jsr:@substantial/substantial@0.3.0
 ```
 
 `s3://` stores also need the AWS SDK: `npm install @aws-sdk/client-s3`, or `deno add npm:@aws-sdk/client-s3`. Redis stores need `@redis/client`: `npm install @redis/client`, or `deno add npm:@redis/client`.
@@ -810,6 +810,54 @@ await sub.worker([nightly, report], { preset: "script" }).drain({ within: s.minu
 </details>
 
 `drain` serves every run due now or within 2 minutes, takes over the runs of crashed workers whose claims expire by then, and returns once nothing is due within that horizon and nothing is in flight; between two jobs no worker lists the store. A schedule it serves needs a `backfill` of at least the job's period divided by the cron's. More in [I-18] and the [integration] guide.
+
+### Guest workflows
+
+A Rust worker also serves workflows compiled to WebAssembly, guests, which it loads from files when it starts: a workflow's code changes without a rebuild of the worker, and runs isolated from it. A guest is written with the Rust API, from the crate `substantial-guest`, as a `cdylib`:
+
+```rust
+use serde::Deserialize;
+use substantial_guest as s;
+
+#[derive(Deserialize)]
+struct Input {
+    name: String,
+}
+
+#[s::step]
+async fn greet(name: &str) -> Result<String, std::io::Error> {
+    Ok(format!("hello {name}"))
+}
+
+#[s::workflow]
+async fn greeting(c: s::Context, input: Input) -> s::Result<String> {
+    c.sleep(s::days(1)).await?;
+    greet(&input.name).await
+}
+
+s::export!(greeting, steps = [greet]);
+```
+
+It is compiled for `wasm32-unknown-unknown`, then made a component of the world in [`wit/guest.wit`](wit/guest.wit):
+
+```sh
+cargo build --release --target wasm32-unknown-unknown
+wasm-tools component new target/wasm32-unknown-unknown/release/greeting.wasm -o greeting.wasm
+```
+
+A worker with the `guests` feature loads it and serves it as any workflow, within the memory and the time between two waits it is given:
+
+```rust
+use substantial::guest::{Guest, Limits};
+
+let limits = Limits { memory: 64 << 20, code_time: s::seconds(1) };
+let guest = Guest::new(&std::fs::read("greeting.wasm")?, limits, |_| Ok(()))?;
+let greeting = guest.workflow("greeting");
+let worker = sub.worker(greeting.clone()).preset(s::Preset::Service).start()?;
+sub.start(&greeting, serde_json::json!({ "name": "Ada" })).await?;
+```
+
+A guest has no network, clock or filesystem: its workflow code calls only Substantial's verbs, each recorded, and its steps only the interfaces the worker adds with the closure of `Guest::new`, a wasmtime linker. Each replay and each step attempt runs in an instance of its own, and a guest that traps or passes its bounds fails with `GuestTrap` while the worker goes on. A guest's workflow code calls steps, with their retry and timeout, `sleep`, `sleep_until`, `receive`, with its timeout, `send`, `publish`, `now`, `random`, `uuid` and `c.log`. The decisions are in [the guest notes](docs/decisions/guests.md).
 
 ## How it works
 

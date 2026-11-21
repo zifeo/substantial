@@ -10,7 +10,8 @@ The Rust guest SDK, `rust/guest`, is a project of its own with the same block an
 
 | Notes | Laws | Carried by |
 |---|---|---|
-| `docs/decisions/*.md`, one note per topic from `promises.md` to `testing.md` | 67 | the three hosts' code, `redis/*.lua` |
+| `docs/decisions/*.md`, one note per topic from `promises.md` to `testing.md`, `guests.md` aside | 67 | the three hosts' code, `redis/*.lua` |
+| `docs/decisions/guests.md`: the guest world, its runner and its Rust SDK | 14 | `wit/guest.wit`, the runner in `rust/src/guest`, the guest macros of `rust/macros`, and `rust/tests/guests.rs` |
 | `docs/decisions/core/*.md`: `commit`, `lifecycle`, `history`, `steps`, `messages`, `sagas`, `children`, `cost` | 58 | the conformance tests (`rust/tests`, `python/tests`, `typescript/test`, `dev/cross`) and the layout schema in `proto/` |
 
 `promises` states the headline promises in the users' words, each with its source, and names the law whose sentence states it: a finished step never runs again, steps run at least once, durable when it returns, idempotent under the caller's ids, ordered messages, waiting holds no process, no broker, deterministic replay, versions through a deploy, the platforms, one core in three languages, a known cost, every run ends and is collected, tests run the real protocol. A note is named by its topic, and the reading order is the one the last section of `promises` links: the architecture (`store`, `hosts`, then the core's notes), a run's life (`lifecycle`), the programming model (`clients` to `schedules`), operating (`observing` to `errors`) and testing (`testing`). Cancellation, which held no law, is a section of `workflows`, beside the ends it shares.
@@ -67,4 +68,5 @@ The owner's rule for every gap: hosts are symmetric, a documented promise wins o
 
 - S3 has supported conditional writes (`If-Match`, `If-None-Match`) since 2024, so "S3 cannot make an overwrite conditional" is false. The no-overwrite design (`kwvhb7ehw`) does not rest on it today, but a design that assumed S3 could not compare and swap deserves another look.
 - A worker facing a due run of a version it does not serve lists that workflow every half `claim_ttl` and gets the run every `claim_ttl`, whatever its `max_idle`. The core decides it; whether that cost during a rolling deploy is intended is the core repository's call.
+- No CI job runs `silcrow check --all`: Silcrow is not public yet, so a runner cannot install it. The gate is the local hooks, `silcrow install` and the `silcrow` hook of `.pre-commit-config.yaml`, which a contributor without Silcrow skips. A CI job comes once a runner can install it.
 - No CI job runs on macOS, so the platforms law is carried by the signal code alone and the promise for macOS is tested only on maintainers' machines.
