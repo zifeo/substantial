@@ -38,6 +38,8 @@ A step attempt runs as a task of its own while the replay waits for it, and the 
 
 - (b) An attempt the worker abandons drops its instance, which stops its code at once.
 
+- (c) An attempt's `step-error` fails it with the failure type `Error`, retryable unless permanent, and a value that is not JSON fails it with `Json`, not retryable.
+
 **§ <a id="h85pj12ap">h85pj12ap</a> A guest's workflow code calls only Substantial's verbs, and its steps call the interfaces the embedder adds, so a replay repeats no effect and every effect is a step the history records.**
 
 - (a) A call of an embedder's interface from the workflow code traps, and so does a call of a workflow verb from a step.
@@ -58,13 +60,13 @@ A replay calls its workflow function anew ([g4kv2kj51](promises.md#g4kv2kj51)) a
 
 **§ <a id="fqyh5tkhx">fqyh5tkhx</a> The host instantiates a guest anew for every replay and every step attempt, so nothing of a guest's memory outlives them but what its history records.**
 
-WebAssembly computes the same everywhere but for the bits of a NaN, relaxed SIMD and threads. A guest's workflow code branching on a NaN's bits would replay otherwise on another processor.
+WebAssembly computes the same everywhere but for the bits of a NaN, relaxed SIMD and threads. A guest's workflow code branching on a NaN's bits would replay otherwise on another processor. One more difference stays: the depth a guest may recurse to depends on the worker's processor, as the stack bound counts native frames, so a recursion near it may trap on one architecture and not on another.
 
 **§ <a id="jgv9ssc51">jgv9ssc51</a> The host compiles every guest so that it computes the same on every worker: NaNs canonical, relaxed SIMD deterministic, and no threads.**
 
 ## Bounds
 
-A guest that loops forever would hold its replay's task, and one that allocates without end the worker's memory. Fuel counts a guest's instructions, so a bound by fuel traps at the same point on every worker, but every instruction pays for its count. Epochs interrupt a guest once a clock thread ticks past its deadline, at a cost close to nothing, but by time: a replay near its bound may trap on a slow worker and not on a fast one. Epochs are taken, with the bound set well above what the code needs, so that a trap means a guest stuck. The embedder gives the bounds rather than the host choosing them, as the right ones depend on its guests.
+A guest that loops forever would hold its replay's task, and one that allocates without end the worker's memory. Fuel counts a guest's instructions, so a bound by fuel traps at the same point on every worker, but every instruction pays for its count. Epochs interrupt a guest once a clock thread ticks past its deadline, at a cost close to nothing, but by time: a replay near its bound may trap on a slow worker and not on a fast one. Epochs are taken, with the bound set well above what the code needs, so that a trap means a guest stuck. The embedder gives the bounds rather than the host choosing them, as the right ones depend on its guests. An instance's memory is its linear memories and its tables together, a pointer for each table element, as a component may hold several of each.
 
 **§ <a id="p9d3qccma">p9d3qccma</a> A guest runs within the bounds its embedder gives when it loads it: a memory for each of its instances, and a time for its workflow code between two waits.**
 
@@ -94,7 +96,7 @@ The errors the verbs raise carry more than a failure: a `StepFailed` its cause, 
 
 ## The Rust guest SDK
 
-A Rust guest is written as a workflow of the Rust host is, so that moving a workflow into a guest changes its crate and not its code. Its executor is a loop of its own in the guest: it polls the workflow, then waits on every call the poll left pending.
+A Rust guest is written as a workflow of the Rust host is, so that moving a workflow into a guest changes its crate and not its code. Its history may differ: a verb's later calls to the core, such as a timed `receive` after its wait, are made while the host waits, before the guest's other branches run, so a guest and the Rust host may record the calls of concurrent branches in other orders. Each replays its own history the same, and a run moves between the two as across versions. Its executor is a loop of its own in the guest: it polls the workflow, then waits on every call the poll left pending.
 
 **§ <a id="b4j0mc19d">b4j0mc19d</a> A Rust guest declares its workflow with `#[workflow]` and its steps with `#[step]`, and calls the verbs of its context with the Rust host's names and types, the guest SDK's `export!` giving the component its workflow and its steps.**
 

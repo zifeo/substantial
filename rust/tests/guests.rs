@@ -212,3 +212,87 @@ fn bounds_with_no_memory_or_under_a_tick_are_refused() {
     }
     // § end p9d3qccma
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_awaits_its_calls_through_any_combinator() {
+    let guest = Guest::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = guest.workflow("edges");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        // § em5h7z7cg@svsmq
+        for (edge, slept) in [("unordered", "2"), ("join-all", "40")] {
+            let input = serde_json::json!({ "edge": edge });
+            let run = sub.start(&workflow, input).id(edge).await.unwrap();
+            let ended = run.result().timeout(LONG).await.unwrap();
+            assert_eq!(ended, slept, "{}: {edge}", ns.name);
+        }
+        // § end em5h7z7cg
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_duration_past_the_longest_fails_its_run_and_the_worker_goes_on() {
+    let guest = Guest::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = guest.workflow("edges");
+        let worker = script(&sub, workflow.clone()).start().unwrap();
+        // § b60bm4szk@ycw9h
+        for edge in ["huge-sleep", "huge-receive"] {
+            let input = serde_json::json!({ "edge": edge });
+            let run = sub.start(&workflow, input).id(edge).await.unwrap();
+            let ended = run.result().timeout(LONG).await;
+            let Err(Error::RunFailed { error, .. }) = ended else {
+                panic!("{}: {edge} ended {ended:?}", ns.name);
+            };
+            assert_eq!(
+                error.kind, "InvalidArgument",
+                "{}: {edge} {error:?}",
+                ns.name
+            );
+        }
+        // § end b60bm4szk
+        let input = serde_json::json!({ "edge": "unordered" });
+        let after = sub.start(&workflow, input).id("after").await.unwrap();
+        assert_eq!(
+            after.result().timeout(LONG).await.unwrap(),
+            "2",
+            "{}",
+            ns.name
+        );
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_returning_a_verb_error_ends_as_the_host_code_would() {
+    let guest = Guest::new(&component("edges"), BOUNDS, |_| Ok(())).unwrap();
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        let workflow = guest.workflow("edges");
+        let native = substantial::Workflow::without_input("native", |c| async move {
+            c.receive::<String>("never")
+                .timeout(Duration::from_millis(10))
+                .await
+        });
+        let worker = script(&sub, (workflow.clone(), native.clone()))
+            .start()
+            .unwrap();
+        let input = serde_json::json!({ "edge": "timeout-returned" });
+        let guest_run = sub.start(&workflow, input).id("guest").await.unwrap();
+        let native_run = sub.start(&native, ()).id("native").await.unwrap();
+        // § kn3j2hh9y@jsmwt
+        let ended = |r: substantial::Result<_>| match r {
+            Err(Error::RunFailed { error, .. }) => *error,
+            other => panic!("{}: ended {other:?}", ns.name),
+        };
+        let from_guest = ended(guest_run.result().timeout(LONG).await.map(|_| ()));
+        let from_native = ended(native_run.result().timeout(LONG).await.map(|_| ()));
+        assert_eq!(from_guest, from_native, "{}", ns.name);
+        assert_eq!(from_guest.kind, "WaitTimeout", "{}", ns.name);
+        // § end kn3j2hh9y
+        worker.shutdown().await.unwrap();
+    }
+}

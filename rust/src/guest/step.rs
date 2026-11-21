@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use wasmtime::component::{ComponentType, Lift, Linker, ResourceTable, ResourceType};
-use wasmtime::{Engine, Store, StoreLimits};
+use wasmtime::{Engine, Store};
 
 use super::{ATTEMPT, CONTEXT, Guest, PANICS, guest_value, trapped};
 use crate::error::Failure;
@@ -13,7 +13,7 @@ use crate::workflow::scheduler::StepBody;
 pub struct StepState {
     table: ResourceTable,
     panic: Option<String>,
-    memory: StoreLimits,
+    memory: super::Held,
 }
 
 impl StepState {
@@ -82,7 +82,7 @@ impl Guest {
     }
 
     async fn attempt(&self, name: String, args: String) -> Result<Vec<u8>, Failure> {
-        // § sfd6dmd7t.b@56y97
+        // § sfd6dmd7t.b@vqk2w
         // The store and its instance are this future's: an abandoned attempt drops them.
         let state = StepState {
             table: ResourceTable::new(),
@@ -112,8 +112,9 @@ impl Guest {
                 &self.0.step,
             )
             .map_err(|e| trap(&mut store, e))?;
-        // § sfd6dmd7t@50r6h
+        // § sfd6dmd7t@xdgb8
         match step.call_async(&mut store, (name, args)).await {
+            // § sfd6dmd7t.c@1nrjg
             Ok((Ok(value),)) => guest_value(&value)
                 .and_then(|value| crate::workflow::to_json(&value))
                 .map_err(|e| Failure {
@@ -128,6 +129,7 @@ impl Guest {
                 retryable: !permanent,
                 details: None,
             }),
+            // § end sfd6dmd7t.c
             Err(e) => Err(trap(&mut store, e)),
         }
         // § end sfd6dmd7t

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 pub use wasmtime;
 use wasmtime::component::{Component, ComponentExportIndex, InstancePre, Linker};
-use wasmtime::{Config, Engine, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Config, Engine, ResourceLimiter};
 
 pub use self::step::StepState;
 use crate::error::{Error, Failure, Result};
@@ -37,6 +37,61 @@ pub struct Limits {
     pub code_time: Duration,
 }
 
+/// What an instance may still grow by, in bytes: its linear memories and its tables together,
+/// since a component may hold several of each.
+#[derive(Clone)]
+pub(crate) struct Held {
+    left: usize,
+}
+
+/// A table element holds a pointer.
+const TABLE_ELEMENT: usize = std::mem::size_of::<usize>();
+
+impl Held {
+    fn take(&mut self, bytes: usize) -> wasmtime::Result<bool> {
+        // § p9d3qccma.a@tzd89
+        match self.left.checked_sub(bytes) {
+            Some(left) => {
+                self.left = left;
+                Ok(true)
+            }
+            None => wasmtime::bail!("the instance grows past its memory bound by {bytes} bytes"),
+        }
+    }
+}
+
+// wasmtime asks before it checks the declared maximum: a growth past it is refused here, so that
+// it spends nothing of the bound.
+impl ResourceLimiter for Held {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        if maximum.is_some_and(|maximum| desired > maximum) {
+            return Ok(false);
+        }
+        self.take(desired.saturating_sub(current))
+    }
+
+    fn table_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        if maximum.is_some_and(|maximum| desired > maximum) {
+            return Ok(false);
+        }
+        self.take(
+            desired
+                .saturating_sub(current)
+                .saturating_mul(TABLE_ELEMENT),
+        )
+    }
+}
+
 /// A guest loaded: its component compiled, its imports checked, and linked for its replays and
 /// its step attempts. Cheap to clone.
 #[derive(Clone)]
@@ -49,7 +104,7 @@ struct Loaded {
     steps: InstancePre<StepState>,
     run: ComponentExportIndex,
     step: ComponentExportIndex,
-    memory: StoreLimits,
+    memory: Held,
     /// The code's time, in ticks.
     code_ticks: u64,
 }
@@ -64,24 +119,26 @@ impl Guest {
         limits: Limits,
         imports: impl FnOnce(&mut Linker<StepState>) -> wasmtime::Result<()>,
     ) -> Result<Self> {
-        // § p9d3qccma@9m94r
+        // § p9d3qccma@3fnb4
         if limits.memory == 0 || limits.code_time < TICK {
             return Err(Error::ConfigError(format!(
                 "a guest's bounds hold some memory and a code time of a tick at least: {limits:?}"
             )));
         }
+        // A deadline of n ticks passes after (n - 1) to n of them, the current one partly gone: one
+        // tick more makes the code's time at least `code_time`.
         let code_ticks = u64::try_from(limits.code_time.as_nanos().div_ceil(TICK.as_nanos()))
-            .map_err(|_| Error::ConfigError(format!("a code time too long: {limits:?}")))?;
-        // § one p9d3qccma.a@emexy
-        let memory = StoreLimitsBuilder::new()
-            .memory_size(limits.memory)
-            .trap_on_grow_failure(true)
-            .build();
+            .ok()
+            .and_then(|ticks| ticks.checked_add(1))
+            .ok_or_else(|| Error::ConfigError(format!("a code time too long: {limits:?}")))?;
+        let memory = Held {
+            left: limits.memory,
+        };
         // § end p9d3qccma
         let engine = engine()?;
         let component = Component::new(&engine, wasm)
             .map_err(|e| Error::ConfigError(format!("the guest does not compile: {e:#}")))?;
-        // § symbbqcxc@y15v3
+        // § symbbqcxc@qt0az
         let export = |instance: Option<&ComponentExportIndex>, name: &str| {
             component
                 .get_export_index(instance, name)
@@ -97,7 +154,7 @@ impl Guest {
         imports(&mut steps).map_err(|e| {
             Error::ConfigError(format!("the embedder's interfaces do not link: {e:#}"))
         })?;
-        // § dt9hm67zy@12msq
+        // § dt9hm67zy@kb0fc
         let steps = steps.instantiate_pre(&component).map_err(|e| {
             Error::ConfigError(format!(
                 "the guest imports what neither Substantial nor the embedder gives: {e:#}"
@@ -105,7 +162,7 @@ impl Guest {
         })?;
         // § end dt9hm67zy
         let mut code = code::linker(&engine).map_err(linking)?;
-        // § h85pj12ap.a@62zq3
+        // § h85pj12ap.a@pqgdc
         // What is left are the embedder's interfaces, the step linker having refused any other.
         code.define_unknown_imports_as_traps(&component)
             .map_err(linking)?;
@@ -150,7 +207,7 @@ fn engine() -> Result<Engine> {
     static ENGINE: OnceLock<std::result::Result<Engine, String>> = OnceLock::new();
     ENGINE
         .get_or_init(|| {
-            // § jgv9ssc51@2tfqr
+            // § jgv9ssc51@r445s
             // Threads are not compiled in: a guest with shared memory does not compile.
             let mut config = Config::new();
             config

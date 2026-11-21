@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt;
 
 use crate::__bindings::exports::substantial::guest::workflow::End;
@@ -43,9 +44,9 @@ pub enum Error {
     /// The run is cancelled, or the code cancels it with `c.cancel(..)`.
     Cancelled(String),
     /// A `receive` whose timeout passed with no message.
-    WaitTimeout(Raised),
-    NonDeterminism(Raised),
-    InvalidArgument(Raised),
+    WaitTimeout,
+    NonDeterminism(String),
+    InvalidArgument(String),
     /// A value of the code that does not encode or decode.
     Json(String),
     /// A failure of the code's own, which fails the run with it.
@@ -62,10 +63,10 @@ impl Error {
             Error::Cancelled(_) => "Cancelled",
             Error::Json(_) => "Json",
             Error::Failed(f) => &f.kind,
-            Error::WaitTimeout(r)
-            | Error::NonDeterminism(r)
-            | Error::InvalidArgument(r)
-            | Error::Raised(r) => &r.0.kind,
+            Error::WaitTimeout => "WaitTimeout",
+            Error::NonDeterminism(_) => "NonDeterminism",
+            Error::InvalidArgument(_) => "InvalidArgument",
+            Error::Raised(r) => &r.0.kind,
         }
     }
 
@@ -80,12 +81,33 @@ impl Error {
                 details: None,
             }),
             Error::Failed(f) => End::Failed(f.into()),
-            Error::WaitTimeout(r)
-            | Error::NonDeterminism(r)
-            | Error::InvalidArgument(r)
-            | Error::Raised(r) => End::Failed(r.0.into()),
+            Error::WaitTimeout => End::Failed(raised_as("WaitTimeout", None).into()),
+            Error::NonDeterminism(m) => End::Failed(raised_as("NonDeterminism", Some(m)).into()),
+            Error::InvalidArgument(m) => End::Failed(raised_as("InvalidArgument", Some(m)).into()),
+            Error::Raised(r) => End::Failed(r.0.into()),
         }
     }
+}
+
+thread_local! {
+    /// The failures the verbs raised of a kind whose variant holds less than its failure, so that
+    /// the code returning one ends its run with the failure the host gave, which it matches.
+    static RAISED: RefCell<Vec<Failure>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The failure the host gave of `kind` with `message`, the last one, else a failure of the code's.
+fn raised_as(kind: &str, message: Option<String>) -> Failure {
+    let found = RAISED.with(|r| {
+        (r.borrow().iter().rev())
+            .find(|f| f.kind == kind && message.as_ref().is_none_or(|m| *m == f.message))
+            .cloned()
+    });
+    found.unwrap_or_else(|| Failure {
+        kind: kind.to_owned(),
+        message: message.unwrap_or_else(|| kind.to_owned()),
+        retryable: false,
+        details: None,
+    })
 }
 
 impl fmt::Display for Error {
@@ -95,10 +117,10 @@ impl fmt::Display for Error {
             Error::Cancelled(reason) => write!(f, "Cancelled: {reason}"),
             Error::Json(message) => write!(f, "Json: {message}"),
             Error::Failed(failure) => failure.fmt(f),
-            Error::WaitTimeout(r)
-            | Error::NonDeterminism(r)
-            | Error::InvalidArgument(r)
-            | Error::Raised(r) => r.0.fmt(f),
+            Error::WaitTimeout => write!(f, "WaitTimeout"),
+            Error::NonDeterminism(m) => write!(f, "NonDeterminism: {m}"),
+            Error::InvalidArgument(m) => write!(f, "InvalidArgument: {m}"),
+            Error::Raised(r) => r.0.fmt(f),
         }
     }
 }
@@ -120,9 +142,16 @@ impl From<wit::Raised> for Error {
                 cause: Box::new(cause.into()),
             },
             ("Cancelled", _) => Error::Cancelled(failure.message),
-            ("WaitTimeout", _) => Error::WaitTimeout(Raised(failure)),
-            ("NonDeterminism", _) => Error::NonDeterminism(Raised(failure)),
-            ("InvalidArgument", _) => Error::InvalidArgument(Raised(failure)),
+            (kind @ ("WaitTimeout" | "NonDeterminism" | "InvalidArgument"), _) => {
+                let message = failure.message.clone();
+                let error = match kind {
+                    "WaitTimeout" => Error::WaitTimeout,
+                    "NonDeterminism" => Error::NonDeterminism(message),
+                    _ => Error::InvalidArgument(message),
+                };
+                RAISED.with(|r| r.borrow_mut().push(failure));
+                error
+            }
             _ => Error::Raised(Raised(failure)),
         }
     }

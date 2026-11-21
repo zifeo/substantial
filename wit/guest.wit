@@ -1,12 +1,14 @@
-// § g2h6bp5vq@06g4p
+// § g2h6bp5vq@gxws0
 // § g2h6bp5vq.a@z2t99
 package substantial:guest@0.1.0;
 // § end g2h6bp5vq.a
 
 /// The verbs a guest's workflow code calls, each recorded in its run's history. Every value is
-/// JSON text.
+/// JSON text, which the host checks: one that is not JSON raises `Json`. A duration in
+/// milliseconds is at most 2^53 - 1, and a longer one raises `InvalidArgument`.
 interface context {
-    /// A failure, with the fields of every host's.
+    /// A failure, with the fields of every host's. A `Cancelled` carries the reason of the
+    /// cancellation as its message.
     record failure {
         kind: string,
         message: string,
@@ -23,11 +25,13 @@ interface context {
 
     /// A call the code made, ended or not.
     resource call {
-        /// Its value once it ended, its error once it failed, none before.
+        /// Its value once it ended, its error once it failed, none before it ended: a call is taken
+        /// once, and none after.
         take: func() -> option<result<string, raised>>;
     }
 
-    /// Blocks until one of `calls` at least has ended: the position of each that has, in order.
+    /// Blocks until one of `calls` at least has ended: the position of each that has, in order. A
+    /// wait on no call traps, as nothing would end it.
     wait: func(calls: list<borrow<call>>) -> list<u32>;
 
     record retry {
@@ -50,7 +54,8 @@ interface context {
     /// The next message of `name`; with a timeout, `WaitTimeout` once it passed with none.
     receive: func(name: string, timeout-ms: option<u64>) -> call;
     send: func(chain: string, name: string, value: string, id: option<string>) -> call;
-    /// The time, an RFC 3339 string.
+    /// The time, a JSON string of RFC 3339 in UTC with milliseconds, such as
+    /// `"2026-11-21T09:30:00.000Z"`.
     now: func() -> call;
     /// A float in [0, 1).
     random: func() -> call;
@@ -86,6 +91,9 @@ interface panics {
 interface workflow {
     use context.{failure};
 
+    /// How the code's run ends, when it does not return a value. A failure equal, field by field,
+    /// details text included, to one a verb raised ends the run with the error the host raised,
+    /// such as a `StepFailed` with its cause; any other ends it failed with that failure.
     variant end {
         failed(failure),
         cancelled(string),
@@ -98,7 +106,9 @@ interface workflow {
         permanent: bool,
     }
 
-    /// One attempt of the step `name`.
+    /// One attempt of the step `name`. Its value is JSON text; one that is not fails the attempt
+    /// with `Json`, not retryable, and a `step-error` fails it with `Error`, retryable unless
+    /// `permanent`.
     step: func(name: string, args: string) -> result<string, step-error>;
 }
 

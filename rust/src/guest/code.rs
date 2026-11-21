@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::SecondsFormat;
 use futures::future::BoxFuture;
 use wasmtime::component::{ComponentType, Lift, Linker, Lower, Resource, ResourceTable};
-use wasmtime::{AsContextMut, Engine, Store, StoreContextMut, StoreLimits};
+use wasmtime::{AsContextMut, Engine, Store, StoreContextMut};
 
 use super::{ATTEMPT, CONTEXT, Guest, PANICS, guest_value, trapped};
 use crate::error::{Error, Failure, Result};
@@ -102,7 +102,7 @@ pub(super) struct CodeState {
     /// The errors given to the code, for its run to end with one it returns.
     raised: Vec<Error>,
     panic: Option<String>,
-    memory: StoreLimits,
+    memory: super::Held,
     /// The code's time, in ticks.
     code_ticks: u64,
 }
@@ -268,7 +268,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
                 if calls.is_empty() {
                     wasmtime::bail!("a wait on no call, which nothing would end");
                 }
-                // § em5h7z7cg@edbm8
+                // § em5h7z7cg@13nma
                 let ended = std::future::poll_fn(|cx| {
                     let table = &mut store.data_mut().table;
                     let mut ended = Vec::new();
@@ -283,7 +283,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
                             pending.future = None;
                             pending.ended = Some(outcome);
                         }
-                        // § one em5h7z7cg.b@4mdsw
+                        // § one em5h7z7cg.b@h1vv4
                         if pending.ended.is_some() {
                             ended.push(
                                 u32::try_from(i).expect("a wait names fewer than 2^32 calls"),
@@ -307,6 +307,12 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
         |mut store, (name, args, options): (String, String, StepOptions)| {
             let (ctx, guest) = (store.data().ctx.clone(), store.data().guest.clone());
             Box::new(async move {
+                // The arguments cross to the step's instance: checked here, as every value is.
+                // § c0mcah841@e03xp
+                if let Err(e) = guest_value(&args) {
+                    return start(&mut store, async move { Err(Error::Json(e)) }).await;
+                }
+                // § end c0mcah841
                 let body = guest.attempts(name.clone(), args);
                 let mut step = ctx.step_of::<serde_json::Value>(&name, body);
                 if let Some(r) = options.retry {
@@ -428,7 +434,7 @@ pub(super) fn linker(engine: &Engine) -> wasmtime::Result<Linker<CodeState>> {
             store.data_mut().panic = Some(message);
             Ok(())
         })?;
-    // § h85pj12ap.a@c3pba
+    // § h85pj12ap.a@r8f5h
     linker.instance(ATTEMPT)?.func_wrap(
         "step-key",
         |_, (): ()| -> wasmtime::Result<(String,)> {

@@ -2405,6 +2405,7 @@ name = "substantial-guest"
 version = "0.3.0"
 dependencies = [
  "chrono",
+ "futures",
  "serde",
  "serde_json",
  "substantial-macros",
