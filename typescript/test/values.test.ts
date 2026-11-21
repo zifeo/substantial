@@ -9,6 +9,7 @@ import {
   StepFailed,
   Substantial,
   ValueTooLarge,
+  milliseconds,
   workflow,
 } from "../src/mod.ts";
 import { MAX_VALUE } from "../src/proto.ts";
@@ -121,4 +122,12 @@ test("a value JSON cannot hold is refused, never written as another", async () =
     assert.ok(failed instanceof RunFailed, String(failed));
     assert.equal(failed.error.type, "Json", failed.error.message);
   }
+});
+
+test("a duration past the longest is refused", () => {
+  // § b60bm4szk@6k952
+  const longest = 2 ** 53 - 1;
+  assert.equal(milliseconds(longest).ms, longest);
+  assert.throws(() => milliseconds(longest + 1), InvalidArgument);
+  // § end b60bm4szk
 });

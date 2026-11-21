@@ -173,7 +173,7 @@ class Context:
             # § c5kkpjdz5.b@vw730
             value = await self.step(name, fn, *args, retry=retry)
             # § end c5kkpjdz5.b
-            # § c5kkpjdz5@b1k9y
+            # § c5kkpjdz5@whz2h
             if value is not None:
                 return value
             left = deadline - await self.now()
@@ -247,7 +247,7 @@ class Context:
             counts.timed -= 1
 
     async def _receive_claimed(self, name: str, timeout: timedelta, counts: Receives) -> Any:
-        # § p6tzbmjaq@wh8m2
+        # § p6tzbmjaq@qq56k
         if not counts.bound:
 
             def count(_: run.Message) -> None:

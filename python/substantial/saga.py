@@ -34,7 +34,7 @@ async def run_undos(shared: Shared, undos: run.Called.Undos) -> None:
 
 
 async def rollback(shared: Shared, reason: str) -> None:
-    # § zjw5cess8@270fs
+    # § zjw5cess8@xdqm4
     undos = shared.expect(run.Call(rollback=boundary.Empty()), "undos")
     await run_undos(shared, undos)
     # § one g039jvy6k.c@atzgr
@@ -75,7 +75,7 @@ class Saga:
         if parent is not None:
             fields["parent"] = parent
         end = run.Call(saga_end=run.Call.SagaEnd(**fields))
-        # § ctp0q370t@0279z
+        # § ctp0q370t@4e5pf
         if failed:
             await run_undos(self._shared, self._shared.expect(end, "undos"))
         else:

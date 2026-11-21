@@ -246,7 +246,7 @@ class Worker:
         of a crashed worker whose claim expires by then, then stops as `shutdown` does once
         nothing is due by then and nothing is in flight; raises the worker's error if it died.
         Starts the worker if it was not."""
-        # § cjtegwkna@z6svg
+        # § cjtegwkna@f1y96
         if not isinstance(within, timedelta) or within < timedelta(0):
             raise InvalidArgument(f"within is a timedelta, not negative, not {within!r}")
         task = self._task if self._task is not None else self._start()
@@ -262,7 +262,7 @@ class Worker:
 
     async def serve(self) -> None:
         """Runs until a SIGTERM or a Ctrl-C (SIGINT), or until cancelled, then shuts down."""
-        # § dh7y75pvn.a@3j7tj
+        # § dh7y75pvn.a@43yec
         task = self._start()
         loop = asyncio.get_running_loop()
         # § one k6m3smdpk@ky9m4
@@ -349,7 +349,7 @@ class Worker:
                     elif kind == "drain":
                         machine.drain(layout.Time(ms=event[1]))
                     elif kind == "shutdown" and grace_ends is None:
-                        # § dh7y75pvn@9325h
+                        # § dh7y75pvn@d39hx
                         grace = millis(self._settings.shutdown_grace)
                         grace_ends = clock.elapsed() + grace
                         machine.shutdown()

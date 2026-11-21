@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import timedelta
 
 import pytest
 from conftest import LONG, Recording, script
@@ -22,6 +23,7 @@ from substantial import (
     workflow,
 )
 from substantial._proto import MAX_VALUE
+from substantial.durations import millis
 from substantial.stores.memory import MemoryStore
 
 # Its JSON encoding, quoted, is two bytes past the cap.
@@ -209,3 +211,10 @@ async def test_a_value_json_cannot_hold_is_refused_never_written_as_another() ->
             with pytest.raises(RunFailed) as failed:
                 await (await sub.start(holding, {"i": i})).result(timeout=LONG)
             assert failed.value.error.type == "Json", failed.value
+
+
+def test_a_duration_past_the_longest_is_refused() -> None:
+    # § b60bm4szk@28h7n
+    assert millis(timedelta(milliseconds=2**53 - 1)) == 2**53 - 1
+    with pytest.raises(InvalidArgument, match="longer than the longest"):
+        millis(timedelta(milliseconds=2**53))

@@ -31,13 +31,20 @@ def days(n: float) -> timedelta:
     return timedelta(days=_number(n))
 
 
+_LONGEST_MS = 2**53 - 1
+
+
 def millis(d: timedelta) -> int:
     """A duration in whole milliseconds; a negative one is refused."""
     if not isinstance(d, timedelta):
         raise InvalidArgument(f"a duration is a timedelta, not {type(d).__name__}")
     if d < timedelta(0):
         raise InvalidArgument(f"a duration is not negative: {d}")
-    return d // timedelta(milliseconds=1)
+    ms = d // timedelta(milliseconds=1)
+    # § b60bm4szk@qtaft
+    if ms > _LONGEST_MS:
+        raise InvalidArgument(f"a duration of {ms} ms is longer than the longest, {_LONGEST_MS} ms")
+    return ms
 
 
 def now() -> layout.Time:

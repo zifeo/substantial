@@ -429,6 +429,33 @@ pub(crate) enum Answer {
     Resolved(Option<layout::Value>),
 }
 
+/// The longest duration a call carries, in milliseconds.
+const LONGEST_MS: u64 = (1 << 53) - 1;
+
+/// `InvalidArgument` for a call carrying a duration past `LONGEST_MS`.
+fn check_durations(call: &b::call::Call) -> Result<()> {
+    use b::call::Call;
+    // § b60bm4szk@csn8j
+    let durations: Vec<u64> = match call {
+        Call::SleepMs(ms) => vec![*ms],
+        Call::Wait(w) => w.timeout_ms.into_iter().collect(),
+        Call::ChainResult(r) => r.timeout_ms.into_iter().collect(),
+        Call::Step(s) => (s.options.iter())
+            .flat_map(|o| {
+                let retry = o.retry.iter().flat_map(|r| [r.initial_ms, r.max_ms]);
+                o.timeout_ms.into_iter().chain(retry)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    match durations.into_iter().find(|ms| *ms > LONGEST_MS) {
+        Some(ms) => Err(Error::InvalidArgument(format!(
+            "a duration of {ms} ms is longer than the longest, {LONGEST_MS} ms"
+        ))),
+        None => Ok(()),
+    }
+}
+
 impl CallFuture {
     pub(crate) fn new(shared: Arc<Shared>, call: b::call::Call, step: Option<StepSpec>) -> Self {
         Self {
@@ -449,7 +476,8 @@ impl Future for CallFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         if let Some(call) = self.call.take() {
-            // § wv67rmrjm.a@manj1
+            check_durations(&call)?;
+            // § wv67rmrjm.a@2efem
             let called = match (call, self.step.take()) {
                 (b::call::Call::Step(step), Some(spec)) => self.shared.call_step(step, spec)?,
                 (call, None) => self.shared.call(call)?,

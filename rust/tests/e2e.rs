@@ -507,3 +507,46 @@ async fn a_cancel_reaches_a_run_looping_on_steps() {
         worker.shutdown().await.unwrap();
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_duration_past_the_longest_fails_its_run_and_the_worker_goes_on() {
+    for ns in namespaces() {
+        let sub = internal::create(ns.store).await.unwrap();
+        // Past the longest by one, which no input could carry: it is past 2^53 - 1 as well.
+        let wf = Workflow::new("sleeper", |c: Context, s: Sleep| async move {
+            let ms = if s.long { 1u64 << 53 } else { 10 };
+            c.sleep(Duration::from_millis(ms)).await?;
+            Ok(ms)
+        });
+        let worker = script(&sub, wf.clone()).start().unwrap();
+        // § b60bm4szk@1d8j8
+        let long = sub
+            .start(&wf, Sleep { long: true })
+            .id("long")
+            .await
+            .unwrap();
+        let ended = long.result().timeout(LONG).await;
+        let Err(Error::RunFailed { error, .. }) = ended else {
+            panic!("{}: a sleep past the longest ended {ended:?}", ns.name);
+        };
+        assert_eq!(error.kind, "InvalidArgument", "{}: {error:?}", ns.name);
+        // § end b60bm4szk
+        let short = sub
+            .start(&wf, Sleep { long: false })
+            .id("short")
+            .await
+            .unwrap();
+        assert_eq!(
+            short.result().timeout(LONG).await.unwrap(),
+            10,
+            "{}",
+            ns.name
+        );
+        worker.shutdown().await.unwrap();
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Sleep {
+    long: bool,
+}

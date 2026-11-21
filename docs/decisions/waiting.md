@@ -21,3 +21,7 @@ A `receive` with a timeout is a `wait_until` on the messages of its name, so its
 ## Durations
 
 A deadline is passed as `deadline - await c.now()`, once checked not negative (I-8). Where each host refuses a negative duration is in the reference (I-8).
+
+A duration has a bound as well: 2^53 - 1 milliseconds, the largest integer TypeScript holds exactly, as for every integer of a value. Past about 2^63 milliseconds, a deadline counted from now no longer fits the core's 64 bits, and a longer sleep would stop the worker instead of failing its run; a guest, whose code the worker's owner did not write, could give one.
+
+**§ <a id="b60bm4szk">b60bm4szk</a> A duration the workflow code gives a verb is at most 2^53 - 1 milliseconds, and a longer one raises `InvalidArgument`.**
