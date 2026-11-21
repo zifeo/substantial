@@ -207,7 +207,7 @@ async fn an_attempt_running_when_a_cancel_lands_is_recorded_and_returned() {
                     let (s, r) = (s.clone(), r.clone());
                     async move {
                         s.add_permits(1);
-                        let _released = r.acquire().await.expect("never closed");
+                        r.acquire().await.expect("never closed").forget();
                         Ok::<_, Error>(42)
                     }
                 })
@@ -221,8 +221,10 @@ async fn an_attempt_running_when_a_cancel_lands_is_recorded_and_returned() {
         let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &held).start().unwrap();
         let run = sub.start(&held, ()).await.unwrap();
-        // § vmk2ydwta.d@see0v
-        let _running = started.acquire().await.unwrap();
+        // § vmk2ydwta.d@s7hx0
+        // A permit is consumed, not dropped: a dropped one goes back, and the next store's
+        // run would then be cancelled before its attempt starts.
+        started.acquire().await.unwrap().forget();
         run.cancel("stop").await.unwrap();
         release.add_permits(1);
         match run.result().timeout(LONG).await {
