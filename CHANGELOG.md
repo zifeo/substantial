@@ -6,11 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Release notes are also published on [GitHub Releases](https://github.com/zifeo/substantial/releases).
 
-## [Unreleased]
+## [0.4.1] - 2026-11-23
 
 ### Fixed
 
 - Opening a Redis store during a Sentinel or Cluster failover no longer fails with `ConfigError` "has no WAITAOF" when the primary is demoted between the connection's checks: the node is checked again, and a replica is a failover in progress that the store retries.
+
+[0.4.1]: https://github.com/zifeo/substantial/compare/v0.4.0...v0.4.1
 
 ## [0.4.0] - 2026-11-23
 
