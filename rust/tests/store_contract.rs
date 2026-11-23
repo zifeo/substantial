@@ -399,7 +399,7 @@ contract!(redis_cluster, compare_and_set_after_a_delete);
 
 /// RustFS 1.0.1 on a versioned bucket compares `If-Match` with the newest version holding data,
 /// past the delete marker that makes the key missing, so a compare-and-set brings a deleted key
-/// back, where AWS and Herald answer 404: it fails the probe, which refuses the store at open.
+/// back, where AWS answers 404: it fails the probe, which refuses the store at open.
 /// The only use of the versioned bucket. This fails once RustFS meets the contract.
 #[tokio::test]
 async fn rustfs_versioned_fails_the_probe_of_a_deleted_key() {

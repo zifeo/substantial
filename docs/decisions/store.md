@@ -6,7 +6,7 @@ Substantial has no broker and no server: workers and clients coordinate through 
 
 **§ <a id="w89qkqkaj">w89qkqkaj</a> ~~The store is the only thing clients and workers share, and every part of Substantial uses four operations on it: an exclusive create, a get, a list and a delete.~~**
 
-The head layout keeps each chain in one object rewritten at every commit, so the store gains a compare-and-set, and an ended run is removed by the store itself once its retention passed, so every write carries an expiry. Six operations are still few enough for any store with a conditional write: S3 and Herald, Redis, a directory, memory.
+The head layout keeps each chain in one object rewritten at every commit, so the store gains a compare-and-set, and an ended run is removed by the store itself once its retention passed, so every write carries an expiry. Six operations are still few enough for any store with a conditional write: `s3://` and `h3://`, Redis, a directory, memory.
 
 **§ <a id="karttrcdb">karttrcdb</a> The store is the only thing clients and workers share, and every part of Substantial uses six operations on it: an exclusive create, a compare-and-set naming an ETag, a get answering the ETag, a list, a delete, and an expiry in whole days that every write carries.**
 

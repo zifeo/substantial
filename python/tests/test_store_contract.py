@@ -225,8 +225,8 @@ async def deleted_key_comes_back(store: Store) -> bool:
 
 async def test_rustfs_versioned_fails_the_probe_of_a_deleted_key() -> None:
     """RustFS 1.0.1 on a versioned bucket compares `If-Match` with the newest version holding
-    data, past the delete marker, so a compare-and-set brings a deleted key back, where AWS and
-    Herald answer 404: it fails the probe, which refuses the store at open. The only use of the
+    data, past the delete marker, so a compare-and-set brings a deleted key back, where AWS
+    answers 404: it fails the probe, which refuses the store at open. The only use of the
     versioned bucket. This fails once RustFS meets the contract."""
     store = open_store(require_s3(variable=S3_VERSIONED_URL), "env")
     try:

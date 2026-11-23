@@ -113,7 +113,7 @@ def wait_headers(wait: ListWait | None, max_keys: int) -> dict[str, str]:
     )
     if not graphic:
         raise Permanent(f"the listing etag {wait.etag!r} cannot be sent in {WAIT_ETAG}")
-    # § gvqb04830.d@tfqdz
+    # § gvqb04830.d@tfs6n
     headers = {WAIT_SECONDS: str(wait.seconds)}
     if wait.etag is not None:
         headers[WAIT_ETAG] = wait.etag

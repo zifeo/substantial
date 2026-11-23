@@ -31,6 +31,9 @@ import {
   type StoreObject,
 } from "./store.ts";
 
+/** The sections of `INFO` a connection checks the node by. */
+const INFO = ["INFO", "persistence", "memory", "replication", "cluster"];
+
 /** `@redis/client`, loaded when a Redis store is opened. */
 export type RedisModule = typeof import("@redis/client");
 type Client = ReturnType<RedisModule["createClient"]>;
@@ -354,15 +357,16 @@ class Connector {
     let info: Map<string, string | Map<string, string>>;
     try {
       await within(ATTEMPT_MS, `connect ${where}`, () => pool.connect());
-      info = parseInfo(
-        await pool.sendCommand(["INFO", "persistence", "memory", "replication", "cluster"]),
-      );
+      info = parseInfo(await pool.sendCommand(INFO));
       this.#check(where, info);
-      // § htbc4k715.b@hccpc
+      // § htbc4k715.b@vbgvp
       try {
         await pool.sendCommand(["WAITAOF", "1", "0", String(WAITAOF_MS)]);
       } catch (e) {
         if (!(e instanceof this.#redis.ErrorReply) || isRefusal(e)) throw e;
+        // A primary demoted between INFO and WAITAOF refuses WAITAOF as a replica: a failover in
+        // progress, not a Redis too old, so the node is checked again first.
+        this.#check(where, parseInfo(await pool.sendCommand(INFO)));
         throw new ConfigError(`${where} has no WAITAOF, which needs Redis 7.2: ${e.message}`);
       }
       // § end htbc4k715.b

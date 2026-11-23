@@ -159,6 +159,14 @@ pub(super) struct Connector {
     slot: u16,
 }
 
+/// The sections of `INFO` a connection checks the node by.
+async fn node_info(conn: &mut MultiplexedConnection) -> Result<String, Failure> {
+    Ok(::redis::cmd("INFO")
+        .arg(&["persistence", "memory", "replication", "cluster"])
+        .query_async(conn)
+        .await?)
+}
+
 fn display(host: &str, port: u16) -> String {
     if host.contains(':') {
         format!("[{host}]:{port}")
@@ -314,11 +322,7 @@ impl Connector {
         let mut conn = self
             .connection(&host, port, self.location.db, true, None)
             .await?;
-        let info: String = ::redis::cmd("INFO")
-            .arg(&["persistence", "memory", "replication", "cluster"])
-            .query_async(&mut conn)
-            .await?;
-        let info = InfoDict::new(&info);
+        let info = InfoDict::new(&node_info(&mut conn).await?);
         self.check(&at, &info)?;
         let probe: Result<Value, RedisError> = ::redis::cmd("WAITAOF")
             .arg(1)
@@ -328,7 +332,10 @@ impl Connector {
             .await;
         match probe {
             Err(e) if answered(&e) && !refused(&e) => {
-                // § htbc4k715.b@z1fz1
+                // A primary demoted between INFO and WAITAOF refuses WAITAOF as a replica: a
+                // failover in progress, not a Redis too old, so the node is checked again first.
+                self.check(&at, &InfoDict::new(&node_info(&mut conn).await?))?;
+                // § htbc4k715.b@rwmg8
                 return Err(Failure::Config(format!(
                     "{at} has no WAITAOF, which needs Redis 7.2: {e}"
                 )));

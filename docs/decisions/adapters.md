@@ -76,7 +76,7 @@ A tombstone only refuses a stale write until the key is created again or its dir
 
 - (c) ~~On `h3://` a waiting listing sends `x-substantial-wait-seconds` and the previous etag, and an answer without `x-substantial-listing-etag` is a store failure.~~
 
-- (d) On `h3://` a waiting listing sends Herald's `x-herald-wait-seconds` and the previous etag in `x-herald-wait-etag`, and an answer without `x-herald-listing-etag` is a store failure.
+- (d) On `h3://` a waiting listing sends `x-herald-wait-seconds` and the previous etag in `x-herald-wait-etag`, and an answer without `x-herald-listing-etag` is a store failure.
 
 A head is rewritten at every commit, and only if it is still the value its writer read, so S3 replaces it with a conditional write. The tag rides on the same request, so setting the expiry costs nothing more.
 

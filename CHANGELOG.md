@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Release notes are also published on [GitHub Releases](https://github.com/zifeo/substantial/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- Opening a Redis store during a Sentinel or Cluster failover no longer fails with `ConfigError` "has no WAITAOF" when the primary is demoted between the connection's checks: the node is checked again, and a replica is a failover in progress that the store retries.
+
 ## [0.4.0] - 2026-11-23
 
 Substantial 0.4.0 keeps each chain in one object, its head, rewritten at every commit, and lets the store expire ended runs. It does not read the namespaces of 0.3: start it on a new namespace.
@@ -50,7 +56,7 @@ Substantial 0.4.0 keeps each chain in one object, its head, rewritten at every c
 - **Breaking:** the tombstone is gone. An id is refused to a new start exactly while its run is kept, and starts a new run once the run was removed. `RunExists` and `RunNotFound` lose `collected` and `until`, and a `RunNotFound` failure's details hold only `run`.
 - **Breaking:** the settings `snapshot_every`, `tombstone`, `retention_min` and `recheck` are gone.
 - **Breaking:** the file store keeps a key as a directory of numbered versions, each with a 24-byte header holding its expiry and its key's incarnation, written by `link()` alone in every host, so the three hosts share one directory and a directory written by 0.3 is not read.
-- **Breaking:** `h3://` sends Herald's `x-herald-wait-seconds` and `x-herald-wait-etag`, and reads `x-herald-listing-etag`: a server that answers only the `x-substantial-*` names fails every waiting listing.
+- **Breaking:** `h3://` sends `x-herald-wait-seconds` and `x-herald-wait-etag`, and reads `x-herald-listing-etag`: a server that answers only the `x-substantial-*` names fails every waiting listing.
 - Runs make fewer requests: a commit is one compare-and-set of the head, a wakeup reads one object or none on the worker that wrote the head last, and an end leaves no entry to collect. A budget in requests counts the `cas` requests among them.
 - The Redis failover tests drive the writers by counts of acknowledged creates, not durations, and check that creates are acknowledged again after the promotion, on a cluster once the killed node rejoins.
 - A waiting `result` on `h3://` and Redis holds a waiting listing of its chain's head, which returns as soon as the head is rewritten: a Redis page's etag covers each key's ETag, kept in the namespace's hash `{<ns>}:t`.
