@@ -1,6 +1,6 @@
 {
   "name": "substantial",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Brokerless durable execution: the TypeScript host of the Substantial core",
   "license": "MPL-2.0",
   "repository": {
