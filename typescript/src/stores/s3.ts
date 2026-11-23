@@ -118,7 +118,7 @@ export function waitHeaders(wait: ListWait | undefined, maxKeys: number): Record
   if (wait.etag !== undefined && !/^[\x21-\x7e]+$/.test(wait.etag)) {
     throw new Refused(`the listing etag ${JSON.stringify(wait.etag)} cannot be sent`);
   }
-  // § gvqb04830.d@0fa6r
+  // § gvqb04830.d@ypd1f
   const headers: Record<string, string> = { [WAIT_SECONDS]: String(wait.seconds) };
   if (wait.etag !== undefined) headers[WAIT_ETAG] = wait.etag;
   return headers;
@@ -483,7 +483,7 @@ export class S3Store implements Store {
       after = this.#full(keys[keys.length - 1] as string);
     }
     if (wait !== undefined && !etag) {
-      // § gvqb04830.d@s3h2e
+      // § gvqb04830.d@e2pq4
       throw new Refused(`a waiting listing of ${prefix} answered without ${LISTING_ETAG}`);
     }
     return etag === undefined

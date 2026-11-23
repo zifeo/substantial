@@ -255,8 +255,8 @@ async function deletedKeyComesBack(store: Store): Promise<boolean> {
 }
 
 /** RustFS 1.0.1 on a versioned bucket compares `If-Match` with the newest version holding data,
- * past the delete marker, so a compare-and-set brings a deleted key back, where AWS and Herald
- * answer 404: it fails the probe, which refuses the store at open. The only use of the versioned
+ * past the delete marker, so a compare-and-set brings a deleted key back, where AWS
+ * answers 404: it fails the probe, which refuses the store at open. The only use of the versioned
  * bucket. This fails once RustFS meets the contract. */
 test("rustfs versioned fails the probe of a deleted key", async () => {
   const store = await openStore(await s3Url("s3", S3_VERSIONED_URL), "env");

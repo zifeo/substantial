@@ -47,10 +47,11 @@ class Script:
         return Script(text, hashlib.sha1(text).hexdigest())
 
 
-# § htbc4k715.f@j0v7q
+# § htbc4k715.f@hd7sy
 CREATE = Script.shipped("create.lua")
 CAS = Script.shipped("cas.lua")
 DELETE = Script.shipped("delete.lua")
+INFO = ("INFO", "persistence", "memory", "replication", "cluster")
 # § end htbc4k715.f
 
 
@@ -163,16 +164,17 @@ class Connector:
         where = await self._address()
         client = self.client(where)
         try:
-            info = await client.execute_command(
-                "INFO", "persistence", "memory", "replication", "cluster"
-            )
+            info = await client.execute_command(*INFO)
             self._check(where, info)
-            # § htbc4k715.b@8c3rn
+            # § htbc4k715.b@y2q4p
             try:
                 await client.execute_command("WAITAOF", 1, 0, WAITAOF_MS)
             except (AuthenticationError, NoPermissionError):
                 raise
             except ResponseError as e:
+                # A primary demoted between INFO and WAITAOF refuses WAITAOF as a replica: a
+                # failover in progress, not a Redis too old, so the node is checked again first.
+                self._check(where, await client.execute_command(*INFO))
                 raise ConfigError(f"{where} has no WAITAOF, which needs Redis 7.2: {e}") from e
             # § end htbc4k715.b
             for script in scripts:

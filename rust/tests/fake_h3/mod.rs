@@ -188,7 +188,7 @@ impl State {
         let (keys, truncated, etag) = loop {
             changes.borrow_and_update();
             let (keys, truncated) = self.page(&prefix, &after, max_keys);
-            // Over the keys and their objects' ETags, as Herald's: a rewrite of a key listed
+            // Over the keys and their objects' ETags, as an `h3://` server's: a rewrite of a key listed
             // changes it.
             let etags: Vec<Option<String>> = {
                 let objects = self.objects.lock().unwrap();

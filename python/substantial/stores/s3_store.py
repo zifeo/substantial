@@ -471,7 +471,7 @@ class S3Store:
             sent()
             after = self._full(keys[-1])
         if wait is not None and not etag:
-            # § gvqb04830.d@0qy4c
+            # § gvqb04830.d@5m5xw
             raise Permanent(f"a waiting listing of {prefix} answered without {LISTING_ETAG}")
         return Listing(keys=keys[:max_keys], etag=etag)
 

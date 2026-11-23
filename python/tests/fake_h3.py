@@ -171,8 +171,8 @@ class FakeH3:
         while True:
             changed = self._changed
             keys, truncated = self._page(prefix, after, max_keys)
-            # Over the keys and their objects' ETags, as Herald's: a rewrite of a key listed
-            # changes it.
+            # Over the keys and their objects' ETags, as an `h3://` server's: a rewrite of a key
+            # listed changes it.
             etags = [_etag(self.objects[k]) for k in keys]
             etag = hashlib.sha256(repr((keys, etags, truncated)).encode()).hexdigest()[:16]
             if seconds is None or wait_etag != etag or loop.time() >= deadline:
