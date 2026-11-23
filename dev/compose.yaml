@@ -1,0 +1,228 @@
+# Every store the tests use, at the addresses dev/stores.env gives them:
+#
+# - RustFS on 127.0.0.1:39400, bucket `substantial-unversioned`, where every S3 test runs, and
+#   bucket `substantial` versioned, which RustFS 1.0.1 serves short of the store contract (a
+#   compare-and-set brings a deleted key back), kept to check that the probe refuses it; each with
+#   the lifecycle rules that expire the keys tagged `substantial-retention=1d` and `=30d` under
+#   `tests/`;
+# - Valkey standalone on 127.0.0.1:39501;
+# - Valkey with Sentinel: a primary and two replicas on 127.0.0.1:39511 to 39513, three sentinels
+#   on 39521 to 39523, master `substantial`;
+# - a Valkey cluster: three primaries and three replicas on 127.0.0.1:39531 to 39536.
+#
+#   docker compose -f dev/compose.yaml up -d --wait
+#   cargo test --workspace --all-features  # or uv run pytest, or npm test
+#   docker compose -f dev/compose.yaml down -v
+#
+# Every Valkey appends to its AOF and fsyncs it at every write, and refuses to evict. The Sentinel
+# and cluster processes share the network namespace of `sentinel-net` and `cluster-net`, so each
+# one reaches the others, and the host reaches each one, at the same 127.0.0.1:<port>: Sentinel
+# and the cluster hand clients the addresses the nodes announce. The failover tests stop the
+# container of a primary, substantial-sentinel-<port> or substantial-cluster-<port>, and start it
+# again; a Sentinel node is healthy as a primary or as a replica linked to one, whichever it is
+# after a failover.
+name: substantial
+
+x-sentinel-process: &sentinel-process
+  image: valkey/valkey:8.1
+  network_mode: service:sentinel-net
+  depends_on: [sentinel-net]
+
+# Each node writes its configuration at its first start only: Sentinel saves there the role it gives
+# the node, so that a node restarted after a failover keeps it. Restarted with its first role, a
+# node could follow a primary that now follows it, and Sentinel would find no replica to promote.
+x-sentinel-node: &sentinel-node
+  <<: *sentinel-process
+  command:
+    - sh
+    - -c
+    - |
+      test -f /data/node.conf || printf '%s\n' "port $$PORT" "protected-mode no" "appendonly yes" \
+        "appendfsync always" "maxmemory-policy noeviction" "replica-announce-ip 127.0.0.1" \
+        $${PRIMARY:+"replicaof 127.0.0.1 $$PRIMARY"} > /data/node.conf
+      exec valkey-server /data/node.conf
+  healthcheck:
+    test: ["CMD-SHELL", "valkey-cli -p $$PORT info replication | grep -Eq 'role:master|master_link_status:up'"]
+    interval: 1s
+    retries: 30
+
+x-cluster-node: &cluster-node
+  image: valkey/valkey:8.1
+  network_mode: service:cluster-net
+  depends_on: [cluster-net]
+  healthcheck:
+    test: ["CMD-SHELL", "valkey-cli -p $$PORT cluster info | grep -q cluster_state:ok"]
+    interval: 1s
+    retries: 60
+  command:
+    - sh
+    - -c
+    - >-
+      exec valkey-server --port $$PORT --protected-mode no --cluster-enabled yes
+      --cluster-config-file /data/nodes.conf --cluster-node-timeout 2000
+      --cluster-announce-ip 127.0.0.1 --appendonly yes --appendfsync always
+      --maxmemory-policy noeviction
+
+services:
+  rustfs:
+    image: rustfs/rustfs:1.0.1
+    container_name: substantial-rustfs
+    ports:
+      - "127.0.0.1:39400:9000"
+    environment:
+      RUSTFS_ACCESS_KEY: substantial
+      RUSTFS_SECRET_KEY: substantial-secret
+    tmpfs:
+      - /data:uid=10001,gid=10001
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:9000/health"]
+      interval: 1s
+      retries: 30
+
+  bucket:
+    image: rustfs/rustfs:1.0.1
+    container_name: substantial-rustfs-bucket
+    # It stays up, healthy once the buckets are ready: some Compose versions count a one-shot container exit, even 0, as a failure of up --wait.
+    init: true
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/bucket"]
+      interval: 1s
+      retries: 60
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    # Healthy comes before RustFS accepts signed requests; 409 is a bucket made by an earlier run.
+    # The versioned bucket also gets the rules the reference gives for versioning on (I-16).
+    entrypoint:
+      - sh
+      - -c
+      - |
+        sign="--aws-sigv4 aws:amz:us-east-1:s3 --user substantial:substantial-secret"
+        put() {
+          code=$$(curl -s -o /dev/null -w '%{http_code}' $$sign -X PUT --data-binary "$$2" "http://rustfs:9000/$$1")
+          case $$code in 200) ;; *) echo "cannot PUT /$$1: HTTP $$code" >&2; exit 1;; esac
+        }
+        for bucket in substantial substantial-unversioned; do
+          for i in $$(seq 30); do
+            code=$$(curl -s -o /dev/null -w '%{http_code}' $$sign -X PUT http://rustfs:9000/$$bucket)
+            case $$code in 200|409) break;; esac
+            sleep 1
+          done
+          case $$code in 200|409) ;; *) echo "cannot create the bucket $$bucket: HTTP $$code" >&2; exit 1;; esac
+        done
+        put 'substantial?versioning' '<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>'
+        expire=''
+        for d in 1 30; do
+          expire="$$expire<Rule><ID>substantial-expire-$${d}d</ID><Status>Enabled</Status><Filter><And><Prefix>tests/</Prefix><Tag><Key>substantial-retention</Key><Value>$${d}d</Value></Tag></And></Filter><Expiration><Days>$$d</Days></Expiration></Rule>"
+        done
+        versions='<Rule><ID>substantial-noncurrent-keep-3</ID><Status>Enabled</Status><Filter><Prefix>tests/</Prefix></Filter><NoncurrentVersionExpiration><NoncurrentDays>1</NoncurrentDays><NewerNoncurrentVersions>2</NewerNoncurrentVersions></NoncurrentVersionExpiration></Rule><Rule><ID>substantial-noncurrent-at-most-7-days</ID><Status>Enabled</Status><Filter><Prefix>tests/</Prefix></Filter><NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays></NoncurrentVersionExpiration></Rule><Rule><ID>substantial-delete-markers</ID><Status>Enabled</Status><Filter><Prefix>tests/</Prefix></Filter><Expiration><ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker></Expiration></Rule>'
+        put 'substantial?lifecycle' "<LifecycleConfiguration>$$expire$$versions</LifecycleConfiguration>"
+        put 'substantial-unversioned?lifecycle' "<LifecycleConfiguration>$$expire</LifecycleConfiguration>"
+        touch /tmp/bucket
+        exec sleep infinity
+
+  redis:
+    image: valkey/valkey:8.1
+    container_name: substantial-redis-39501
+    command:
+      - valkey-server
+      - --protected-mode
+      - "no"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - always
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:39501:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 1s
+      retries: 30
+
+  sentinel-net:
+    image: valkey/valkey:8.1
+    container_name: substantial-sentinel-net
+    init: true
+    command: ["sleep", "infinity"]
+    ports:
+      - "127.0.0.1:39511-39513:39511-39513"
+      - "127.0.0.1:39521-39523:39521-39523"
+
+  sentinel-node-39511: {<<: *sentinel-node, container_name: substantial-sentinel-39511, environment: {PORT: "39511"}}
+  sentinel-node-39512: {<<: *sentinel-node, container_name: substantial-sentinel-39512, environment: {PORT: "39512", PRIMARY: "39511"}}
+  sentinel-node-39513: {<<: *sentinel-node, container_name: substantial-sentinel-39513, environment: {PORT: "39513", PRIMARY: "39511"}}
+
+  sentinel-39521: &sentinel
+    <<: *sentinel-process
+    container_name: substantial-sentinel-39521
+    environment:
+      PORT: "39521"
+    # Sentinel rewrites its configuration file, so each one writes its own at start.
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' "port $$PORT" "protected-mode no" "sentinel announce-ip 127.0.0.1" \
+          "sentinel monitor substantial 127.0.0.1 39511 2" \
+          "sentinel down-after-milliseconds substantial 1000" \
+          "sentinel failover-timeout substantial 5000" > /tmp/sentinel.conf
+        exec valkey-sentinel /tmp/sentinel.conf
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p $$PORT sentinel ckquorum substantial | grep -q 'OK 3' && valkey-cli -p $$PORT sentinel master substantial | grep -A1 -x num-slaves | grep -qx 2"]
+      interval: 1s
+      retries: 60
+
+  sentinel-39522:
+    <<: *sentinel
+    container_name: substantial-sentinel-39522
+    environment:
+      PORT: "39522"
+
+  sentinel-39523:
+    <<: *sentinel
+    container_name: substantial-sentinel-39523
+    environment:
+      PORT: "39523"
+
+  cluster-net:
+    image: valkey/valkey:8.1
+    container_name: substantial-cluster-net
+    init: true
+    command: ["sleep", "infinity"]
+    ports:
+      - "127.0.0.1:39531-39536:39531-39536"
+
+  cluster-node-39531: {<<: *cluster-node, container_name: substantial-cluster-39531, environment: {PORT: "39531"}}
+  cluster-node-39532: {<<: *cluster-node, container_name: substantial-cluster-39532, environment: {PORT: "39532"}}
+  cluster-node-39533: {<<: *cluster-node, container_name: substantial-cluster-39533, environment: {PORT: "39533"}}
+  cluster-node-39534: {<<: *cluster-node, container_name: substantial-cluster-39534, environment: {PORT: "39534"}}
+  cluster-node-39535: {<<: *cluster-node, container_name: substantial-cluster-39535, environment: {PORT: "39535"}}
+  cluster-node-39536: {<<: *cluster-node, container_name: substantial-cluster-39536, environment: {PORT: "39536"}}
+
+  cluster-create:
+    image: valkey/valkey:8.1
+    container_name: substantial-cluster-create
+    network_mode: service:cluster-net
+    depends_on: [cluster-node-39531, cluster-node-39532, cluster-node-39533, cluster-node-39534, cluster-node-39535, cluster-node-39536]
+    # It stays up, healthy once the cluster exists, as the bucket does. A cluster made by an
+    # earlier `up` is kept.
+    init: true
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/created"]
+      interval: 1s
+      retries: 60
+    command:
+      - sh
+      - -c
+      - |
+        for p in 39531 39532 39533 39534 39535 39536; do
+          until valkey-cli -p $$p ping >/dev/null 2>&1; do sleep 0.2; done
+        done
+        valkey-cli -p 39531 cluster info | grep -q cluster_known_nodes:6 ||
+          valkey-cli --cluster create 127.0.0.1:39531 127.0.0.1:39532 127.0.0.1:39533 \
+            127.0.0.1:39534 127.0.0.1:39535 127.0.0.1:39536 --cluster-replicas 1 --cluster-yes ||
+          exit 1
+        touch /tmp/created
+        exec sleep infinity

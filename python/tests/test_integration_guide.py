@@ -117,7 +117,7 @@ async def test_the_app_runs_its_worker_in_its_lifespan(crm: Any, ledger: Any) ->
         await env.check()
 
 
-async def test_an_event_redelivered_after_its_run_was_collected_is_answered_as_applied(
+async def test_an_event_redelivered_after_its_run_was_removed_is_applied_once(
     crm: Any, ledger: Any
 ) -> None:
     async with s.testing.Env.open(now=T0) as env:
@@ -144,7 +144,8 @@ async def test_a_closed_account_answers_410_and_never_reopens(ledger: Any) -> No
             await env.settle()
             closed = (410, {"error": "account acc-1 is closed"})
             late = {"id": "op-2", "kind": "credit", "amount": 5}
-            # Within the default retention, past it, and past the 7 days an id stays taken then.
+            # Within the default retention, and past it twice: the actor never ends, so is never
+            # removed.
             for i, wait in enumerate((s.days(1), s.days(30), s.days(7))):
                 await env.advance(wait)
                 assert await call(app, "POST", "/accounts/acc-1/ops", late) == closed
@@ -159,26 +160,6 @@ async def test_a_closed_account_answers_410_and_never_reopens(ledger: Any) -> No
                 {"ok": False, "closed": True},
             )
         assert ledger.posted == {"op-1": ("acc-1", 30)}
-        await env.check()
-
-
-async def test_an_order_resent_after_its_run_was_collected_is_answered_as_handled(
-    ledger: Any,
-) -> None:
-    async with s.testing.Env.open(now=T0) as env:
-        app = web.create_app(env.client, concurrency=4)
-        async with serving(app):
-            top_up = {"id": "top-up", "kind": "credit", "amount": 30}
-            assert await call(app, "POST", "/accounts/acc-1/ops", top_up) == (202, None)
-            order = {"order": "o-1", "account": "acc-1", "amount": 20}
-            assert await call(app, "POST", "/orders", order) == (200, {"paid": True})
-            await env.advance(s.days(31))
-            with pytest.raises(s.RunNotFound):
-                await env.run(web.pay_order, "order-o-1").status()
-            assert await call(app, "POST", "/orders", order) == (200, None)
-            other = {**order, "amount": 25}
-            assert await call(app, "POST", "/orders", other) == (200, None)
-        assert ledger.posted == {"top-up": ("acc-1", 30), "order-o-1": ("acc-1", -20)}
         await env.check()
 
 

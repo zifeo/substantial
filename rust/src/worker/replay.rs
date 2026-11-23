@@ -10,9 +10,9 @@ use futures::future::BoxFuture;
 
 use super::Event;
 use super::agent::panicked;
-use crate::clock::{Clock, Inbox, Ready, Tasks};
+use crate::clock::{Clock, Heartbeat, Inbox, Late, Ready, Tasks};
 use crate::core::{Core, RunMachine};
-use crate::error::{Continuation, Error, Failure, Result, step_failed_end};
+use crate::error::{Continuation, Error, Failure, NEW_VERSION, Result, step_failed_end};
 use crate::observe::{self, Metering, Observed};
 use crate::proto::boundary::v1::{
     self as b, CommitKind, end, next::Next, op_result, outcome::Outcome, replay_end,
@@ -30,8 +30,9 @@ pub(crate) enum ToReplay {
         n: u64,
         won: bool,
         inbox: Vec<b::InboxMessage>,
-        cost: Option<layout::Cost>,
+        cost: Option<Box<layout::Cost>>,
     },
+    Claimed,
     Stop,
 }
 
@@ -54,10 +55,13 @@ impl Host {
     }
 }
 
-/// Runs one replay to its end, which it always reports, `Dropped` when it could not go on.
-/// `step_timeout` is the workflow's, else the worker's; `due_at` the earliest due entry it serves.
+/// Runs one replay of `chain` to its end, which it always reports, `Dropped` when it could not go
+/// on. `step_timeout` is the workflow's, else the worker's; `due_at` the earliest due entry it
+/// serves. Its requests to the agent name the chain, its logs the run.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn replay(
     host: Host,
+    chain: String,
     workflow: Untyped,
     step_timeout: Duration,
     input: b::RunInput,
@@ -70,6 +74,7 @@ pub(crate) async fn replay(
     let mut committed = None;
     let driven = drive(
         &host,
+        &chain,
         &workflow,
         step_timeout,
         input,
@@ -86,6 +91,7 @@ pub(crate) async fn replay(
     };
     let ended = match (&end, committed) {
         (replay_end::End::Dropped(_), _) => "dropped",
+        (replay_end::End::Blocked(_), _) => "blocked",
         (_, Some(CommitKind::Suspend)) => "suspended",
         (_, Some(CommitKind::End)) => "ended",
         _ => "idle",
@@ -98,7 +104,7 @@ pub(crate) async fn replay(
             end: ended,
         })
     });
-    events.push(Event::Ended(run, end));
+    events.push(Event::Ended(chain, end));
 }
 
 /// An attempt's call, attempt, outcome and charges, or the panic of its step.
@@ -147,8 +153,10 @@ fn attempt_outcome(outcome: &Outcome, attempt: u32, max_attempts: u32) -> &'stat
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn drive(
     host: &Host,
+    replayed: &str,
     workflow: &Untyped,
     step_timeout: Duration,
     input: b::RunInput,
@@ -171,38 +179,48 @@ async fn drive(
         chain.clone(),
         input_json.clone(),
         step_timeout,
+        workflow.heartbeat_timeout(),
     );
-    // § g4kv2kj51@6j5xw
+    // § g4kv2kj51@ztcvz
     let mut code: Option<WorkflowFuture> =
         Some(workflow.start(Context::new(shared.clone()), input_json));
     // § end g4kv2kj51
     let executor = Executor::new();
     // Aborted when dropped, which drops the outcomes of the attempts in flight.
-    // § one v4n6ja42e.a@s9bba
+    // § one v4n6ja42e.a@w3fh5
     let mut attempts = Tasks::default();
     let attempted: Arc<Inbox<Attempt>> = Arc::default();
     let told: Arc<dyn Ready> = inbox.clone();
     loop {
-        // § k3zma9hjs@gddpy
-        fail_code(&shared, &mut code)?;
+        // § k3zma9hjs@hr40c
+        if let Some(error) = code_failure(&shared, &mut code) {
+            return Ok(block(host, events, workflow, &shared, error).await);
+        }
         if let Some(future) = code.as_mut()
             && let Poll::Ready(result) = executor.run(future.as_mut())
         {
             code = None;
-            if shared.fatal().is_none() && !shared.diverged() {
-                end_run(&shared, result)?;
+            if shared.fatal().is_none()
+                && !shared.diverged()
+                && !shared.core_ended()
+                && let Err(error) = end_run(&shared, result)?
+            {
+                return Ok(block(host, events, workflow, &shared, error).await);
             }
         }
-        if shared.diverged() {
-            // The core recorded the failure, which `next` commits. Dropping the future and the
-            // attempts in flight stops the code where it is.
+        if shared.diverged() || shared.core_ended() {
+            // Nothing more of the code is recorded: the core blocks a divergence at `next`, and
+            // commits the end it made itself. Dropping the future and the attempts in flight
+            // stops the code where it is.
             code = None;
-            // § v4n6ja42e.a@k5ad5
+            // § v4n6ja42e.a@39sfn
             attempts = Tasks::default();
             while attempted.pop().is_some() {}
             // § end v4n6ja42e.a
         }
-        fail_code(&shared, &mut code)?;
+        if let Some(error) = code_failure(&shared, &mut code) {
+            return Ok(block(host, events, workflow, &shared, error).await);
+        }
         if let Some(e) = shared.fatal() {
             return Err(Error::Protocol(format!("a call of the code failed: {e}")));
         }
@@ -217,7 +235,27 @@ async fn drive(
                 done.map_err(|e| Error::Protocol(format!("step task: {e}")))?;
             shared.step_ended(call, attempt, outcome, charges)?;
         }
-        match shared.next()? {
+        let next = shared.next();
+        // § awhhtbr5n.b@vt4n7
+        if host.clock.checks_only() {
+            let diverged = shared.divergence().or_else(|| match &next {
+                Err(Error::NonDeterminism(m)) => Some(m.clone()),
+                Ok(Next::Blocked(f)) => Some(f.message.clone()),
+                _ => None,
+            });
+            let replaying = matches!(
+                next,
+                Ok(Next::Resolve(_) | Next::Deliver(_) | Next::ChildEnded(_)) | Err(_)
+            );
+            if diverged.is_some() || !replaying {
+                host.clock.checked(&run, diverged);
+                // Parked for good, so nothing past the history runs or is written: the tester
+                // crashes the worker once it read the outcome.
+                host.clock.wait(&[], None).await;
+            }
+        }
+        // § end awhhtbr5n.b
+        match next? {
             Next::Resolve(r) => shared.resolve(r)?,
             Next::Deliver(m) => shared.deliver(&m),
             Next::ChildEnded(child) => shared.child_ended(child),
@@ -227,7 +265,7 @@ async fn drive(
                 })?;
                 let timeout = e.timeout_ms.map(Duration::from_millis);
                 let (clock, done) = (host.clock.clone(), attempted.clone());
-                // § yp7fv5sa7.a@exz0y
+                // § yp7fv5sa7.a@yprtf
                 let observed = Attempted {
                     host: host.clone(),
                     events: events.clone(),
@@ -242,17 +280,24 @@ async fn drive(
                 let task = host
                     .clock
                     .spawn(format_args!("attempt of {label}"), async move {
-                        let running = LiveAttempt::new(step.key.clone());
+                        let running = LiveAttempt::new(step.key.clone(), clock.clone());
+                        let heartbeat = step.heartbeat.map(|timeout| Heartbeat {
+                            timeout,
+                            beat: running.beats(),
+                        });
                         let body = with_attempt(running.clone(), (step.body)()).map(outcome);
-                        let attempt = clock.attempt(&step.name, &step.key, Box::pin(body), timeout);
+                        let body = Box::pin(body);
+                        let attempt =
+                            clock.attempt(&step.name, &step.key, body, timeout, heartbeat);
                         let ended = match AssertUnwindSafe(attempt).catch_unwind().await {
-                            Ok(Some(outcome)) => outcome,
-                            // § one v4n6ja42e@cwptt
-                            Ok(None) => timed_out(timeout),
+                            Ok(Ok(outcome)) => outcome,
+                            // § one v4n6ja42e@19j1s
+                            Ok(Err(Late::Timeout)) => timed_out(timeout),
+                            Ok(Err(Late::Silent)) => silent(step.heartbeat),
                             Err(panic) => return done.push(Err(panicked(&*panic))),
                         };
                         observed.end(attempt_outcome(&ended, e.attempt, step.max_attempts));
-                        // § cvnf47vy8@p48x9
+                        // § cvnf47vy8@zfjq5
                         done.push(Ok((e.call, e.attempt, ended, running.charges())));
                     });
                 attempts.push(task);
@@ -261,7 +306,8 @@ async fn drive(
                 let n = commit.segment.as_ref().map(|s| s.n);
                 let ended = commit.segment.as_ref().and_then(failed_end);
                 let kind = commit.kind();
-                events.push(Event::Commit(run.clone(), Box::new(commit)));
+                let near = commit.near_limits.clone();
+                events.push(Event::Commit(replayed.to_owned(), Box::new(commit)));
                 host.clock.wait(std::slice::from_ref(&told), None).await;
                 match inbox.pop() {
                     Some(ToReplay::Committed {
@@ -277,7 +323,7 @@ async fn drive(
                         }
                         *committed = Some(kind);
                         match cost {
-                            Some(cost) => shared.arrived(inbox, cost)?,
+                            Some(cost) => shared.arrived(inbox, *cost)?,
                             None if inbox.is_empty() => {}
                             None => {
                                 return Err(Error::Protocol(
@@ -286,11 +332,28 @@ async fn drive(
                             }
                         }
                         if let Some(ended) = ended {
-                            tracing::warn!("run {chain} {ended}");
+                            tracing::warn!("run {run} {ended}");
+                        }
+                        for limit in near {
+                            near_limit(host, events, workflow, &shared, limit);
                         }
                     }
                     Some(ToReplay::Committed { won: false, .. } | ToReplay::Stop) | None => {
                         return dropped;
+                    }
+                    Some(ToReplay::Claimed) => {
+                        return Err(Error::Protocol("claimed during a commit".into()));
+                    }
+                }
+            }
+            Next::Claim(_) => {
+                events.push(Event::Claim(replayed.to_owned()));
+                host.clock.wait(std::slice::from_ref(&told), None).await;
+                match inbox.pop() {
+                    Some(ToReplay::Claimed) => shared.claimed()?,
+                    Some(ToReplay::Stop) | None => return dropped,
+                    Some(other) => {
+                        return Err(Error::Protocol(format!("{other:?} while claiming")));
                     }
                 }
             }
@@ -301,8 +364,12 @@ async fn drive(
                 let signals = [attempted.clone() as Arc<dyn Ready>, told.clone()];
                 host.clock.wait(&signals, wait.until).await;
             }
-            // § one d9818h4m4@s6xzt
+            // § one d9818h4m4@yj88p
             Next::Idle(idle) => return Ok(replay_end::End::Idle(idle)),
+            Next::Blocked(error) => {
+                let error = error.try_into()?;
+                return Ok(block(host, events, workflow, &shared, error).await);
+            }
             Next::Store(op) => {
                 let (store, events) = (host.store.clone(), events.clone());
                 let read = host.clock.spawn(format_args!("read of {run}"), async move {
@@ -341,11 +408,21 @@ async fn drive(
 
 /// The outcome of an attempt as the run machine takes it; a value over the limit fails it.
 fn outcome(result: Result<Vec<u8>, Failure>) -> Outcome {
-    // § h8wg39cct.b@gjkqs
+    // § h8wg39cct.b@gns87
     match result.and_then(|bytes| json(bytes).map_err(too_large)) {
         Ok(value) => Outcome::Value(value),
         Err(f) => Outcome::Error(f.into()),
     }
+}
+
+fn silent(heartbeat: Option<Duration>) -> Outcome {
+    // § vvp37rp40@g2ajg
+    outcome(Err(Failure {
+        kind: "StepTimeout".into(),
+        message: format!("no heartbeat within {:?}", heartbeat.unwrap_or_default()),
+        retryable: true,
+        details: None,
+    }))
 }
 
 fn timed_out(timeout: Option<Duration>) -> Outcome {
@@ -358,18 +435,75 @@ fn timed_out(timeout: Option<Duration>) -> Outcome {
     }))
 }
 
-/// Ends the run with a failure the code could not see, a handler's, dropping the code.
-fn fail_code(shared: &Shared, code: &mut Option<WorkflowFuture>) -> Result<()> {
-    if let Some(failure) = shared.take_code_failure()
-        && code.take().is_some()
-    {
-        end_run(shared, Err(Error::Failed(failure)))?;
+/// A failure the code could not see, a handler's, which blocks the run: the code is dropped.
+fn code_failure(shared: &Shared, code: &mut Option<WorkflowFuture>) -> Option<Failure> {
+    let failure = shared.take_code_failure()?;
+    code.take().map(|_| failure)
+}
+
+/// Stops the code where it is and reports the replay blocked with `error`: the run records
+/// nothing more, and is tried again after a backoff.
+async fn block(
+    host: &Host,
+    events: &Inbox<Event>,
+    workflow: &Untyped,
+    shared: &Shared,
+    mut error: Failure,
+) -> replay_end::End {
+    // § dxgjekysz.e@nd7wa
+    if error.kind == "NonDeterminism" && !error.message.ends_with(NEW_VERSION) {
+        error.message = format!("{}; {NEW_VERSION}", error.message);
     }
-    Ok(())
+    // § awhhtbr5n.b@khdxb
+    if host.clock.checks_only() {
+        host.clock.checked(shared.run(), Some(error.to_string()));
+        host.clock.wait(&[], None).await;
+    }
+    // § end awhhtbr5n.b
+    // § yp7fv5sa7.c@mc85g
+    tracing::warn!("run {} blocked: {error}", shared.run());
+    let (workflow, run) = (workflow.name().to_owned(), shared.run().to_owned());
+    let end = replay_end::End::Blocked(error.clone().into());
+    host.tell(events, || {
+        Observed::Blocked(observe::Blocked {
+            workflow,
+            run,
+            error,
+        })
+    });
+    // § end yp7fv5sa7.c
+    end
+}
+
+/// Warns that a commit took the run past the warning share of `limit`.
+fn near_limit(
+    host: &Host,
+    events: &Inbox<Event>,
+    workflow: &Untyped,
+    shared: &Shared,
+    limit: b::LimitUse,
+) {
+    // § yp7fv5sa7.c@zgk53
+    tracing::warn!(
+        "run {} near its {} limit: {} of {}",
+        shared.run(),
+        limit.limit,
+        limit.used,
+        limit.max
+    );
+    host.tell(events, || {
+        Observed::NearLimit(observe::NearLimit {
+            workflow: workflow.name().to_owned(),
+            run: shared.run().to_owned(),
+            limit: limit.limit,
+            used: limit.used,
+            max: limit.max,
+        })
+    });
 }
 
 fn input_bytes(input: Option<layout::Value>) -> Result<Vec<u8>> {
-    // § e1dc4dar4.a@tq85w
+    // § e1dc4dar4.a@c7gxc
     match input.and_then(|v| v.kind) {
         None => Ok(b"{}".to_vec()),
         Some(value::Kind::Json(bytes)) => Ok(bytes),
@@ -403,22 +537,50 @@ fn too_large(e: Error) -> Failure {
     }
 }
 
-/// Records the end of the code: its value, its failure, its cancellation, or its continuation;
-/// a value over the limit fails the run instead.
-fn end_run(shared: &Shared, result: Result<Vec<u8>>) -> Result<()> {
-    // § g039jvy6k@f19hy
-    let end = match result.and_then(completed) {
-        Ok(end) => end,
+/// Records the end of the code: its value, its cancellation, its continuation, or the failure of
+/// an error that ends a run; any other error, a value over the limit included, is the failure that
+/// blocks the run, recording nothing.
+fn end_run(shared: &Shared, result: Result<Vec<u8>>) -> Result<Result<(), Failure>> {
+    // § dxgjekysz@99zw7
+    let end = match result {
+        Ok(bytes) => match completed(bytes) {
+            Ok(end) => end,
+            Err(e) => return Ok(Err(failure_of(&e))),
+        },
         Err(Error::Cancelled(reason)) => end::End::Cancelled(layout::Cancelled { reason }),
-        Err(Error::ContinuedAsNew(c)) => continued(c).unwrap_or_else(|e| failed(shared, &e)),
-        Err(e) => failed(shared, &e),
+        Err(Error::ContinuedAsNew(c)) => match continued(c) {
+            Ok(end) => end,
+            Err(e) => return Ok(Err(failure_of(&e))),
+        },
+        Err(e) if ends(&e) => failed(shared, &e),
+        Err(e) => return Ok(Err(failure_of(&e))),
     };
     shared.call(b::call::Call::End(b::End { end: Some(end) }))?;
-    Ok(())
+    Ok(Ok(()))
+}
+
+/// Whether an error that leaves the code ends its run failed: a recorded outcome of a verb, the
+/// same at every replay, or the code's own `Fail`.
+fn ends(e: &Error) -> bool {
+    // § dxgjekysz.d@x5917
+    matches!(
+        e,
+        Error::Fail(_)
+            | Error::Failed(_)
+            | Error::StepFailed { .. }
+            | Error::BudgetExceeded { .. }
+            | Error::RolledBack(_)
+            | Error::UndoFailed { .. }
+            | Error::HistoryTooLarge(_)
+            | Error::RunFailed { .. }
+            | Error::WaitTimeout
+            | Error::RunNotFound { .. }
+            | Error::RunEnded { .. }
+    )
 }
 
 fn completed(bytes: Vec<u8>) -> Result<end::End> {
-    // § h8wg39cct.d@ktfyj
+    // § h8wg39cct.e@pwgt7
     Ok(end::End::Completed(layout::Completed {
         value: Some(json(bytes)?),
     }))
@@ -430,11 +592,12 @@ fn continued(c: Continuation) -> Result<end::End> {
         input: Some(json(c.input)?),
         state: c.state.map(json).transpose()?,
         version: c.version,
+        highest: c.highest,
     }))
 }
 
 fn failed(shared: &Shared, e: &Error) -> end::End {
-    // § r3sd261h4.b@dqb8q
+    // § r3sd261h4.b@pv6jz
     let error = match e {
         Error::StepFailed { error, cause } => match shared.step_failure(error, cause) {
             Some(details) => layout::Failure {

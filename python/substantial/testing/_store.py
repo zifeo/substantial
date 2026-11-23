@@ -6,11 +6,19 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 from substantial.errors import InvalidArgument
-from substantial.stores.base import Capabilities, Create, Listing, ListWait, refuse_wait
+from substantial.stores.base import (
+    Capabilities,
+    Cas,
+    Create,
+    Listing,
+    ListWait,
+    Object,
+    refuse_wait,
+)
 from substantial.stores.memory import MemoryStore
 from substantial.stores.retry import STORE_RETRY, Ambiguous, Transient, create, with_retry
 
@@ -79,35 +87,50 @@ class FaultStore:
             await world.time.passing(clock)
         if world.time.ms < world.outage_until:
             raise Transient("the store is out")
-        # § one hz0ve24df.b@ph0v2
+        # § one hz0ve24df.b@bbt8x
         if clock is not None and world.draw(kind, key, clock):
             n = clock.tries[(kind, key)]
             applied = kind == "create" and unit(world.seed, "applied", key, clock.id, n) < 0.5
             # A create that found its key applied nothing: it counts as failed.
-            if applied and await apply() == "created":
+            if applied and await apply() not in ("exists", "mismatch"):
                 world.counts.ambiguous += 1
                 raise Ambiguous("chaos: a create applied, its answer lost")
             world.counts.failed += 1
             raise Transient(f"chaos: a {kind} failed")
         return await apply()
 
-    async def _create(self, key: str, data: bytes) -> Create:
-        created = await self._memory.create(key, data)
-        if created == "created":
+    async def _create(self, key: str, data: bytes, expiry: int | None) -> Create:
+        created = await self._memory.create(key, data, expiry=expiry)
+        if created != "exists":
             self._world.writes += 1
             self._world.written(key, data)
         return created
 
-    async def create(self, key: str, data: bytes) -> Create:
+    async def create(self, key: str, data: bytes, *, expiry: int | None) -> Create:
         return await create(
             STORE_RETRY,
             data,
-            lambda: self._try("create", key, lambda: self._create(key, data)),
+            lambda: self._try("create", key, lambda: self._create(key, data, expiry)),
             lambda: self._try("get", key, lambda: self._memory.get(key)),
             self._sleep,
         )
 
-    async def get(self, key: str) -> bytes | None:
+    async def cas(self, key: str, data: bytes, etag: str, *, expiry: int | None) -> Cas:
+        """Chaos faults a compare-and-set as it does a get: it fails, never applied."""
+
+        async def apply() -> Cas:
+            written = await self._memory.cas(key, data, etag, expiry=expiry)
+            if written != "mismatch":
+                self._world.writes += 1
+                self._world.written(key, data)
+            return written
+
+        return await self._retry("cas", key, apply)
+
+    async def check_expiry(self, days: Sequence[int]) -> None:
+        await self._memory.check_expiry(days)
+
+    async def get(self, key: str) -> Object | None:
         return await self._retry("get", key, lambda: self._memory.get(key))
 
     async def list(

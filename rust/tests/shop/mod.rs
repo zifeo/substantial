@@ -102,6 +102,7 @@ pub fn retrying(shop: &Shop) -> Workflow<String> {
                 initial: seconds(1),
                 max: seconds(1),
                 multiplier: 1.0,
+                deadline: None,
             };
             let order = input.order;
             c.step("charge", move || shop.charge(order.clone()))

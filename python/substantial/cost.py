@@ -14,16 +14,16 @@ from substantial.errors import ConfigError, InvalidArgument, ProtocolError
 # § one cvnf47vy8.a@1ktze
 MAX = (1 << 63) - 1
 
-_KINDS = ("create", "get", "list", "delete")
+_KINDS = ("create", "cas", "get", "list", "delete")
 _REQUESTS = (*_KINDS, "requests")
 
-_TABLES: dict[str, tuple[str, int, int, int, int]] = {
+_TABLES: dict[str, tuple[str, int, int, int, int, int]] = {
     # Source: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json,
     # price list version 20261109154310 (published 2026-11-09), read 2026-11-15: S3 Standard, US
     # East (N. Virginia), "$0.005 per 1,000 PUT, COPY, POST, or LIST requests", "$0.004 per 10,000
     # GET and all other requests"; DELETE is free (https://aws.amazon.com/s3/pricing/, "DELETE
-    # and CANCEL requests are free").
-    "aws-s3-standard-us-east-1-2026-11-09": ("USD", 5_000_000, 400_000, 5_000_000, 0),
+    # and CANCEL requests are free"). A compare-and-set is a conditional PUT.
+    "aws-s3-standard-us-east-1-2026-11-09": ("USD", 5_000_000, 5_000_000, 400_000, 5_000_000, 0),
 }
 
 
@@ -52,14 +52,15 @@ class Amount:
 @dataclass(frozen=True, init=False)
 class Prices:
     """What the store charges: integer nano-units of `currency` per 1,000 requests of each kind
-    (`create` is S3's PUT class, `get` its GET class, `list` its LIST class). A request costs its
-    share rounded up.
+    (`create` and `cas` are S3's PUT class, `get` its GET class, `list` its LIST class). A request
+    costs its share rounded up.
 
     `Prices("aws-s3-standard-us-east-1-2026-11-09")` is a shipped table, whose fields the keyword
     arguments override; without a name, every field is required."""
 
     currency: str
     create: int
+    cas: int
     get: int
     list: int
     delete: int
@@ -70,6 +71,7 @@ class Prices:
         *,
         currency: str | None = None,
         create: int | None = None,
+        cas: int | None = None,
         get: int | None = None,
         list: int | None = None,
         delete: int | None = None,
@@ -77,6 +79,7 @@ class Prices:
         given: dict[str, object] = {
             "currency": currency,
             "create": create,
+            "cas": cas,
             "get": get,
             "list": list,
             "delete": delete,
@@ -112,6 +115,7 @@ class Prices:
         return run.Prices(
             currency=self.currency,
             create=self.create,
+            cas=self.cas,
             get=self.get,
             list=self.list,
             delete=self.delete,
@@ -123,6 +127,7 @@ class Meters:
     """Store requests by kind, their total, and amounts by currency in nano-units."""
 
     create: int
+    cas: int
     get: int
     list: int
     delete: int
@@ -137,6 +142,7 @@ class Cost:
     three."""
 
     create: int
+    cas: int
     get: int
     list: int
     delete: int
@@ -197,8 +203,8 @@ def budget_proto(budget: object) -> layout.Budget:
     for meter, limit in budget.items():
         if meter not in _REQUESTS and not is_currency(meter):
             raise InvalidArgument(
-                f"the budget meter {meter!r} is none of create, get, list, delete, requests "
-                "or a currency of three uppercase letters"
+                f"the budget meter {meter!r} is none of create, cas, get, list, delete, "
+                "requests or a currency of three uppercase letters"
             )
         if not _is_amount(limit):
             raise InvalidArgument(

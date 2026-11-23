@@ -99,6 +99,7 @@ impl IntoFuture for OpenEnv {
             let world = Arc::new(World::new(ns, ms, self.chaos, self.metering)?);
             let plan = Plan::Create(b::CreatePlan {
                 prefix: String::new(),
+                probe: crate::plan::probe(),
             });
             let sub = Attached::new(&world, true).open(plan).await?;
             Ok(Env {
@@ -133,6 +134,7 @@ impl Env {
     pub async fn client(&self) -> Result<Substantial> {
         let plan = Plan::Open(b::OpenPlan {
             prefix: String::new(),
+            probe: crate::plan::probe(),
         });
         Attached::new(&self.world, false).open(plan).await
     }
@@ -209,6 +211,10 @@ impl Env {
             let _ = tokio::time::timeout(left, self.world.time.changed()).await;
         }
         self.world.drop_all();
+    }
+
+    pub(super) fn world(&self) -> &Arc<World> {
+        &self.world
     }
 
     #[doc(hidden)]

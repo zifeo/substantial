@@ -45,7 +45,7 @@ async fn make_archive(files: &[String], tag: &str) -> anyhow::Result<String> {
     Ok(format!("/tmp/{tag}-{}.tar", files.len()))
 }
 
-#[s::step(retry = s::Retry { max_attempts: 5, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0 }, undo = delete_upload)]
+#[s::step(retry = s::Retry { max_attempts: 5, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0, deadline: None }, undo = delete_upload)]
 async fn upload(archive: &str, target: &str) -> anyhow::Result<String> {
     Ok(format!("{target}/{}", archive.trim_start_matches("/tmp/")))
 }

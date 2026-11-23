@@ -13,14 +13,22 @@ import { tempDir, token } from "./helpers.ts";
 
 const EXAMPLE = fileURLToPath(new URL("../examples/first_workflow.ts", import.meta.url));
 
-/** Whether a segment of the run holds the value of `roulette`: a kill then loses nothing. */
+/** Whether a segment of the run's head holds the value of `roulette`: a kill then loses
+ * nothing. */
 function rouletteRecorded(directory: string): boolean {
-  const log = join(directory, "runs", "example-1", "log");
-  if (!existsSync(log)) return false;
-  return readdirSync(log).some((name) => {
-    const segment = fromBinary(layout.SegmentSchema, readFileSync(join(log, name)));
-    return segment.events.some((e) => e.kind.case === "step" && e.kind.value.name === "roulette");
-  });
+  const head = join(directory, "runs", "example-1");
+  if (!existsSync(head)) return false;
+  // A key of the store is a directory of versions, each its 24-byte header, then the value.
+  const versions = readdirSync(head)
+    .filter((name) => /^\.[0-9]{20}$/.test(name))
+    .sort();
+  const latest = versions[versions.length - 1];
+  if (latest === undefined) return false;
+  const run = fromBinary(layout.RunSchema, readFileSync(join(head, latest)).subarray(24));
+  if (run.kind.case !== "head") return false;
+  return run.kind.value.segments.some((s) =>
+    s.events.some((e) => e.kind.case === "step" && e.kind.value.name === "roulette"),
+  );
 }
 
 function example(directory: string): {

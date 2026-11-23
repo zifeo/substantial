@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
+use std::time::Duration;
 
 use futures::future::BoxFuture;
 
@@ -21,11 +22,12 @@ pub(crate) type StepBody =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Vec<u8>, Failure>> + Send + Sync>;
 /// An undo, given the value of the step it undoes, as the body of its step.
 pub(crate) type Undo = Arc<dyn Fn(Option<layout::Value>) -> StepBody + Send + Sync>;
-/// An undo with its step's retry and timeout in milliseconds.
-pub(crate) type UndoSpec = (Undo, Option<b::RetryPolicy>, u64);
-/// What a step call runs: its attempts, and its undo.
+/// An undo with its step's retry, timeout in milliseconds and heartbeat timeout.
+pub(crate) type UndoSpec = (Undo, Option<b::RetryPolicy>, u64, Option<Duration>);
+/// What a step call runs: its attempts, their heartbeat timeout, and its undo.
 pub(crate) struct StepSpec {
     pub(crate) body: StepBody,
+    pub(crate) heartbeat: Option<Duration>,
     pub(crate) undo: Option<UndoSpec>,
 }
 pub(crate) type Handler = Box<dyn FnMut(&b::Message) -> Result<(), Failure> + Send>;
@@ -50,6 +52,7 @@ pub(crate) struct PendingStep {
     pub(crate) name: String,
     pub(crate) key: String,
     pub(crate) max_attempts: u32,
+    pub(crate) heartbeat: Option<Duration>,
 }
 
 #[derive(Default)]
@@ -72,9 +75,12 @@ struct State {
     waits: Vec<(u64, Predicate)>,
     /// A core error met by a call of the code: the replay cannot go on.
     fatal: Option<String>,
-    /// A call the history does not answer: the core recorded the run's failure, so the code stops
-    /// and every later call fails the same way.
+    /// A call the history does not answer: the code stops, every later call fails the same way,
+    /// and the core blocks the run, recording nothing.
     diverged: Option<String>,
+    /// The core ended the run itself, past a history limit: the code stops, and its end is the
+    /// core's.
+    core_ended: bool,
     /// A failure outside the code's reach, a handler's: the run fails with it.
     code_failure: Option<Failure>,
     /// The core's details of each `StepFailed` it resolved a step with, by the failure and its
@@ -94,6 +100,8 @@ pub(crate) struct Shared {
     input: Vec<u8>,
     /// The timeout of the steps and undos that set none: the workflow's, else the worker's.
     step_timeout: std::time::Duration,
+    /// The workflow's heartbeat timeout, for the steps that set none.
+    heartbeat_timeout: Option<Duration>,
     /// Whether the replay walked the whole recorded history, so that the code's logs are written
     /// (I-14): set from each answer of the run machine.
     live: AtomicBool,
@@ -107,9 +115,10 @@ impl Shared {
         chain: String,
         input: Vec<u8>,
         step_timeout: std::time::Duration,
+        heartbeat_timeout: Option<Duration>,
     ) -> Arc<Self> {
         let run = run_input.run.clone();
-        // § b1cj6wtk9.a@bx0rm
+        // § b1cj6wtk9.a@7s4xv
         let line = (run_input.start.as_ref())
             .and_then(|start| start.line.clone())
             .unwrap_or_else(|| run.clone());
@@ -125,6 +134,7 @@ impl Shared {
             waits: Vec::new(),
             fatal: None,
             diverged: None,
+            core_ended: false,
             code_failure: None,
             step_failures: Vec::new(),
         };
@@ -136,6 +146,7 @@ impl Shared {
             chain,
             input,
             step_timeout,
+            heartbeat_timeout,
             live: AtomicBool::new(run_input.history.is_empty()),
         })
     }
@@ -150,6 +161,10 @@ impl Shared {
 
     pub(crate) fn step_timeout(&self) -> std::time::Duration {
         self.step_timeout
+    }
+
+    pub(crate) fn heartbeat_timeout(&self) -> Option<Duration> {
+        self.heartbeat_timeout
     }
 
     pub(crate) fn live(&self) -> bool {
@@ -196,11 +211,16 @@ impl Shared {
                 | Call::Cancel(_)
                 | Call::Publish(_)
                 | Call::Iterate(_)
+                | Call::Patched(_)
         );
         let step = matches!(call, Call::Step(_));
         let mut state = self.lock();
         if let Some(message) = &state.diverged {
             return Err(Error::NonDeterminism(message.clone()));
+        }
+        if state.core_ended {
+            // § vkpvtd54g.a@7v21t
+            return Err(history_too_large());
         }
         let answer =
             state
@@ -229,10 +249,18 @@ impl Shared {
             Err(e @ Error::ValueTooLarge { .. }) if named => Err(e),
             Err(Error::NonDeterminism(message)) => {
                 let message = format!("{message}; {NEW_VERSION}");
-                tracing::warn!(run = self.run, "{message}");
                 state.diverged = Some(message.clone());
                 state.waits.clear();
                 Err(Error::NonDeterminism(message))
+            }
+            Err(Error::Core {
+                kind: ErrorKind::Ended,
+                ..
+            }) => {
+                // § vkpvtd54g.a@wvatt
+                state.core_ended = true;
+                state.waits.clear();
+                Err(history_too_large())
             }
             Err(e) => {
                 state.fatal.get_or_insert_with(|| e.to_string());
@@ -259,6 +287,7 @@ impl Shared {
                 name,
                 key,
                 max_attempts,
+                heartbeat: spec.heartbeat,
             };
             state.steps.insert(id, pending);
             if let Some(undo) = spec.undo {
@@ -284,9 +313,19 @@ impl Shared {
         self.lock().fatal.clone()
     }
 
-    /// Whether a call of the code diverged from the history, which ended the run (I-5).
+    /// Whether a call of the code diverged from the history, which blocks the run (I-5).
     pub(crate) fn diverged(&self) -> bool {
         self.lock().diverged.is_some()
+    }
+
+    /// Whether the core ended the run at a call of the code, past a limit of its history.
+    pub(crate) fn core_ended(&self) -> bool {
+        self.lock().core_ended
+    }
+
+    /// The `NonDeterminism` message of the call that diverged.
+    pub(crate) fn divergence(&self) -> Option<String> {
+        self.lock().diverged.clone()
     }
 
     pub(crate) fn fail_code(&self, f: Failure) {
@@ -335,7 +374,7 @@ impl Shared {
 
     /// Tells the run machine of every wait whose predicate now holds.
     pub(crate) fn evaluate_waits(&self) -> Result<()> {
-        // § k3zma9hjs.a@hyzts
+        // § k3zma9hjs.a@987d3
         let waits = std::mem::take(&mut self.lock().waits);
         let (held, pending): (Vec<_>, Vec<_>) = waits.into_iter().partition(|(_, p)| p());
         let mut state = self.lock();
@@ -398,6 +437,10 @@ impl Shared {
             .step_ended(call, attempt, outcome, charges, self.now())
     }
 
+    pub(crate) fn claimed(&self) -> Result<()> {
+        self.lock().machine.claimed()
+    }
+
     pub(crate) fn stored(&self, result: b::OpResult) -> Result<()> {
         self.lock().machine.stored(result)
     }
@@ -412,6 +455,12 @@ impl Shared {
         next.next
             .ok_or_else(|| Error::Protocol("empty next".into()))
     }
+}
+
+/// What a call raises once the core ended the run past a limit of its history, whose details are
+/// in the end it records.
+fn history_too_large() -> Error {
+    Error::HistoryTooLarge("the run passed a limit of its history".into())
 }
 
 /// A call of the code, made when first polled: a pending call waits for its `resolve`.
@@ -435,14 +484,15 @@ const LONGEST_MS: u64 = (1 << 53) - 1;
 /// `InvalidArgument` for a call carrying a duration past `LONGEST_MS`.
 fn check_durations(call: &b::call::Call) -> Result<()> {
     use b::call::Call;
-    // § b60bm4szk@kk5w0
+    // § b60bm4szk@r9j6k
     let durations: Vec<u64> = match call {
         Call::SleepMs(ms) => vec![*ms],
         Call::Wait(w) => w.timeout_ms.into_iter().collect(),
         Call::ChainResult(r) => r.timeout_ms.into_iter().collect(),
         Call::Step(s) => (s.options.iter())
             .flat_map(|o| {
-                let retry = o.retry.iter().flat_map(|r| [r.initial_ms, r.max_ms]);
+                let retry = (o.retry.iter())
+                    .flat_map(|r| [r.initial_ms, r.max_ms].into_iter().chain(r.deadline_ms));
                 o.timeout_ms.into_iter().chain(retry)
             })
             .collect(),

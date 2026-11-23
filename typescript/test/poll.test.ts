@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as s from "../src/mod.ts";
-import { withEnv } from "./testing_helpers.ts";
+import { blockedIn, withEnv } from "./testing_helpers.ts";
 
 let pokes = 0;
 const service = { preset: "service" } as const;
@@ -104,10 +104,9 @@ for (const [every, timeout, message] of [
     polled(async (env) => {
       await using _worker = env.worker([poller], service);
       const run = await env.start(poller, { n: 1, every, timeout });
-      await assert.rejects(
-        run.result(),
-        (e) => e instanceof s.RunFailed && message.test(e.message),
-      );
+      const error = await blockedIn(env, poller, run);
+      assert.equal(error.type, "InvalidArgument");
+      assert.match(error.message, message);
     }),
   );
 }

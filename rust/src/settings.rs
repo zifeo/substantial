@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::error::{Error, Result};
 use crate::proto::boundary::v1 as b;
-use crate::time::{days, hours, millis, minutes, seconds};
+use crate::time::{days, minutes, seconds};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
@@ -41,31 +41,19 @@ impl StoreRetry {
     }
 }
 
-/// Refuses a retention, how long a run is kept after its chain's last run ends (I-16), under `min`
-/// or over 100 years.
-pub(crate) fn check_retention(retention: Duration, min: Duration, what: &str) -> Result<()> {
-    // § pn928919v@vy04e
-    if retention < min {
+/// Refuses a retention, how many whole days an ended run is kept (I-16), under 1 or over 36,500.
+pub(crate) fn check_retention(days: u32, what: &str) -> Result<()> {
+    // § pnctq6tx8@mt16z
+    if !(1..=RETENTION_MAX_DAYS).contains(&days) {
         return Err(Error::ConfigError(format!(
-            "{what} must be at least {} ms, not {} ms",
-            millis(min),
-            retention.as_millis()
-        )));
-    }
-    if retention > RETENTION_MAX {
-        return Err(Error::ConfigError(format!(
-            "{what} must be at most {} ms, not {} ms",
-            millis(RETENTION_MAX),
-            retention.as_millis()
+            "{what} must be whole days from 1 to {RETENTION_MAX_DAYS}, not {days}"
         )));
     }
     Ok(())
 }
 
-pub(crate) fn retention_proto(retention: Duration) -> b::Retention {
-    b::Retention {
-        ms: millis(retention),
-    }
+pub(crate) fn retention_proto(days: u32) -> b::Retention {
+    b::Retention { days }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +62,7 @@ pub(crate) struct ContinueAsNewAfter {
     pub(crate) bytes: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Settings {
     pub(crate) concurrency: u32,
     pub(crate) commit_every: Duration,
@@ -85,14 +73,25 @@ pub(crate) struct Settings {
     pub(crate) wait: Duration,
     pub(crate) due_page: u32,
     pub(crate) due_pages: u32,
-    pub(crate) snapshot_every: u64,
     pub(crate) continue_as_new_after: ContinueAsNewAfter,
     pub(crate) dedup_window: Duration,
     pub(crate) step_timeout: Duration,
-    pub(crate) retention: Duration,
-    pub(crate) tombstone: Duration,
-    pub(crate) retention_min: Duration,
-    pub(crate) recheck: Duration,
+    /// Whole days.
+    pub(crate) retention: u32,
+    pub(crate) blocked_initial: Duration,
+    pub(crate) blocked_max: Duration,
+    pub(crate) blocked_multiplier: f64,
+    pub(crate) limits: Limits,
+}
+
+/// A run's history limits: passing one ends it failed with `HistoryTooLarge`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Limits {
+    pub(crate) history_bytes: u64,
+    pub(crate) history_events: u64,
+    pub(crate) replay_inbox: u64,
+    pub(crate) seen: u64,
+    pub(crate) warn_percent: u32,
 }
 
 /// The settings a worker takes; the others keep their preset value, set only by the tests.
@@ -108,15 +107,9 @@ pub(crate) const PUBLIC: [&str; 7] = [
 ];
 // § end yxy5pzfkp
 
-/// The least `retention` of the presets, which a `result` wait follows its chain again within
-/// half of (I-17).
-// § one y025f8qen.c@c23wa
-pub(crate) const RETENTION_MIN: Duration = hours(1);
-
-/// The longest retention, 100 years. A collection's due key names its year in 4 digits, which far
-/// longer retentions would pass.
-// § one pn928919v@12fzf
-pub(crate) const RETENTION_MAX: Duration = days(36_500);
+/// The longest retention, 100 years of days, the longest expiry a store write carries.
+// § one pnctq6tx8@qp8yd
+pub(crate) const RETENTION_MAX_DAYS: u32 = crate::store::EXPIRY_MAX_DAYS;
 
 /// The retries of every store (I-26).
 // § zemxe46k3@nr61b
@@ -140,7 +133,7 @@ impl Settings {
             commit_every: Duration::ZERO,
             shutdown_grace: seconds(if service { 25 } else { 5 }),
             claim_ttl: seconds(30),
-            // § one ry26kkc7v.b@40z0h
+            // § one ry26kkc7v.b@7pmab
             claim_skew: seconds(5),
             max_idle: match (service, waiting_store) {
                 (false, _) => seconds(1),
@@ -151,19 +144,31 @@ impl Settings {
             // § one ry26kkc7v.e@ej9at
             due_page: 1000,
             due_pages: 10,
-            snapshot_every: 64,
             continue_as_new_after: ContinueAsNewAfter {
                 segments: 1000,
                 bytes: 8 * MIB,
             },
-            // § one ry26kkc7v.c@qxwxx
+            // § one ry26kkc7v.c@f2qv7
             dedup_window: days(7),
             step_timeout: minutes(5),
-            retention: days(30),
-            // § one ry26kkc7v.d@4h0c1
-            tombstone: days(7),
-            retention_min: RETENTION_MIN,
-            recheck: days(1),
+            retention: 30,
+            // § ksmvx2mfk@h9z2d
+            blocked_initial: seconds(if service { 10 } else { 1 }),
+            blocked_max: minutes(if service { 10 } else { 1 }),
+            blocked_multiplier: 2.0,
+            // § end ksmvx2mfk
+            limits: Limits {
+                // § one ry26kkc7v.f@ntwc9
+                history_bytes: 128 * MIB,
+                // § one ry26kkc7v.g@hk2cq
+                history_events: 100_000,
+                // § one ry26kkc7v.h@phffa
+                replay_inbox: 10_000,
+                // § one ry26kkc7v.i@ew8t2
+                seen: 100_000,
+                // § one ry26kkc7v.j@k2py7
+                warn_percent: 80,
+            },
         }
     }
 
@@ -182,7 +187,7 @@ impl Settings {
     ///
     /// Durations take a unit (`100ms`, `5s`, `10min`, `1h`, `7d`), sizes too (`64KiB`, `8MiB`);
     /// `continue_as_new_after` is `segments,size`, or `0` to compress at every boundary;
-    /// `retention` a duration.
+    /// `retention` whole days (`30d`).
     pub(crate) fn apply(&mut self, name: &str, value: &str) -> Result<()> {
         let invalid = |e: Error| match e {
             Error::ConfigError(message) => Error::ConfigError(format!("setting {name}: {message}")),
@@ -198,7 +203,6 @@ impl Settings {
             "wait" => self.wait = duration(value).map_err(invalid)?,
             "due_page" => self.due_page = count(value).map_err(invalid)?,
             "due_pages" => self.due_pages = count(value).map_err(invalid)?,
-            "snapshot_every" => self.snapshot_every = count(value).map_err(invalid)?,
             "continue_as_new_after" => {
                 self.continue_as_new_after = match value.split_once(',') {
                     None if value.trim() == "0" => ContinueAsNewAfter {
@@ -214,10 +218,20 @@ impl Settings {
             }
             "dedup_window" => self.dedup_window = duration(value).map_err(invalid)?,
             "step_timeout" => self.step_timeout = duration(value).map_err(invalid)?,
-            "retention" => self.retention = duration(value).map_err(invalid)?,
-            "tombstone" => self.tombstone = duration(value).map_err(invalid)?,
-            "retention_min" => self.retention_min = duration(value).map_err(invalid)?,
-            "recheck" => self.recheck = duration(value).map_err(invalid)?,
+            "retention" => self.retention = whole_days(value).map_err(invalid)?,
+            "blocked_initial" => self.blocked_initial = duration(value).map_err(invalid)?,
+            "blocked_max" => self.blocked_max = duration(value).map_err(invalid)?,
+            "blocked_multiplier" => {
+                self.blocked_multiplier = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| invalid(parse_error(value, "a number")))?
+            }
+            "max_history_bytes" => self.limits.history_bytes = size(value).map_err(invalid)?,
+            "max_history_events" => self.limits.history_events = count(value).map_err(invalid)?,
+            "max_replay_inbox" => self.limits.replay_inbox = count(value).map_err(invalid)?,
+            "max_seen" => self.limits.seen = count(value).map_err(invalid)?,
+            "history_warn_percent" => self.limits.warn_percent = count(value).map_err(invalid)?,
             _ => return Err(unknown(&[name])),
         }
         Ok(())
@@ -242,13 +256,29 @@ impl Settings {
         if self.step_timeout.is_zero() {
             return invalid("step_timeout");
         }
-        if self.snapshot_every == 0 {
-            return invalid("snapshot_every");
+        check_retention(self.retention, "retention")?;
+        if self.blocked_initial.is_zero() || self.blocked_max < self.blocked_initial {
+            return Err(Error::ConfigError(format!(
+                "blocked_initial must be positive and at most blocked_max: {:?} and {:?}",
+                self.blocked_initial, self.blocked_max
+            )));
         }
-        if self.tombstone.is_zero() || self.retention_min.is_zero() || self.recheck.is_zero() {
-            return invalid("tombstone, retention_min and recheck");
+        if !self.blocked_multiplier.is_finite() || self.blocked_multiplier < 1.0 {
+            return Err(Error::ConfigError(format!(
+                "blocked_multiplier must be at least 1, not {}",
+                self.blocked_multiplier
+            )));
         }
-        check_retention(self.retention, self.retention_min, "retention")?;
+        let l = &self.limits;
+        if l.history_bytes == 0 || l.history_events == 0 || l.replay_inbox == 0 || l.seen == 0 {
+            return invalid("max_history_bytes, max_history_events, max_replay_inbox and max_seen");
+        }
+        if !(1..=100).contains(&l.warn_percent) {
+            return Err(Error::ConfigError(format!(
+                "history_warn_percent must be from 1 to 100, not {}",
+                l.warn_percent
+            )));
+        }
         if self.wait.subsec_nanos() != 0 || !(1..=20).contains(&self.wait.as_secs()) {
             return Err(Error::ConfigError(
                 "wait must be whole seconds from 1 s to 20 s".into(),
@@ -303,6 +333,13 @@ fn duration(value: &str) -> Result<Duration> {
         .ok_or_else(|| parse_error(value, "a duration within u64 milliseconds"))
 }
 
+fn whole_days(value: &str) -> Result<u32> {
+    match split_unit(value) {
+        (n, "d") => n.parse().map_err(|_| parse_error(value, "whole days")),
+        _ => Err(parse_error(value, "whole days with the unit d (30d)")),
+    }
+}
+
 fn size(value: &str) -> Result<u64> {
     let (n, unit) = split_unit(value);
     let n: u64 = n.parse().map_err(|_| parse_error(value, "a size"))?;
@@ -334,8 +371,16 @@ mod tests {
             (script.step_timeout, service.step_timeout),
             (minutes(5), minutes(5))
         );
-        assert_eq!(script.retention, days(30));
-        assert_eq!(service.retention, days(30));
+        assert_eq!((script.retention, service.retention), (30, 30));
+        assert_eq!(
+            (script.blocked_initial, service.blocked_initial),
+            (seconds(1), seconds(10))
+        );
+        assert_eq!(
+            (script.blocked_max, service.blocked_max),
+            (minutes(1), minutes(10))
+        );
+        assert_eq!(script.limits, service.limits);
     }
 
     #[test]
@@ -371,10 +416,14 @@ mod tests {
             Err(Error::ConfigError(_))
         ));
         s.set("retention", "90d").unwrap();
-        assert_eq!(s.retention, days(90));
+        assert_eq!(s.retention, 90);
         assert_eq!(
-            s.set("retention", "59min").unwrap_err().to_string(),
-            "config error: retention must be at least 3600000 ms, not 3540000 ms"
+            s.set("retention", "24h").unwrap_err().to_string(),
+            r#"config error: setting retention: "24h" is not whole days with the unit d (30d)"#
+        );
+        assert_eq!(
+            s.set("retention", "0d").unwrap_err().to_string(),
+            "config error: retention must be whole days from 1 to 36500, not 0"
         );
         assert!(matches!(
             "daemon".parse::<Preset>(),

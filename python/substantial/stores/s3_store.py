@@ -1,13 +1,15 @@
-"""The S3 adapter: four S3 requests sent with aiohttp and signed with botocore, both installed by
-the `s3` extra."""
+"""The S3 adapter: S3 requests sent with aiohttp and signed with botocore, both installed by the
+`s3` extra."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import contextlib
+import json
 import ssl
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Any
@@ -24,7 +26,20 @@ from yarl import URL
 from substantial.errors import ConfigError
 from substantial.stores import retry
 from substantial.stores.attempts import sent
-from substantial.stores.base import Capabilities, Create, Listing, ListWait, refuse_wait
+from substantial.stores.base import (
+    Capabilities,
+    Cas,
+    Create,
+    Created,
+    Listing,
+    ListWait,
+    Object,
+    StoreFailure,
+    Written,
+    check_all_days,
+    check_days,
+    refuse_wait,
+)
 from substantial.stores.credentials import (
     REFRESH_BEFORE,
     Credentials,
@@ -42,6 +57,8 @@ from substantial.stores.s3 import (
     S3Location,
     wait_headers,
 )
+
+RETENTION_TAG = "substantial-retention"
 
 # Below the 20 s after which S3 closes an idle connection, so a kept connection is not reused as
 # the server closes it.
@@ -136,13 +153,79 @@ def _encode(value: str, *, keep_slash: bool = False) -> str:
     return quote(value, safe="-_.~/" if keep_slash else "-_.~")
 
 
+def _tagging(expiry: int | None) -> dict[str, str]:
+    """The tag of a write's expiry, which a lifecycle rule of the bucket expires."""
+    # § c4fyc3wyk@csgxj
+    return {} if expiry is None else {"x-amz-tagging": f"{RETENTION_TAG}={expiry}d"}
+
+
+def _expires(rule: ET.Element, prefix: str, days: int) -> bool:
+    """Whether `rule` expires, after `days`, the keys under `prefix` tagged with that expiry."""
+    # § cfdckf61n@15zz7
+    fields = {_local(e.tag): e for e in rule}
+    value = f"{days}d"
+
+    def tagged(tags: list[ET.Element]) -> bool:
+        if len(tags) != 1:
+            return False
+        tag = {_local(e.tag): (e.text or "") for e in tags[0]}
+        return tag.get("Key") == RETENTION_TAG and tag.get("Value") == value
+
+    def children(element: ET.Element, name: str) -> list[ET.Element]:
+        return [e for e in element if _local(e.tag) == name]
+
+    sized = ("ObjectSizeGreaterThan", "ObjectSizeLessThan")
+    filtered = False
+    found = fields.get("Filter")
+    if found is not None:
+        parts = {_local(e.tag): e for e in found}
+        both = parts.get("And")
+        if both is not None and "Tag" not in parts:
+            inner = {_local(e.tag): e for e in both}
+            filtered = (
+                not any(s in inner for s in sized)
+                and prefix.startswith(getattr(inner.get("Prefix"), "text", None) or "")
+                and tagged(children(both, "Tag"))
+            )
+        elif both is None and "Tag" in parts:
+            filtered = tagged(children(found, "Tag"))
+    expiration = fields.get("Expiration")
+    after = None if expiration is None else {_local(e.tag): e.text for e in expiration}.get("Days")
+    status = getattr(fields.get("Status"), "text", None)
+    return filtered and status == "Enabled" and after == str(days)
+
+
+def _missing_rules(bucket: str, prefix: str, missing: list[int]) -> str:
+    """Why a store would never expire the keys of `missing` expiries, with the rules to add as
+    JSON."""
+    rules = [
+        {
+            "Expiration": {"Days": d},
+            "Filter": {
+                "And": {"Prefix": prefix, "Tags": [{"Key": RETENTION_TAG, "Value": f"{d}d"}]}
+            },
+            "ID": f"substantial-expire-{d}d",
+            "Status": "Enabled",
+        }
+        for d in missing
+    ]
+    tags = ", ".join(f"{d}d" for d in missing)
+    shown = json.dumps({"Rules": rules}, separators=(",", ":"))
+    return (
+        f'the bucket "{bucket}" has no lifecycle rule expiring the keys under "{prefix}" tagged'
+        f" {RETENTION_TAG}={tags} after as many days, so they would never expire: add these rules"
+        f" to its lifecycle configuration, which needs the permission"
+        f" s3:PutLifecycleConfiguration: {shown}"
+    )
+
+
 class S3Store:
     """`s3://<endpoint>/<bucket>/<ns>?region=<r>`: one object per key under the prefix `<ns>/`,
     created with `If-None-Match: *`. `h3://` is the same adapter, its listings declared able
     to wait; `s3+http://` and `h3+http://` reach the endpoint over plain HTTP.
 
-    On `h3://`, a listing given a `wait` sends it as `x-substantial-wait-seconds` and
-    `x-substantial-wait-etag`, and answers the `x-substantial-listing-etag` the store returns.
+    On `h3://`, a listing given a `wait` sends it as `x-herald-wait-seconds` and
+    `x-herald-wait-etag`, and answers the `x-herald-listing-etag` the store returns.
 
     Requests address the bucket in the path, sign their body's SHA-256 and carry no checksum
     header. Nothing retries or follows a redirect but `STORE_RETRY`, and no AWS variable or file
@@ -247,12 +330,17 @@ class S3Store:
             raise _Refusal(what, response.status, answer)
         return response.headers, answer
 
-    async def _put(self, key: str, data: bytes) -> Create:
-        # § gvqb04830@vdy6f
+    async def _put(self, key: str, data: bytes, expiry: int | None) -> Create:
+        # § gvqb04830@ezyx4
         what = f"create {key}"
         try:
-            await self._send(
-                what, "PUT", key, body=data, headers={"If-None-Match": "*"}, create=True
+            headers, _ = await self._send(
+                what,
+                "PUT",
+                key,
+                body=data,
+                headers={"If-None-Match": "*", **_tagging(expiry)},
+                create=True,
             )
         except _Refusal as r:
             if r.status == 412:
@@ -263,22 +351,81 @@ class S3Store:
             if r.status >= 500 or r.status == 408:
                 raise Ambiguous(r.message) from None
             raise Permanent(r.message) from None
-        return "created"
+        written = headers.get("ETag")
+        if written is None:
+            # An answer without its ETag is read back, as one lost.
+            raise Ambiguous(f"{what}: created without an ETag in the answer")
+        return Created(written)
 
-    async def _read(self, key: str) -> bytes | None:
+    async def _put_if_match(self, key: str, data: bytes, etag: str, expiry: int | None) -> Cas:
+        # § c4fyc3wyk@mv9k6
+        what = f"cas {key}"
         try:
-            _, answer = await self._send(f"get {key}", "GET", key)
+            headers, _ = await self._send(
+                what,
+                "PUT",
+                key,
+                body=data,
+                headers={"If-Match": etag, **_tagging(expiry)},
+                create=True,
+            )
+        except _Refusal as r:
+            # § c4fyc3wyk.a@qan6m
+            if r.status == 412 or (r.status == 404 and r.code == "NoSuchKey"):
+                return "mismatch"
+            if r.status in (409, 429):
+                raise Transient(r.message) from None
+            if r.status >= 500 or r.status == 408:
+                raise Ambiguous(r.message) from None
+            raise Permanent(r.message) from None
+            # § end c4fyc3wyk.a
+        # § one c4fyc3wyk.b@xanjh
+        written = headers.get("ETag")
+        if written is None:
+            raise Ambiguous(f"{what}: written without an ETag in the answer")
+        return Written(written)
+
+    async def _read(self, key: str) -> Object | None:
+        try:
+            headers, answer = await self._send(f"get {key}", "GET", key)
         except _Refusal as r:
             if r.status == 404 and r.code == "NoSuchKey":
-                # § gvqb04830.a@b3ypm
+                # § gvqb04830.a@akn5e
                 return None
             raise _status_fault(r) from None
-        return answer
+        etag = headers.get("ETag")
+        if etag is None:
+            raise Permanent(f"get {key}: answered without an ETag")
+        return Object(answer, etag)
+
+    async def _lifecycle(self) -> list[ET.Element]:
+        """The bucket's lifecycle rules, none when it has no configuration."""
+        bucket = self._location.bucket
+        try:
+            _, body = await self._send(
+                f"lifecycle of {bucket}", "GET", None, query={"lifecycle": ""}
+            )
+        except _Refusal as r:
+            if r.code == "NoSuchLifecycleConfiguration":
+                return []
+            # § cfdckf61n.a@zvctc
+            if r.status == 403:
+                raise Permanent(
+                    f"reading the lifecycle rules of the bucket {bucket!r} needs the permission"
+                    f" s3:GetLifecycleConfiguration: {r.message}"
+                ) from None
+            # § end cfdckf61n.a
+            raise _status_fault(r) from None
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError as e:
+            raise Transient(f"lifecycle of {bucket}: {e}") from e
+        return [e for e in root if _local(e.tag) == "Rule"]
 
     async def _list_once(
         self, prefix: str, start_after: str | None, max_keys: int, wait: ListWait | None
     ) -> Listing:
-        # § dfd6vt90h.c@dfpyf
+        # § dfd6vt90h.c@5vkxe
         keys: list[str] = []
         etag: str | None = None
         after = self._full(start_after) if start_after is not None else None
@@ -324,7 +471,7 @@ class S3Store:
             sent()
             after = self._full(keys[-1])
         if wait is not None and not etag:
-            # § gvqb04830.c@28qkr
+            # § gvqb04830.d@0qy4c
             raise Permanent(f"a waiting listing of {prefix} answered without {LISTING_ETAG}")
         return Listing(keys=keys[:max_keys], etag=etag)
 
@@ -338,15 +485,39 @@ class S3Store:
             raise _status_fault(r) from None
 
     async def open(self) -> None:
+        # § x79k6r9e5@dx3mm
         pass
 
-    async def create(self, key: str, data: bytes) -> Create:
+    async def create(self, key: str, data: bytes, *, expiry: int | None) -> Create:
+        check_days(expiry)
         data = bytes(data)
+
         return await retry.create(
-            STORE_RETRY, data, lambda: self._put(key, data), lambda: self._read(key)
+            STORE_RETRY, data, lambda: self._put(key, data, expiry), lambda: self._read(key)
         )
 
-    async def get(self, key: str) -> bytes | None:
+    async def cas(self, key: str, data: bytes, etag: str, *, expiry: int | None) -> Cas:
+        check_days(expiry)
+        data = bytes(data)
+        return await retry.cas(
+            STORE_RETRY,
+            data,
+            etag,
+            lambda: self._put_if_match(key, data, etag, expiry),
+            lambda: self._read(key),
+        )
+
+    async def check_expiry(self, days: Sequence[int]) -> None:
+        check_all_days(days)
+        try:
+            rules = await retry.with_retry(STORE_RETRY, self._lifecycle)
+        except StoreFailure as e:
+            raise ConfigError(e.message) from None
+        missing = sorted({d for d in days if not any(_expires(r, self._prefix, d) for r in rules)})
+        if missing:
+            raise ConfigError(_missing_rules(self._location.bucket, self._prefix, missing))
+
+    async def get(self, key: str) -> Object | None:
         return await retry.with_retry(STORE_RETRY, lambda: self._read(key))
 
     async def list(

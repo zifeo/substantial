@@ -369,7 +369,7 @@ function published(st: State): Record<string, unknown> {
 const KEYS = ["backfill", "cron", "revision", "tz"];
 
 function received(value: unknown): [number, Cron | null, number] {
-  // § ey8zhz0kq.c@h81nv
+  // § ey8zhz0kq.g@0b166
   const keys =
     typeof value === "object" && value !== null && !Array.isArray(value)
       ? Object.keys(value).sort()
@@ -409,7 +409,7 @@ async function apply(c: Context, st: State, configs: unknown[]): Promise<void> {
   let highest = all[0] as [number, Cron | null, number];
   for (const r of all) if (r[0] > highest[0]) highest = r;
   // § end ey8zhz0kq.e
-  // § ey8zhz0kq.f@qqdyv
+  // § ey8zhz0kq.h@61wd7
   const known = new Map<number, string>();
   if (st.revision > 0) known.set(st.revision, flat([st.revision, st.cron, st.tz, st.backfill]));
   for (const r of all) {
@@ -420,7 +420,7 @@ async function apply(c: Context, st: State, configs: unknown[]): Promise<void> {
     }
     known.set(r[0], text);
   }
-  // § end ey8zhz0kq.f
+  // § end ey8zhz0kq.h
   const [revision, cron, backfill] = highest;
   // § one ey8zhz0kq@x7r0h
   if (revision <= st.revision) return;
@@ -444,26 +444,30 @@ async function apply(c: Context, st: State, configs: unknown[]): Promise<void> {
 
 /** The loop of `c.schedule()`: its state is the loop's, its config the last `schedule` message
  * of a higher revision. */
-export async function* schedule(c: Context, shared: Shared): AsyncGenerator<Date, void, undefined> {
+export async function* schedule(
+  c: Context,
+  shared: Shared,
+  upgrade: boolean,
+): AsyncGenerator<Date, void, undefined> {
   const configs: unknown[] = [];
   c.handle(MESSAGE, (v) => {
     configs.push(v);
   });
-  for await (const st of c.iterate(initial())) {
+  for await (const st of c.iterate(initial(), { upgrade })) {
     while (st.pending.length === 0) {
       if (configs.length > 0) {
         await apply(c, st, configs);
         continue;
       }
       if (st.cron === null) {
-        // § vnykycs34.c@7t12w
+        // § vnykycs34.c@5rccs
         await c.waitUntil(() => configs.length > 0);
         continue;
       }
       const now = (await c.now()).getTime();
       const args = [st.cron, st.tz, st.after, iso(now), st.backfill];
       const before = st.next;
-      // § vnykycs34.a@et0k1
+      // § vnykycs34.a@tnfxs
       const fires = await callStep<Plan>(
         shared,
         NEXT,
@@ -487,16 +491,16 @@ export async function* schedule(c: Context, shared: Shared): AsyncGenerator<Date
       }
       st.next = fires.next;
       if (st.pending.length === 0) {
-        // § one ey8zhz0kq.d@4ffmp
+        // § one ey8zhz0kq.d@zyn25
         if (st.next !== before) c.publish(MESSAGE, published(st));
         const wait = new Duration(parse(st.next) - now);
         await c.waitUntil(() => configs.length > 0, { timeout: wait });
       }
     }
-    // § vnykycs34@jddt1
+    // § vnykycs34@07p2h
     const at = st.pending.shift() as string;
     st.last = at;
-    // § ey8zhz0kq.d@1zwfk
+    // § ey8zhz0kq.d@f2vkg
     st.recent = [...st.recent, at].slice(-RECENT);
     c.publish(MESSAGE, published(st));
     // § end ey8zhz0kq.d

@@ -10,7 +10,7 @@ async function runUndos(shared: Shared, undos: run.Called_Undos): Promise<void> 
   for (const u of undos.undos) {
     const found = shared.undos.get(u.call);
     if (found === undefined) throw shared.protocol(`undo of call ${u.call} without an undo`);
-    // § a5c1mfs8d.a@78kxw
+    // § a5c1mfs8d.a@dkt3y
     const options = create(run.StepOptionsSchema, {
       occurrence: u.occurrence,
       timeoutMs: found.timeoutMs,
@@ -18,9 +18,10 @@ async function runUndos(shared: Shared, undos: run.Called_Undos): Promise<void> 
     });
     // § end a5c1mfs8d.a
     const call = makeCall({ case: "step", value: { name: u.name, options } });
-    // § one j5gf2r47g@zqbj8
+    // § one j5gf2r47g@7a6p6
     try {
-      await shared.future(call, decodeValue, { body: found.body(decodeValue(u.value)) });
+      const body = found.body(decodeValue(u.value));
+      await shared.future(call, decodeValue, { body, heartbeatMs: found.heartbeatMs });
     } catch (e) {
       if (e instanceof StepFailed) throw new UndoFailed(u.name, e.failure);
       throw e;
@@ -29,10 +30,10 @@ async function runUndos(shared: Shared, undos: run.Called_Undos): Promise<void> 
 }
 
 export async function rollback(shared: Shared, reason: string): Promise<never> {
-  // § zjw5cess8@nn4dx
+  // § zjw5cess8@nkkjk
   const undos = shared.expect(makeCall({ case: "rollback", value: {} }), "undos");
   await runUndos(shared, undos);
-  // § one g039jvy6k.c@y6qsm
+  // § one dxgjekysz.c@sde8k
   throw new RolledBack(reason);
 }
 
@@ -52,7 +53,7 @@ export async function saga<T>(shared: Shared, fn: () => T | PromiseLike<T>): Pro
   // § one ctp0q370t.a@ar9am, ctp0q370t.b@jkf7s
   const failed = !settled.ok && !(settled.error instanceof ContinuedAsNew);
   const end = makeCall({ case: "sagaEnd", value: { saga: id, failed, parent } });
-  // § ctp0q370t@37te2
+  // § ctp0q370t@hxbxe
   if (failed) await runUndos(shared, shared.expect(end, "undos"));
   else shared.expect(end, "done");
   if (!settled.ok) throw settled.error;

@@ -12,6 +12,7 @@ import pytest
 
 from substantial import (
     Context,
+    Fail,
     NotInWorkflow,
     Permanent,
     Retry,
@@ -61,6 +62,10 @@ class Replayed:
         f = self._event("failed")
         return None if f is None else f.error
 
+    def blocked(self) -> layout.Failure | None:
+        """The failure the replay was blocked with, else None."""
+        return self.end.blocked if self.end.HasField("blocked") else None
+
 
 class Harness:
     """An in-memory stand-in for the agent machine: it wins or loses every commit and keeps the
@@ -94,7 +99,12 @@ class Harness:
             continue_as_new_after_segments=1000,
             continue_as_new_after_bytes=8 << 20,
             dedup_window_ms=86_400_000,
-            retention=run.Retention(ms=30 * 86_400_000),
+            retention=run.Retention(days=30),
+            max_history_bytes=128 << 20,
+            max_history_events=100_000,
+            max_replay_inbox=10_000,
+            max_seen=100_000,
+            history_warn_percent=80,
         )
         return run.RunInput(
             run="run-1",
@@ -115,7 +125,9 @@ class Harness:
         channel = Channel()
         clock = _Fixed(self.now)
         r = Replay(self.core, self.store, clock, events.put_nowait, self.step_timeout, NO_METERING)
-        task = asyncio.create_task(replay(r, self.workflow, self.run_input(), None, channel))
+        task = asyncio.create_task(
+            replay(r, "run-1", self.workflow, self.run_input(), None, channel)
+        )
         commits = []
         while True:
             event = await events.get()
@@ -283,13 +295,13 @@ async def test_parallel_steps_replay_the_same() -> None:
         return x + y
 
     h = Harness(parallel)
-    # § twravbm6m.d@nsxrc
+    # § rbwstdetg.d@2vp8z
     assert (await h.replay(1_000)).next_wake() == 2_000
     assert (await h.replay(2_000)).completed() == 3
     assert len(a_runs) + len(b_runs) == 2
 
 
-async def test_other_calls_than_the_history_fail_the_run() -> None:
+async def test_other_calls_than_the_history_block_the_run() -> None:
     _, renamed = counting("renamed", 1)
 
     @workflow
@@ -300,8 +312,12 @@ async def test_other_calls_than_the_history_fail_the_run() -> None:
     recorded = layout.Step(name="original", occurrence=0, attempt=1, value=json_value(b"1"))
     h.history.append(layout.Event(step=recorded))
     h.next_n = 1
-    failure = (await h.replay(1_000)).failed()
-    assert failure is not None and failure.type == "NonDeterminism", failure
+    replayed = await h.replay(1_000)
+    # § rbwstdetg@f5v6y
+    blocked = replayed.blocked()
+    assert blocked is not None and blocked.type == "NonDeterminism", replayed.end
+    assert replayed.commits == [], "nothing recorded"
+    # § end rbwstdetg
 
 
 async def test_a_lost_commit_drops_the_replay() -> None:
@@ -313,7 +329,7 @@ async def test_a_lost_commit_drops_the_replay() -> None:
 
     h = Harness(loser)
     replayed = await h.replay(1_000, won=False)
-    # § czkkbyhe0.a@qke86
+    # § rnx5b50bn.a@p6w6a
     assert replayed.end.WhichOneof("end") == "dropped"
     assert h.history == []
 
@@ -326,9 +342,11 @@ async def test_inputs_and_errors_of_the_code() -> None:
     async def typed(c: Context, x: int) -> int:
         if x < 0:
             raise Negative("x < 0")
+        if x == 0:
+            raise Fail("Zero", "x is 0")
         return x + 1
 
-    for data, failure in [
+    for data, blocked in [
         (b'{"x": 41}', None),
         (b'{"x": -1}', "Negative"),
         (b'{"y": 1}', "TypeError"),
@@ -336,10 +354,15 @@ async def test_inputs_and_errors_of_the_code() -> None:
         h = Harness(typed)
         h.input = data
         replayed = await h.replay(1_000)
-        if failure is None:
+        if blocked is None:
             assert replayed.completed() == 42
         else:
-            assert replayed.failed().type == failure
+            assert replayed.failed() is None and replayed.commits == []
+            assert replayed.blocked().type == blocked
+    h = Harness(typed)
+    h.input = b'{"x": 0}'
+    failed = (await h.replay(1_000)).failed()
+    assert (failed.type, failed.message) == ("Zero", "x is 0")
 
 
 async def test_synchronous_steps_run_in_a_thread_with_their_key() -> None:
@@ -371,4 +394,4 @@ async def test_steps_outside_a_workflow_and_steps_without_a_name_are_refused() -
     async def unnamed(c: Context) -> int:
         return await c.step(abs, -1)  # type: ignore[arg-type]
 
-    assert (await Harness(unnamed).replay(1_000)).failed().type == "InvalidArgument"
+    assert (await Harness(unnamed).replay(1_000)).blocked().type == "InvalidArgument"

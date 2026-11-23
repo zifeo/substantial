@@ -6,12 +6,11 @@ import {
   InvalidArgument,
   milliseconds,
   RunEnded,
-  RunFailed,
   RunNotFound,
   seconds,
   workflow,
 } from "../src/mod.ts";
-import { eachAdapter, eventually, LONG, script } from "./helpers.ts";
+import { blockedBy, eachAdapter, eventually, LONG, script } from "./helpers.ts";
 
 /** The names approved so far, kept up to date by a handler of "approve". */
 function approvals(c: Context): string[] {
@@ -116,7 +115,7 @@ eachAdapter("handlers bound together see past messages in arrival order", async 
   }
   await run.send("go");
   await using _ = script(sub, [ordered]);
-  // § n4zyj94mr@c6nsd
+  // § n4zyj94mr@92gzb
   assert.deepEqual(await run.result({ timeout: LONG }), {
     seen: ["add:1", "remove:1", "add:2", "remove:2"],
     adds: [1, 2],
@@ -139,7 +138,7 @@ eachAdapter("a wait returns false when its timeout passes", async (store) => {
   assert.deepEqual(await run.result({ timeout: LONG }), [false, true]);
 });
 
-eachAdapter("a message no handler can decode fails the run", async (store) => {
+eachAdapter("a message no handler can decode blocks the run", async (store) => {
   const asNumber = (value: unknown): number => {
     if (typeof value !== "number") throw new TypeError(`${JSON.stringify(value)} is not a number`);
     return value;
@@ -154,13 +153,11 @@ eachAdapter("a message no handler can decode fails the run", async (store) => {
   const run = await sub.start(typed);
   await run.send("n", 1);
   await run.send("n", "not a number");
-  const failed = await run.result({ timeout: LONG }).catch((e) => e);
-  assert.ok(failed instanceof RunFailed, String(failed));
-  assert.equal(failed.status, "failed");
-  assert.equal(failed.error.type, "MessageDecode", failed.error.message);
+  const error = await blockedBy(sub, typed, run);
+  assert.equal(error.type, "MessageDecode", error.message);
 });
 
-eachAdapter("a handler that throws fails the run", async (store) => {
+eachAdapter("a handler that throws blocks the run", async (store) => {
   const refusing = workflow("refusing", async (c: Context) => {
     c.handle("n", (n: number) => {
       if (n >= 10) throw new RangeError(`${n} is too large`);
@@ -171,14 +168,13 @@ eachAdapter("a handler that throws fails the run", async (store) => {
   await using _ = script(sub, [refusing]);
   const run = await sub.start(refusing);
   await run.send("n", 99);
-  const failed = await run.result({ timeout: LONG }).catch((e) => e);
-  assert.ok(failed instanceof RunFailed, String(failed));
-  assert.equal(failed.error.type, "MessageDecode", failed.error.message);
-  assert.match(failed.error.message, /99 is too large/);
+  const error = await blockedBy(sub, refusing, run);
+  assert.equal(error.type, "MessageDecode", error.message);
+  assert.match(error.message, /99 is too large/);
 });
 
 eachAdapter(
-  "a predicate that throws fails the run",
+  "a predicate that throws blocks the run",
   async (store) => {
     const broken = workflow("broken", async (c: Context) => {
       await c.waitUntil(() => {
@@ -187,10 +183,9 @@ eachAdapter(
     });
     const sub = await createOn(store);
     await using _ = script(sub, [broken]);
-    const failed = await (await sub.start(broken)).result({ timeout: LONG }).catch((e) => e);
-    assert.ok(failed instanceof RunFailed, String(failed));
-    assert.equal(failed.error.type, "RangeError");
-    assert.match(failed.error.message, /no way/);
+    const error = await blockedBy(sub, broken, await sub.start(broken));
+    assert.equal(error.type, "RangeError");
+    assert.match(error.message, /no way/);
   },
   ["memory"],
 );

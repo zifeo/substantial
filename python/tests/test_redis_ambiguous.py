@@ -1,12 +1,12 @@
-"""Ambiguous creates on Redis (I-26), injected by a proxy that drops a connection; only when
-`SUBSTANTIAL_REDIS_URL` names a standalone server (see `dev/redis.compose.yaml`)."""
+"""Ambiguous creates on Redis (I-26), injected by a proxy that drops a connection, on the
+standalone server `SUBSTANTIAL_REDIS_URL` names (see `dev/compose.yaml`)."""
 
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 
 import pytest
-from conftest import require_redis
+from conftest import kind, require_redis, value
 from redis.asyncio import Redis
 
 from substantial.stores import RedisLocation, StoreFailure, open_store, redis_store
@@ -97,11 +97,11 @@ async def test_an_unanswered_create_is_resolved_by_a_fenced_get(
     await store.open()
     before = await fence(admin, fence_key)
     proxy.drop(b"EVALSHA", forward=forward)
-    assert await store.create("runs/a/log/0", b"one") == "created"
+    assert kind(await store.create("runs/a/log/0", b"one", expiry=None)) == "created"
     assert proxy.dropped == 1
     assert await fence(admin, fence_key) == before + 1, "the get resolving it wrote the fence"
-    assert await store.get("runs/a/log/0") == b"one"
-    assert await store.create("runs/a/log/0", b"two") == "exists"
+    assert await value(store, "runs/a/log/0") == b"one"
+    assert await store.create("runs/a/log/0", b"two", expiry=None) == "exists"
     await store.close()
 
 
@@ -112,7 +112,7 @@ async def test_a_create_the_replicas_never_fsync_is_not_acknowledged(
     monkeypatch.setattr(redis_store, "WAITAOF_MS", 50)
     store = open_store(url.replace("replicas=0", "replicas=1"), None)
     with pytest.raises(StoreFailure, match=r"WAITAOF 1 1 answered \[1, 0\]"):
-        await store.create("runs/a/log/0", b"one")
+        await store.create("runs/a/log/0", b"one", expiry=None)
     landed = await admin.get(fence_key.replace(":f", ":o:runs/a/log/0"))
     assert landed == b"one", "it landed, never acknowledged"
     await store.close()
@@ -123,10 +123,10 @@ async def test_reads_and_deletes_answer_once_what_they_saw_is_durable(
 ) -> None:
     url, _, admin, fence_key = proxied
     store = open_store(url, None)
-    await store.create("runs/a/start", b"one")
+    await store.create("runs/a/start", b"one", expiry=None)
     before = await fence(admin, fence_key)
-    assert await store.get("runs/a/start") == b"one"
-    assert await store.get("runs/b/start") is None
+    assert await value(store, "runs/a/start") == b"one"
+    assert await value(store, "runs/b/start") is None
     assert (await store.list("runs/", start_after=None, max_keys=10, wait=None)).keys == [
         "runs/a/start"
     ]
@@ -138,7 +138,7 @@ async def test_reads_and_deletes_answer_once_what_they_saw_is_durable(
     short = r"WAITAOF 1 1 answered \[1, 0\]"
     for key in ("runs/a/start", "runs/b/start"):
         with pytest.raises(StoreFailure, match=short):
-            await unreplicated.get(key)
+            await value(unreplicated, key)
         with pytest.raises(StoreFailure, match=short):
             await unreplicated.list(key, start_after=None, max_keys=10, wait=None)
         with pytest.raises(StoreFailure, match=short):

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from substantial.stores.attempts import sent
-from substantial.stores.base import Create, StoreFailure
+from substantial.stores.base import Cas, Create, Created, Object, StoreFailure, Written
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ class _Backoff:
 
     async def next(self, error: str, *, sleep: bool) -> None:
         """Waits before the next attempt, or fails once every attempt is spent."""
-        # § zemxe46k3@5m0qy
+        # § zemxe46k3@nvp08
         if self.attempt >= self.policy.attempts:
             unit = "attempt" if self.attempt == 1 else "attempts"
             raise StoreFailure(f"{error} (after {self.attempt} {unit})")
@@ -68,7 +68,7 @@ class _Backoff:
 async def with_retry[T](
     policy: StoreRetry, op: Callable[[], Awaitable[T]], sleep: Sleep = asyncio.sleep
 ) -> T:
-    # § zemxe46k3@g92z6
+    # § zemxe46k3@4bz1s
     backoff = _Backoff(policy, sleep)
     while True:
         sent()
@@ -84,12 +84,12 @@ async def create(
     policy: StoreRetry,
     data: bytes,
     attempt: Callable[[], Awaitable[Create]],
-    get: Callable[[], Awaitable[bytes | None]],
+    get: Callable[[], Awaitable[Object | None]],
     sleep: Sleep = asyncio.sleep,
 ) -> Create:
     """A create that never assumes it won or lost: an ambiguous outcome is followed by a `get`,
-    the same bytes meaning "created", other bytes "exists", and a missing key creating again."""
-    # § pnvmmdmz4@rwe8j
+    the same bytes meaning created, other bytes "exists", and a missing key creating again."""
+    # § pnvmmdmz4@6rx1j
     backoff = _Backoff(policy, sleep)
     ambiguous = False
     # An earlier attempt left unanswered may have landed after the get, so a later "exists" is
@@ -106,7 +106,7 @@ async def create(
                 await backoff.next(str(e), sleep=True)
                 continue
             if stored is not None:
-                return "created" if stored == data else "exists"
+                return Created(stored.etag) if stored.data == data else "exists"
             ambiguous = False
         sent()
         try:
@@ -121,8 +121,58 @@ async def create(
             await backoff.next(str(e), sleep=False)
             continue
         if outcome == "exists" and was_ambiguous:
-            # § pnvmmdmz4.a@8eaqs
+            # § pnvmmdmz4.a@3d90k
             ambiguous = True
             await backoff.next("exists after an ambiguous create", sleep=False)
+            continue
+        return outcome
+
+
+async def cas(
+    policy: StoreRetry,
+    data: bytes,
+    etag: str,
+    attempt: Callable[[], Awaitable[Cas]],
+    get: Callable[[], Awaitable[Object | None]],
+    sleep: Sleep = asyncio.sleep,
+) -> Cas:
+    """A compare-and-set that never assumes it won or lost: an ambiguous outcome is followed by a
+    `get`, the same bytes meaning written, the ETag named still current sending it again, and
+    anything else "mismatch"."""
+    # § dqf0ythhp@8b6ze
+    backoff = _Backoff(policy, sleep)
+    ambiguous = False
+    was_ambiguous = False
+    while True:
+        if ambiguous:
+            sent()
+            try:
+                stored = await get()
+            except Permanent as e:
+                raise StoreFailure(str(e)) from None
+            except (Transient, Ambiguous) as e:
+                await backoff.next(str(e), sleep=True)
+                continue
+            if stored is not None and stored.data == data:
+                return Written(stored.etag)
+            if stored is None or stored.etag != etag:
+                return "mismatch"
+            ambiguous = False
+        sent()
+        try:
+            outcome = await attempt()
+        except Permanent as e:
+            raise StoreFailure(str(e)) from None
+        except Transient as e:
+            await backoff.next(str(e), sleep=True)
+            continue
+        except Ambiguous as e:
+            ambiguous = was_ambiguous = True
+            await backoff.next(str(e), sleep=False)
+            continue
+        if outcome == "mismatch" and was_ambiguous:
+            # § dqf0ythhp.a@5r2bw
+            ambiguous = True
+            await backoff.next("mismatch after an ambiguous compare-and-set", sleep=False)
             continue
         return outcome

@@ -1,5 +1,5 @@
-// Ambiguous creates on Redis (I-26), injected by a proxy that drops a connection; only when
-// `SUBSTANTIAL_REDIS_URL` names a standalone server (see `dev/redis.compose.yaml`).
+// Ambiguous creates on Redis (I-26), injected by a proxy that drops a connection, on the
+// standalone server `SUBSTANTIAL_REDIS_URL` names (see `dev/compose.yaml`).
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createServer, connect as dial, type Server, type Socket } from "node:net";
@@ -10,10 +10,9 @@ import { openStore } from "../src/stores/open.ts";
 import { parseRedisUrl } from "../src/stores/redis.ts";
 import { RedisStore } from "../src/stores/redis_store.ts";
 import { StoreFailure } from "../src/stores/store.ts";
-import { noRedis, redisUrl } from "./helpers.ts";
+import { kind, redisUrl, value } from "./helpers.ts";
 
 const bytes = (text: string) => new TextEncoder().encode(text);
-const skip = noRedis("redis");
 
 /** A TCP proxy to the server that drops the connection of the next request holding `marker`:
  * after the server got it, so it runs and its answer is lost, or before. */
@@ -94,7 +93,7 @@ interface Proxied {
 }
 
 async function proxied(fn: (p: Proxied) => Promise<void>): Promise<void> {
-  const url = redisUrl("redis");
+  const url = await redisUrl("redis");
   const location = parseRedisUrl(url);
   const [[host, port]] = location.nodes as [[string, number]];
   const proxy = new Dropping(host, port);
@@ -120,23 +119,22 @@ for (const [id, forward] of [
   ["landed", true],
   ["lost", false],
 ] as const) {
-  test(`an unanswered create is resolved by a fenced get [${id}]`, { skip }, () =>
+  test(`an unanswered create is resolved by a fenced get [${id}]`, () =>
     proxied(async ({ url, proxy, fence }) => {
       const store = await openStore(url, undefined);
       try {
         await store.open();
         const before = await fence();
         proxy.drop("EVALSHA", forward);
-        assert.equal(await store.create("runs/a/log/0", bytes("one")), "created");
+        assert.equal(kind(await store.create("runs/a/log/0", bytes("one"), undefined)), "created");
         assert.equal(proxy.dropped, 1);
         assert.equal(await fence(), before + 1, "the get resolving it wrote the fence");
-        assert.deepEqual(await store.get("runs/a/log/0"), bytes("one"));
-        assert.equal(await store.create("runs/a/log/0", bytes("two")), "exists");
+        assert.deepEqual(await value(store, "runs/a/log/0"), bytes("one"));
+        assert.equal(await store.create("runs/a/log/0", bytes("two"), undefined), "exists");
       } finally {
         await store.close();
       }
-    }),
-  );
+    }));
 }
 
 /** A store of `url` whose creates and reads wait 50 ms for their fsyncs. */
@@ -144,12 +142,12 @@ function impatient(url: string): RedisStore {
   return new RedisStore(parseRedisUrl(url), undefined, STORE_RETRY, redis, 50);
 }
 
-test("a create the replicas never fsync is not acknowledged", { skip }, () =>
+test("a create the replicas never fsync is not acknowledged", () =>
   proxied(async ({ url, admin, fenceKey }) => {
     const store = impatient(url.replace("replicas=0", "replicas=1"));
     try {
       await assert.rejects(
-        store.create("runs/a/log/0", bytes("one")),
+        store.create("runs/a/log/0", bytes("one"), undefined),
         (e) => e instanceof StoreFailure && /WAITAOF 1 1 answered \[1, 0\]/.test(e.message),
       );
       const landed = await admin.get(fenceKey.replace(/:f$/, ":o:runs/a/log/0"));
@@ -157,17 +155,16 @@ test("a create the replicas never fsync is not acknowledged", { skip }, () =>
     } finally {
       await store.close();
     }
-  }),
-);
+  }));
 
-test("reads and deletes answer once what they saw is durable", { skip }, () =>
+test("reads and deletes answer once what they saw is durable", () =>
   proxied(async ({ url, fence }) => {
     const store = await openStore(url, undefined);
     try {
-      await store.create("runs/a/start", bytes("one"));
+      await store.create("runs/a/start", bytes("one"), undefined);
       const before = await fence();
-      assert.deepEqual(await store.get("runs/a/start"), bytes("one"));
-      assert.equal(await store.get("runs/b/start"), undefined);
+      assert.deepEqual(await value(store, "runs/a/start"), bytes("one"));
+      assert.equal(await value(store, "runs/b/start"), undefined);
       assert.deepEqual((await store.list("runs/", { maxKeys: 10 })).keys, ["runs/a/start"]);
       await store.delete("runs/b/start");
       assert.equal(await fence(), before + 4, "each read and a delete of nothing");
@@ -186,5 +183,4 @@ test("reads and deletes answer once what they saw is durable", { skip }, () =>
     } finally {
       await unreplicated.close();
     }
-  }),
-);
+  }));

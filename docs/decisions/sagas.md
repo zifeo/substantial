@@ -2,7 +2,7 @@
 
 A step declares how it is undone, and a rollback or a saga runs the undos of the steps that ran ([Interfaces](../interfaces.md#i-10-undo-rollback-and-sagas)). An undo receives the step's value then its arguments, "so a step that returns nothing can be undone too" (same section). The work is split: "the core says which steps to undo, the host runs their undos" (`rust/src/workflow/saga.rs`). The core lists them most recent first and records each undo as a step of its own; the host runs them one at a time, with the step's retry and timeout, and raises the error the code sees.
 
-`RolledBack` and `UndoFailed` reach the code as errors. A run ends as the error that leaves its workflow, so code that catches one goes on ([g039jvy6k](workflows.md#g039jvy6k)). A run whose failure ran undos is never retried ([vb6krfmej](core/lifecycle.md#vb6krfmej)).
+`RolledBack` and `UndoFailed` reach the code as errors. A run ends as the error that leaves its workflow, so code that catches one goes on ([dxgjekysz](workflows.md#dxgjekysz)). A run whose failure ran undos is never retried ([vb6krfmej](core/lifecycle.md#vb6krfmej)).
 
 ## Undos
 

@@ -141,7 +141,7 @@ async def waits_on_messages(sub: Substantial) -> None:
     """Until `cross-1`, served by another host, is listed waiting on messages alone."""
     while True:
         async for i in sub.runs(cross):
-            # § j08c2ntyv@rajmb
+            # § aje6w67f3@9s4am
             if (i.run, i.waiting_on) == ("cross-1", "message"):
                 return
         await asyncio.sleep(0.05)

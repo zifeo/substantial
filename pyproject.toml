@@ -1,6 +1,6 @@
 [project]
 name = "substantial"
-version = "0.3.0"
+version = "0.4.0"
 description = "Brokerless durable execution: the Python host of the Substantial core"
 readme = "README.md"
 license = "MPL-2.0"
@@ -24,7 +24,6 @@ dev = [
   "substantial[s3,redis]",
   "pytest>=9.2.0",
   "pytest-asyncio>=1.4.1",
-  "pytest-cov>=7.1.0",
   "ruff>=0.17.3",
   "starlette>=1.10.0",
   "pytest-xdist>=3.8.0",
@@ -44,6 +43,7 @@ packages = ["python/substantial"]
 "wasm/substantial.wasm" = "substantial/wasm/substantial.wasm"
 "wasm/SHA256SUMS" = "substantial/wasm/SHA256SUMS"
 "redis/create.lua" = "substantial/redis/create.lua"
+"redis/cas.lua" = "substantial/redis/cas.lua"
 "redis/delete.lua" = "substantial/redis/delete.lua"
 
 # only-include, not include: a full walk meets rust/wasm, a symlink to wasm/, first and skips wasm/.
@@ -53,6 +53,7 @@ only-include = [
   "wasm/substantial.wasm",
   "wasm/SHA256SUMS",
   "redis/create.lua",
+  "redis/cas.lua",
   "redis/delete.lua",
   "LICENSE",
   "README.md",
@@ -65,6 +66,7 @@ cache-keys = [
   { file = "wasm/substantial.wasm" },
   { file = "wasm/SHA256SUMS" },
   { file = "redis/create.lua" },
+  { file = "redis/cas.lua" },
   { file = "redis/delete.lua" },
 ]
 
@@ -76,9 +78,6 @@ addopts = "-n 4"
 markers = [
   "failover: stops shared Redis containers or changes their configuration, so it runs while no other test does",
 ]
-
-[tool.coverage.run]
-omit = ["python/substantial/boundary/*", "python/substantial/layout/*"]
 
 [tool.ruff]
 src = ["python"]

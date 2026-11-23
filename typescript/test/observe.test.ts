@@ -61,17 +61,19 @@ test("every kind of event with its fields", async () => {
   }
 
   const ops = seen.of(s.StoreOp);
-  const per = { create: 5000n, list: 5000n, get: 400n, delete: 0n };
+  const per = { create: 5000n, cas: 5000n, list: 5000n, get: 400n, delete: 0n };
   const outcomes = {
     create: ["created", "exists"],
+    cas: ["written", "mismatch"],
     get: ["found", "missing"],
     list: ["listed"],
     delete: ["deleted"],
   };
   for (const op of ops) {
-    assert.deepEqual(op.cost, new s.Amount("USD", per[op.op] * BigInt(op.attempts)), `${op.op}`);
+    const kind = op.op as keyof typeof per;
+    assert.deepEqual(op.cost, new s.Amount("USD", per[kind] * BigInt(op.attempts)), `${op.op}`);
     assert.ok(op.attempts >= 1 && op.seconds >= 0, `${op.op}`);
-    assert.ok(outcomes[op.op].includes(op.outcome), `${op.op} ${op.outcome}`);
+    assert.ok(outcomes[kind].includes(op.outcome), `${op.op} ${op.outcome}`);
   }
   assert.deepEqual(new Set(ops.map((op) => op.op)), new Set(Object.keys(per)));
 
@@ -199,14 +201,19 @@ test("an observer that throws stops the worker or fails the client call", async 
 });
 
 test("a store operation of a worker whose observer throws stops it", async () => {
+  // Armed once the namespace is open, whose probe deletes a key.
+  let armed = false;
   const onDeletes = (event: s.Observed) => {
-    if (event instanceof s.StoreOp && event.op === "delete") throw new ObserverDown("down");
+    if (armed && event instanceof s.StoreOp && event.op === "delete") {
+      throw new ObserverDown("down");
+    }
   };
   const w = s.workflow("w", async (c) => {
     await c.sleep(s.minutes(1));
     return 0;
   });
   await using env = await s.testing.Env.open({ now: T0, observe: onDeletes });
+  armed = true;
   const worker = env.worker([w], service);
   await env.start(w);
   await assert.rejects(env.advance(s.minutes(2)), ObserverDown);

@@ -5,10 +5,9 @@ import { makeCall, type Shared } from "./scheduler.ts";
 
 const encoder = new TextEncoder();
 
-function shouldContinueAsNew(shared: Shared): boolean {
-  const value = decodeValue(
-    shared.expect(makeCall({ case: "shouldContinueAsNew", value: {} }), "value"),
-  );
+function shouldContinueAsNew(shared: Shared, highest: boolean): boolean {
+  const call = makeCall({ case: "shouldContinueAsNew", value: { highest } });
+  const value = decodeValue(shared.expect(call, "value"));
   if (typeof value !== "boolean") throw shared.protocol(`shouldContinueAsNew answered ${value}`);
   return value;
 }
@@ -42,11 +41,13 @@ function chainInput(shared: Shared): Uint8Array {
 export class Iteration<S extends object> implements AsyncIterableIterator<S> {
   readonly #shared: Shared;
   readonly #state: S;
+  readonly #upgrade: boolean;
   #started = false;
 
-  constructor(shared: Shared, init: S) {
+  constructor(shared: Shared, init: S, upgrade: boolean) {
     this.#shared = shared;
     this.#state = init;
+    this.#upgrade = upgrade;
   }
 
   [Symbol.asyncIterator](): this {
@@ -69,11 +70,11 @@ export class Iteration<S extends object> implements AsyncIterableIterator<S> {
       Object.assign(this.#state, carried);
       return { value: this.#state, done: false };
     }
-    if (shouldContinueAsNew(shared)) {
-      // § hy3f1z5jj.a@q6kyt
+    if (shouldContinueAsNew(shared, this.#upgrade)) {
+      // § hy3f1z5jj.c@3rngk
       const state = encodeState(this.#state, (m) => new NotCompressible(m));
-      // § one hy3f1z5jj.b@wz17z
-      throw new ContinuedAsNew(undefined, undefined, chainInput(shared), state);
+      // § one hy3f1z5jj.b@jaa20
+      throw new ContinuedAsNew(undefined, undefined, chainInput(shared), state, this.#upgrade);
     }
     return { value: this.#state, done: false };
   }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use common::{Counting, Interrupted, LONG, script};
+use common::{Counting, Interrupted, LONG, blocked, script};
 use substantial::__internal::{self as internal, MemoryStore};
 use substantial::{Context, Error, Failure, Permanent, Preset, Retry, Substantial, Workflow};
 
@@ -74,6 +74,7 @@ async fn messages_carry_no_doubled_prefix() {
         initial: LONG,
         max: LONG,
         multiplier: 1.0,
+        deadline: None,
     };
     let failing = Workflow::without_input("failing", move |c| async move {
         let step = c.step("boom", || async {
@@ -116,7 +117,7 @@ async fn a_worker_refuses_the_settings_it_does_not_take() {
         "claim_skew",
         "wait",
         "due_page",
-        "snapshot_every",
+        "blocked_initial",
         "dedup_window",
         "store_retry",
     ] {
@@ -205,10 +206,13 @@ async fn values_over_64_mib_are_refused() {
         .start(&large, serde_json::json!({ "what": "result" }))
         .await
         .unwrap();
-    match returned.result().timeout(LONG).await {
-        Err(Error::RunFailed { error, .. }) => assert_eq!(error.kind, "ValueTooLarge"),
-        other => panic!("{other:?}"),
-    }
+    // § h8wg39cct.e@ssfbm
+    let error = blocked(&sub, &large, returned.chain()).await;
+    assert_eq!(
+        (error.kind.as_str(), error.retryable),
+        ("ValueTooLarge", false)
+    );
+    // § end h8wg39cct.e
     worker.shutdown().await.unwrap();
 }
 
@@ -293,10 +297,11 @@ async fn a_step_refuses_an_invalid_retry() {
                 initial,
                 max: second,
                 multiplier,
+                deadline: None,
             };
             match c.step("s", || async { anyhow::Ok(1) }).retry(retry).await {
                 Err(Error::InvalidArgument(m)) => refused.push(m),
-                other => return Err(Error::failed("Unexpected", format!("{other:?}"))),
+                other => return Err(Error::fail("Unexpected", format!("{other:?}"))),
             }
         }
         Ok(refused)
@@ -334,7 +339,7 @@ async fn a_permanent_error_is_the_cause_of_its_step_failure() {
             Err(Error::StepFailed { cause, .. }) => {
                 Ok((cause.kind, cause.message, cause.retryable))
             }
-            other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+            other => Err(Error::fail("Unexpected", format!("{other:?}"))),
         }
     });
     let worker = script(&sub, &w).start().unwrap();
@@ -354,7 +359,7 @@ async fn a_failed_run_holds_the_cause_of_the_step_that_failed_it() {
         .await
     });
     let refusing = Workflow::without_input("refusing", |_c| async move {
-        Err::<(), _>(Error::failed("Declined", "not today"))
+        Err::<(), _>(Error::fail("Declined", "not today"))
     });
     let child = paying.clone();
     let ordering = Workflow::without_input("ordering", move |c| {
@@ -367,7 +372,7 @@ async fn a_failed_run_holds_the_cause_of_the_step_that_failed_it() {
                     cause: Some(cause),
                     ..
                 }) => Ok((error.kind, cause.kind, cause.message, cause.retryable)),
-                other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+                other => Err(Error::fail("Unexpected", format!("{other:?}"))),
             }
         }
     });
@@ -441,7 +446,7 @@ async fn a_timed_out_async_step_is_interrupted() {
             });
             match hang.timeout(Duration::from_millis(200)).await {
                 Err(Error::StepFailed { cause, .. }) => Ok(cause.kind),
-                other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+                other => Err(Error::fail("Unexpected", format!("{other:?}"))),
             }
         }
     });

@@ -16,7 +16,7 @@ import type { Message as Message$1, UnknownEnum } from "@bufbuild/protobuf";
  * Describes the file substantial/boundary/v1/run.proto.
  */
 export const file_substantial_boundary_v1_run: GenFile = /*@__PURE__*/
-  fileDesc("CiFzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9ydW4ucHJvdG8SF3N1YnN0YW50aWFsLmJvdW5kYXJ5LnYxIvQBCgtSdW5TZXR0aW5ncxIXCg9jb21taXRfZXZlcnlfbXMYASABKAQSJgoeY29udGludWVfYXNfbmV3X2FmdGVyX3NlZ21lbnRzGAIgASgEEiMKG2NvbnRpbnVlX2FzX25ld19hZnRlcl9ieXRlcxgDIAEoBBIXCg9kZWR1cF93aW5kb3dfbXMYBCABKAQSNQoJcmV0ZW50aW9uGAUgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmV0ZW50aW9uEi8KBnByaWNlcxgGIAEoCzIfLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlByaWNlcyJVCgZQcmljZXMSEAoIY3VycmVuY3kYASABKAkSDgoGY3JlYXRlGAIgASgEEgsKA2dldBgDIAEoBBIMCgRsaXN0GAQgASgEEg4KBmRlbGV0ZRgFIAEoBCImCglSZXRlbnRpb24SCgoCbXMYASABKARKBAgCEANSB2ZvcmV2ZXIiSQoMSW5ib3hNZXNzYWdlEgsKA2tleRgBIAEoCRIsCgRib2R5GAIgASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLk1lc3NhZ2UinQMKCFJ1bklucHV0EgsKA3J1bhgBIAEoCRIrCgVzdGFydBgCIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5TdGFydBItCgdoaXN0b3J5GAMgAygLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkV2ZW50EhUKDWhpc3RvcnlfYnl0ZXMYBCABKAQSDgoGbmV4dF9uGAUgASgEEjQKBWluYm94GAYgAygLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuSW5ib3hNZXNzYWdlEigKA25vdxgHIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEgwKBHNlZWQYCCABKAwSDgoGd29ya2VyGAkgASgJEjYKCHNldHRpbmdzGAogASgLMiQuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUnVuU2V0dGluZ3MSDgoGcHJlZml4GAsgASgJEikKBGNvc3QYDSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuQ29zdEoECAwQDVIKcGFydGl0aW9ucyJbCgtSZXRyeVBvbGljeRIUCgxtYXhfYXR0ZW1wdHMYASABKA0SEgoKaW5pdGlhbF9tcxgCIAEoBBIOCgZtYXhfbXMYAyABKAQSEgoKbXVsdGlwbGllchgEIAEoASK8AQoLU3RlcE9wdGlvbnMSMwoFcmV0cnkYASABKAsyJC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SZXRyeVBvbGljeRIXCgp0aW1lb3V0X21zGAIgASgESACIAQESDAoEdW5kbxgDIAEoCBIRCgRzYWdhGAQgASgESAGIAQESFwoKb2NjdXJyZW5jZRgFIAEoBEgCiAEBQg0KC190aW1lb3V0X21zQgcKBV9zYWdhQg0KC19vY2N1cnJlbmNlIpwDCgNFbmQSNQoJY29tcGxldGVkGAEgASgLMiAuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNvbXBsZXRlZEgAEi8KBmZhaWxlZBgCIAEoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsZWRIABI1CgljYW5jZWxsZWQYAyABKAsyIC5zdWJzdGFudGlhbC5sYXlvdXQudjEuQ2FuY2VsbGVkSAASOwoJY29udGludWVkGAQgASgLMiYuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW5kLkNvbnRpbnVlZEgAGrEBCglDb250aW51ZWQSFQoId29ya2Zsb3cYASABKAlIAIgBARIrCgVpbnB1dBgCIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIrCgVzdGF0ZRgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIUCgd2ZXJzaW9uGAUgASgNSAGIAQFCCwoJX3dvcmtmbG93QgoKCF92ZXJzaW9uSgQIBBAFQgUKA2VuZCKhDQoEQ2FsbBIyCgRzdGVwGAEgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5TdGVwSAASLQoDbm93GAIgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABIwCgZyYW5kb20YAyABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEi4KBHV1aWQYBCABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEhIKCHNsZWVwX21zGAUgASgESAASMgoLc2xlZXBfdW50aWwYBiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEjIKBHdhaXQYByABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5DYWxsLldhaXRIABIRCgdyZWNlaXZlGAggASgJSAASMgoEYmluZBgJIAEoCzIiLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNhbGwuQmluZEgAEjQKBXN0YXJ0GAogASgLMiMuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5TdGFydEgAEhYKDGNoaWxkX3Jlc3VsdBgLIAEoCUgAEjIKBHNlbmQYDCABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5DYWxsLlNlbmRIABIzCgdwdWJsaXNoGA0gASgLMiAuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlB1Ymxpc2hlZEgAEjQKCnNhZ2FfYmVnaW4YDiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjkKCHNhZ2FfZW5kGA8gASgLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5TYWdhRW5kSAASMgoIcm9sbGJhY2sYECABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEi8KB2l0ZXJhdGUYESABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWVIABJAChZzaG91bGRfY29udGludWVfYXNfbmV3GBIgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABIrCgNlbmQYEyABKAsyHC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbmRIABIuCgRjb3N0GBQgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABI2CgZjYW5jZWwYFSABKAsyJC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5DYWxsLkNhbmNlbEgAEkEKDGNoYWluX3Jlc3VsdBgWIAEoCzIpLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNhbGwuQ2hhaW5SZXN1bHRIABpLCgRTdGVwEgwKBG5hbWUYASABKAkSNQoHb3B0aW9ucxgCIAEoCzIkLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlN0ZXBPcHRpb25zGi4KBFdhaXQSFwoKdGltZW91dF9tcxgBIAEoBEgAiAEBQg0KC190aW1lb3V0X21zGhUKBEJpbmQSDQoFbmFtZXMYASADKAkarwEKBVN0YXJ0EhAKCHdvcmtmbG93GAEgASgJEhQKB3ZlcnNpb24YAiABKA1IAIgBARIrCgVpbnB1dBgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIPCgJpZBgEIAEoCUgBiAEBEi0KBmJ1ZGdldBgFIAEoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5CdWRnZXRCCgoIX3ZlcnNpb25CBQoDX2lkGmYKBFNlbmQSCwoDcnVuGAEgASgJEgwKBG5hbWUYAiABKAkSKwoFdmFsdWUYAyABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSDwoCaWQYBCABKAlIAIgBAUIFCgNfaWQaJQoGQ2FuY2VsEgsKA3J1bhgBIAEoCRIOCgZyZWFzb24YAiABKAkaRAoLQ2hhaW5SZXN1bHQSDQoFY2hhaW4YASABKAkSFwoKdGltZW91dF9tcxgCIAEoBEgAiAEBQg0KC190aW1lb3V0X21zGkcKB1NhZ2FFbmQSDAoEc2FnYRgBIAEoBBIOCgZmYWlsZWQYAiABKAgSEwoGcGFyZW50GAMgASgESACIAQFCCQoHX3BhcmVudEIGCgRjYWxsIlAKB01lc3NhZ2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIrCgV2YWx1ZRgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZSJjCgRVbmRvEgwKBGNhbGwYASABKAQSDAoEbmFtZRgCIAEoCRISCgpvY2N1cnJlbmNlGAMgASgEEisKBXZhbHVlGAQgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlIvgDCgZDYWxsZWQSEQoHcGVuZGluZxgBIAEoBEgAEjwKCG1lc3NhZ2VzGAIgASgLMiguc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbGVkLk1lc3NhZ2VzSAASDQoDcnVuGAMgASgJSAASDgoEc2FnYRgEIAEoBEgAEjYKBXVuZG9zGAUgASgLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbGVkLlVuZG9zSAASLQoFdmFsdWUYBiABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWVIABIuCgRkb25lGAcgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABIwCgZmYWlsZWQYCiABKAsyHi5zdWJzdGFudGlhbC5sYXlvdXQudjEuRmFpbHVyZUgAEhcKCm9jY3VycmVuY2UYCCABKARIAYgBARIMCgRsaXZlGAkgASgIGj4KCE1lc3NhZ2VzEjIKCG1lc3NhZ2VzGAEgAygLMiAuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuTWVzc2FnZRo1CgVVbmRvcxIsCgV1bmRvcxgBIAMoCzIdLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlVuZG9CCAoGY2FsbGVkQg0KC19vY2N1cnJlbmNlInQKB091dGNvbWUSLQoFdmFsdWUYASABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWVIABIvCgVlcnJvchgCIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlSABCCQoHb3V0Y29tZSKPAQoKUmVzb2x1dGlvbhItCgV2YWx1ZRgBIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZUgAEi8KBWVycm9yGAIgASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZhaWx1cmVIABITCgljYW5jZWxsZWQYAyABKAlIAEIMCgpyZXNvbHV0aW9uIn4KBkNvbW1pdBIxCgRraW5kGAEgASgOMiMuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29tbWl0S2luZBIvCgdzZWdtZW50GAIgASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLlNlZ21lbnQSEAoIY29uc3VtZWQYAyADKAkiNwoJV2FpdFN0ZXBzEioKBXVudGlsGAEgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUiNgoESWRsZRIuCgluZXh0X3dha2UYASABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZSLPBAoETmV4dBI4CgdyZXNvbHZlGAEgASgLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuTmV4dC5SZXNvbHZlSAASMwoHZGVsaXZlchgCIAEoCzIgLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk1lc3NhZ2VIABI4CgdleGVjdXRlGAMgASgLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuTmV4dC5FeGVjdXRlSAASMQoGY29tbWl0GAQgASgLMh8uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29tbWl0SAASOAoKd2FpdF9zdGVwcxgFIAEoCzIiLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLldhaXRTdGVwc0gAEi0KBGlkbGUYBiABKAsyHS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5JZGxlSAASFQoLY2hpbGRfZW5kZWQYByABKAlIABIxCgVzdG9yZRgJIAEoCzIgLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlN0b3JlT3BIABIMCgRsaXZlGAggASgIGlAKB1Jlc29sdmUSDAoEY2FsbBgBIAEoBBI3CgpyZXNvbHV0aW9uGAIgASgLMiMuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmVzb2x1dGlvbhpQCgdFeGVjdXRlEgwKBGNhbGwYASABKAQSDwoHYXR0ZW1wdBgCIAEoDRIXCgp0aW1lb3V0X21zGAMgASgESACIAQFCDQoLX3RpbWVvdXRfbXNCBgoEbmV4dCLdBQoKUnVuUmVxdWVzdBI8CgRjYWxsGAEgASgLMiwuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUnVuUmVxdWVzdC5NYWtlQ2FsbEgAEkMKCnN0ZXBfZW5kZWQYAiABKAsyLS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SdW5SZXF1ZXN0LlN0ZXBFbmRlZEgAEhMKCXNhdGlzZmllZBgDIAEoBEgAEisKBG5leHQYBCABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEj4KB2Fycml2ZWQYBSABKAsyKy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SdW5SZXF1ZXN0LkFycml2ZWRIABIzCgZzdG9yZWQYBiABKAsyIS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5PcFJlc3VsdEgAGmEKCE1ha2VDYWxsEisKBGNhbGwYASABKAsyHS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5DYWxsEigKA25vdxgCIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lGrcBCglTdGVwRW5kZWQSDAoEY2FsbBgBIAEoBBIPCgdhdHRlbXB0GAIgASgNEjEKB291dGNvbWUYAyABKAsyIC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5PdXRjb21lEigKA25vdxgEIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEi4KB2NoYXJnZXMYBSADKAsyHS5zdWJzdGFudGlhbC5sYXlvdXQudjEuQW1vdW50Gm0KB0Fycml2ZWQSNwoIbWVzc2FnZXMYASADKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5JbmJveE1lc3NhZ2USKQoEY29zdBgCIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5Db3N0QgkKB3JlcXVlc3Qi4AEKC1J1blJlc3BvbnNlEjMKBWVycm9yGAEgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29yZUVycm9ySAASMQoGY2FsbGVkGAIgASgLMh8uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbGVkSAASLQoEbmV4dBgDIAEoCzIdLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk5leHRIABIuCgRkb25lGAQgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIAEIKCghyZXNwb25zZSpxCgpDb21taXRLaW5kEhsKF0NPTU1JVF9LSU5EX1VOU1BFQ0lGSUVEEAASGAoUQ09NTUlUX0tJTkRfUFJPR1JFU1MQARIXChNDT01NSVRfS0lORF9TVVNQRU5EEAISEwoPQ09NTUlUX0tJTkRfRU5EEANiBnByb3RvMw", [file_substantial_boundary_v1_boundary, file_substantial_layout_v1_layout]);
+  fileDesc("CiFzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9ydW4ucHJvdG8SF3N1YnN0YW50aWFsLmJvdW5kYXJ5LnYxIvUCCgtSdW5TZXR0aW5ncxIXCg9jb21taXRfZXZlcnlfbXMYASABKAQSJgoeY29udGludWVfYXNfbmV3X2FmdGVyX3NlZ21lbnRzGAIgASgEEiMKG2NvbnRpbnVlX2FzX25ld19hZnRlcl9ieXRlcxgDIAEoBBIXCg9kZWR1cF93aW5kb3dfbXMYBCABKAQSNQoJcmV0ZW50aW9uGAUgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmV0ZW50aW9uEi8KBnByaWNlcxgGIAEoCzIfLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlByaWNlcxIZChFtYXhfaGlzdG9yeV9ieXRlcxgHIAEoBBIaChJtYXhfaGlzdG9yeV9ldmVudHMYCCABKAQSGAoQbWF4X3JlcGxheV9pbmJveBgJIAEoBBIQCghtYXhfc2VlbhgKIAEoBBIcChRoaXN0b3J5X3dhcm5fcGVyY2VudBgLIAEoDSJiCgZQcmljZXMSEAoIY3VycmVuY3kYASABKAkSDgoGY3JlYXRlGAIgASgEEgsKA2dldBgDIAEoBBIMCgRsaXN0GAQgASgEEg4KBmRlbGV0ZRgFIAEoBBILCgNjYXMYBiABKAQiMgoJUmV0ZW50aW9uEgwKBGRheXMYAyABKA1KBAgBEAJKBAgCEANSAm1zUgdmb3JldmVyIkkKDEluYm94TWVzc2FnZRILCgNrZXkYASABKAkSLAoEYm9keRgCIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5NZXNzYWdlIt4DCghSdW5JbnB1dBILCgNydW4YASABKAkSKwoFc3RhcnQYAiABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuU3RhcnQSLQoHaGlzdG9yeRgDIAMoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5FdmVudBIVCg1oaXN0b3J5X2J5dGVzGAQgASgEEg4KBm5leHRfbhgFIAEoBBI0CgVpbmJveBgGIAMoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkluYm94TWVzc2FnZRIoCgNub3cYByABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRIMCgRzZWVkGAggASgMEg4KBndvcmtlchgJIAEoCRI2CghzZXR0aW5ncxgKIAEoCzIkLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlJ1blNldHRpbmdzEg4KBnByZWZpeBgLIAEoCRIpCgRjb3N0GA0gASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNvc3QSHAoPaGlnaGVzdF92ZXJzaW9uGA4gASgNSACIAQESDQoFY2xhaW0YDyABKAhCEgoQX2hpZ2hlc3RfdmVyc2lvbkoECAwQDVIKcGFydGl0aW9ucyKFAQoLUmV0cnlQb2xpY3kSFAoMbWF4X2F0dGVtcHRzGAEgASgNEhIKCmluaXRpYWxfbXMYAiABKAQSDgoGbWF4X21zGAMgASgEEhIKCm11bHRpcGxpZXIYBCABKAESGAoLZGVhZGxpbmVfbXMYBSABKARIAIgBAUIOCgxfZGVhZGxpbmVfbXMivAEKC1N0ZXBPcHRpb25zEjMKBXJldHJ5GAEgASgLMiQuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmV0cnlQb2xpY3kSFwoKdGltZW91dF9tcxgCIAEoBEgAiAEBEgwKBHVuZG8YAyABKAgSEQoEc2FnYRgEIAEoBEgBiAEBEhcKCm9jY3VycmVuY2UYBSABKARIAogBAUINCgtfdGltZW91dF9tc0IHCgVfc2FnYUINCgtfb2NjdXJyZW5jZSKtAwoDRW5kEjUKCWNvbXBsZXRlZBgBIAEoCzIgLnN1YnN0YW50aWFsLmxheW91dC52MS5Db21wbGV0ZWRIABIvCgZmYWlsZWQYAiABKAsyHS5zdWJzdGFudGlhbC5sYXlvdXQudjEuRmFpbGVkSAASNQoJY2FuY2VsbGVkGAMgASgLMiAuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNhbmNlbGxlZEgAEjsKCWNvbnRpbnVlZBgEIAEoCzImLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVuZC5Db250aW51ZWRIABrCAQoJQ29udGludWVkEhUKCHdvcmtmbG93GAEgASgJSACIAQESKwoFaW5wdXQYAiABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSKwoFc3RhdGUYAyABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUSFAoHdmVyc2lvbhgFIAEoDUgBiAEBEg8KB2hpZ2hlc3QYBiABKAhCCwoJX3dvcmtmbG93QgoKCF92ZXJzaW9uSgQIBBAFQgUKA2VuZCL2DQoEQ2FsbBIyCgRzdGVwGAEgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5TdGVwSAASLQoDbm93GAIgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABIwCgZyYW5kb20YAyABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEi4KBHV1aWQYBCABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEhIKCHNsZWVwX21zGAUgASgESAASMgoLc2xlZXBfdW50aWwYBiABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEjIKBHdhaXQYByABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5DYWxsLldhaXRIABIRCgdyZWNlaXZlGAggASgJSAASMgoEYmluZBgJIAEoCzIiLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNhbGwuQmluZEgAEjQKBXN0YXJ0GAogASgLMiMuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5TdGFydEgAEhYKDGNoaWxkX3Jlc3VsdBgLIAEoCUgAEjIKBHNlbmQYDCABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5DYWxsLlNlbmRIABIzCgdwdWJsaXNoGA0gASgLMiAuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlB1Ymxpc2hlZEgAEjQKCnNhZ2FfYmVnaW4YDiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjkKCHNhZ2FfZW5kGA8gASgLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5TYWdhRW5kSAASMgoIcm9sbGJhY2sYECABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEi8KB2l0ZXJhdGUYESABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWVIABJOChZzaG91bGRfY29udGludWVfYXNfbmV3GBIgASgLMiwuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5TaG91bGRDb250aW51ZUgAEisKA2VuZBgTIAEoCzIcLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVuZEgAEi4KBGNvc3QYFCABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjYKBmNhbmNlbBgVIAEoCzIkLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNhbGwuQ2FuY2VsSAASQQoMY2hhaW5fcmVzdWx0GBYgASgLMikuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ2FsbC5DaGFpblJlc3VsdEgAEhEKB3BhdGNoZWQYFyABKAlIABpLCgRTdGVwEgwKBG5hbWUYASABKAkSNQoHb3B0aW9ucxgCIAEoCzIkLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlN0ZXBPcHRpb25zGi4KBFdhaXQSFwoKdGltZW91dF9tcxgBIAEoBEgAiAEBQg0KC190aW1lb3V0X21zGhUKBEJpbmQSDQoFbmFtZXMYASADKAkawAEKBVN0YXJ0EhAKCHdvcmtmbG93GAEgASgJEhQKB3ZlcnNpb24YAiABKA1IAIgBARIrCgVpbnB1dBgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIPCgJpZBgEIAEoCUgBiAEBEi0KBmJ1ZGdldBgFIAEoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5CdWRnZXQSDwoHYWJhbmRvbhgGIAEoCEIKCghfdmVyc2lvbkIFCgNfaWQaZgoEU2VuZBILCgNydW4YASABKAkSDAoEbmFtZRgCIAEoCRIrCgV2YWx1ZRgDIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZRIPCgJpZBgEIAEoCUgAiAEBQgUKA19pZBolCgZDYW5jZWwSCwoDcnVuGAEgASgJEg4KBnJlYXNvbhgCIAEoCRpECgtDaGFpblJlc3VsdBINCgVjaGFpbhgBIAEoCRIXCgp0aW1lb3V0X21zGAIgASgESACIAQFCDQoLX3RpbWVvdXRfbXMaIQoOU2hvdWxkQ29udGludWUSDwoHaGlnaGVzdBgBIAEoCBpHCgdTYWdhRW5kEgwKBHNhZ2EYASABKAQSDgoGZmFpbGVkGAIgASgIEhMKBnBhcmVudBgDIAEoBEgAiAEBQgkKB19wYXJlbnRCBgoEY2FsbCJQCgdNZXNzYWdlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSKwoFdmFsdWUYAyABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWUiYwoEVW5kbxIMCgRjYWxsGAEgASgEEgwKBG5hbWUYAiABKAkSEgoKb2NjdXJyZW5jZRgDIAEoBBIrCgV2YWx1ZRgEIAEoCzIcLnN1YnN0YW50aWFsLmxheW91dC52MS5WYWx1ZSL4AwoGQ2FsbGVkEhEKB3BlbmRpbmcYASABKARIABI8CghtZXNzYWdlcxgCIAEoCzIoLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNhbGxlZC5NZXNzYWdlc0gAEg0KA3J1bhgDIAEoCUgAEg4KBHNhZ2EYBCABKARIABI2CgV1bmRvcxgFIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNhbGxlZC5VbmRvc0gAEi0KBXZhbHVlGAYgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlSAASLgoEZG9uZRgHIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAASMAoGZmFpbGVkGAogASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZhaWx1cmVIABIXCgpvY2N1cnJlbmNlGAggASgESAGIAQESDAoEbGl2ZRgJIAEoCBo+CghNZXNzYWdlcxIyCghtZXNzYWdlcxgBIAMoCzIgLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk1lc3NhZ2UaNQoFVW5kb3MSLAoFdW5kb3MYASADKAsyHS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5VbmRvQggKBmNhbGxlZEINCgtfb2NjdXJyZW5jZSJ0CgdPdXRjb21lEi0KBXZhbHVlGAEgASgLMhwuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlZhbHVlSAASLwoFZXJyb3IYAiABKAsyHi5zdWJzdGFudGlhbC5sYXlvdXQudjEuRmFpbHVyZUgAQgkKB291dGNvbWUijwEKClJlc29sdXRpb24SLQoFdmFsdWUYASABKAsyHC5zdWJzdGFudGlhbC5sYXlvdXQudjEuVmFsdWVIABIvCgVlcnJvchgCIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlSAASEwoJY2FuY2VsbGVkGAMgASgJSABCDAoKcmVzb2x1dGlvbiI0CghMaW1pdFVzZRINCgVsaW1pdBgBIAEoCRIMCgR1c2VkGAIgASgEEgsKA21heBgDIAEoBCK2AQoGQ29tbWl0EjEKBGtpbmQYASABKA4yIy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5Db21taXRLaW5kEi8KB3NlZ21lbnQYAiABKAsyHi5zdWJzdGFudGlhbC5sYXlvdXQudjEuU2VnbWVudBIQCghjb25zdW1lZBgDIAMoCRI2CgtuZWFyX2xpbWl0cxgEIAMoCzIhLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkxpbWl0VXNlIjcKCVdhaXRTdGVwcxIqCgV1bnRpbBgBIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lIjYKBElkbGUSLgoJbmV4dF93YWtlGAEgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUiswUKBE5leHQSOAoHcmVzb2x2ZRgBIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk5leHQuUmVzb2x2ZUgAEjMKB2RlbGl2ZXIYAiABKAsyIC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5NZXNzYWdlSAASOAoHZXhlY3V0ZRgDIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk5leHQuRXhlY3V0ZUgAEjEKBmNvbW1pdBgEIAEoCzIfLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNvbW1pdEgAEjgKCndhaXRfc3RlcHMYBSABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5XYWl0U3RlcHNIABItCgRpZGxlGAYgASgLMh0uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuSWRsZUgAEhUKC2NoaWxkX2VuZGVkGAcgASgJSAASMQoFc3RvcmUYCSABKAsyIC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wSAASMQoHYmxvY2tlZBgKIAEoCzIeLnN1YnN0YW50aWFsLmxheW91dC52MS5GYWlsdXJlSAASLwoFY2xhaW0YCyABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEgwKBGxpdmUYCCABKAgaUAoHUmVzb2x2ZRIMCgRjYWxsGAEgASgEEjcKCnJlc29sdXRpb24YAiABKAsyIy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SZXNvbHV0aW9uGlAKB0V4ZWN1dGUSDAoEY2FsbBgBIAEoBBIPCgdhdHRlbXB0GAIgASgNEhcKCnRpbWVvdXRfbXMYAyABKARIAIgBAUINCgtfdGltZW91dF9tc0IGCgRuZXh0IpAGCgpSdW5SZXF1ZXN0EjwKBGNhbGwYASABKAsyLC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SdW5SZXF1ZXN0Lk1ha2VDYWxsSAASQwoKc3RlcF9lbmRlZBgCIAEoCzItLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlJ1blJlcXVlc3QuU3RlcEVuZGVkSAASEwoJc2F0aXNmaWVkGAMgASgESAASKwoEbmV4dBgEIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lSAASPgoHYXJyaXZlZBgFIAEoCzIrLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlJ1blJlcXVlc3QuQXJyaXZlZEgAEjMKBnN0b3JlZBgGIAEoCzIhLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk9wUmVzdWx0SAASMQoHY2xhaW1lZBgHIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAAaYQoITWFrZUNhbGwSKwoEY2FsbBgBIAEoCzIdLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNhbGwSKAoDbm93GAIgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUatwEKCVN0ZXBFbmRlZBIMCgRjYWxsGAEgASgEEg8KB2F0dGVtcHQYAiABKA0SMQoHb3V0Y29tZRgDIAEoCzIgLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk91dGNvbWUSKAoDbm93GAQgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUSLgoHY2hhcmdlcxgFIAMoCzIdLnN1YnN0YW50aWFsLmxheW91dC52MS5BbW91bnQabQoHQXJyaXZlZBI3CghtZXNzYWdlcxgBIAMoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkluYm94TWVzc2FnZRIpCgRjb3N0GAIgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNvc3RCCQoHcmVxdWVzdCLgAQoLUnVuUmVzcG9uc2USMwoFZXJyb3IYASABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5Db3JlRXJyb3JIABIxCgZjYWxsZWQYAiABKAsyHy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5DYWxsZWRIABItCgRuZXh0GAMgASgLMh0uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuTmV4dEgAEi4KBGRvbmUYBCABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAQgoKCHJlc3BvbnNlKnEKCkNvbW1pdEtpbmQSGwoXQ09NTUlUX0tJTkRfVU5TUEVDSUZJRUQQABIYChRDT01NSVRfS0lORF9QUk9HUkVTUxABEhcKE0NPTU1JVF9LSU5EX1NVU1BFTkQQAhITCg9DT01NSVRfS0lORF9FTkQQA2IGcHJvdG8z", [file_substantial_boundary_v1_boundary, file_substantial_layout_v1_layout]);
 
 /**
  * @generated from message substantial.boundary.v1.RunSettings
@@ -56,6 +56,38 @@ export type RunSettings = Message$1<"substantial.boundary.v1.RunSettings"> & {
    * @generated from field: substantial.boundary.v1.Prices prices = 6;
    */
   prices?: Prices | undefined;
+
+  /**
+   * The run's limits, each required and positive: its history's encoded bytes and events, the
+   * inbox messages one replay consumes, and the message ids a continuation carries. Passing one
+   * ends the run failed with HistoryTooLarge.
+   *
+   * @generated from field: uint64 max_history_bytes = 7;
+   */
+  maxHistoryBytes: bigint;
+
+  /**
+   * @generated from field: uint64 max_history_events = 8;
+   */
+  maxHistoryEvents: bigint;
+
+  /**
+   * @generated from field: uint64 max_replay_inbox = 9;
+   */
+  maxReplayInbox: bigint;
+
+  /**
+   * @generated from field: uint64 max_seen = 10;
+   */
+  maxSeen: bigint;
+
+  /**
+   * 1 to 100: a commit that takes a run past this share of one of its limits says so
+   * (Commit.near_limits), once.
+   *
+   * @generated from field: uint32 history_warn_percent = 11;
+   */
+  historyWarnPercent: number;
 };
 
 /**
@@ -96,6 +128,13 @@ export type Prices = Message$1<"substantial.boundary.v1.Prices"> & {
    * @generated from field: uint64 delete = 5;
    */
   delete: bigint;
+
+  /**
+   * Required with the others: a cas is a write as a create is (an S3 PUT).
+   *
+   * @generated from field: uint64 cas = 6;
+   */
+  cas: bigint;
 };
 
 /**
@@ -106,16 +145,16 @@ export const PricesSchema: GenMessage<Prices> = /*@__PURE__*/
   messageDesc(file_substantial_boundary_v1_run, 1);
 
 /**
- * How long a run is kept after its chain's last run ends, then collected: at least the agent's
- * retention_min_ms.
+ * How many whole days an ended run is kept, 1 to 36,500, counted from its own end whatever its
+ * children do, then removed by its expiry.
  *
  * @generated from message substantial.boundary.v1.Retention
  */
 export type Retention = Message$1<"substantial.boundary.v1.Retention"> & {
   /**
-   * @generated from field: uint64 ms = 1;
+   * @generated from field: uint32 days = 3;
    */
-  ms: bigint;
+  days: number;
 };
 
 /**
@@ -130,6 +169,8 @@ export const RetentionSchema: GenMessage<Retention> = /*@__PURE__*/
  */
 export type InboxMessage = Message$1<"substantial.boundary.v1.InboxMessage"> & {
   /**
+   * The message's name in its chain, <ord>-<id>, which its consumption records.
+   *
    * @generated from field: string key = 1;
    */
   key: string;
@@ -164,7 +205,7 @@ export type RunInput = Message$1<"substantial.boundary.v1.RunInput"> & {
   start?: Start | undefined;
 
   /**
-   * Every recorded event: the snapshot's, then the segments' after it.
+   * Every recorded event: the resumed ones of a retry or a reset, then the run's segments'.
    *
    * @generated from field: repeated substantial.layout.v1.Event history = 3;
    */
@@ -181,7 +222,8 @@ export type RunInput = Message$1<"substantial.boundary.v1.RunInput"> & {
   nextN: bigint;
 
   /**
-   * The messages start.carried names, in that order, then the inbox sorted by key.
+   * The messages the head holds, those start.carried names first, then the messages served and
+   * listed, the whole sorted by key after the carried ones.
    *
    * @generated from field: repeated substantial.boundary.v1.InboxMessage inbox = 6;
    */
@@ -223,6 +265,22 @@ export type RunInput = Message$1<"substantial.boundary.v1.RunInput"> & {
    * @generated from field: substantial.layout.v1.Cost cost = 13;
    */
   cost?: Cost | undefined;
+
+  /**
+   * The highest version of the run's workflow the worker serves, absent if it serves none: where a
+   * continuation with highest goes.
+   *
+   * @generated from field: optional uint32 highest_version = 14;
+   */
+  highestVersion?: number | undefined;
+
+  /**
+   * The agent holds no lease of the run: the machine answers Next.claim before the first step
+   * attempt it starts, and a replay that starts none runs without one.
+   *
+   * @generated from field: bool claim = 15;
+   */
+  claim: boolean;
 };
 
 /**
@@ -255,6 +313,14 @@ export type RetryPolicy = Message$1<"substantial.boundary.v1.RetryPolicy"> & {
    * @generated from field: double multiplier = 4;
    */
   multiplier: number;
+
+  /**
+   * Retry(deadline=), schedule to close: from the start of the step's first attempt, no attempt
+   * starts past it, and each runs at most until it; absent, none.
+   *
+   * @generated from field: optional uint64 deadline_ms = 5;
+   */
+  deadlineMs?: bigint | undefined;
 };
 
 /**
@@ -318,6 +384,12 @@ export type End = Message$1<"substantial.boundary.v1.End"> & {
     case: "completed";
   } | {
     /**
+     * Only with an error the code let through that is the recorded outcome of a Substantial call:
+     * Fail, StepFailed, BudgetExceeded, RolledBack, UndoFailed, HistoryTooLarge, RunFailed,
+     * WaitTimeout, RunNotFound or RunEnded. Any other error, NonDeterminism and the ValueTooLarge of a
+     * refused call included, and a result that does not encode as JSON, blocks the run instead
+     * (ReplayEnd.blocked).
+     *
      * @generated from field: substantial.layout.v1.Failed failed = 2;
      */
     value: Failed;
@@ -364,12 +436,21 @@ export type End_Continued = Message$1<"substantial.boundary.v1.End.Continued"> &
   state?: Value | undefined;
 
   /**
-   * The version of workflow, given only with it; absent, its runs without a version. Continuing
-   * as itself keeps the run's version.
+   * The version of workflow, given only with it; absent, its runs without a version. Naming the
+   * run's own workflow with a version continues into that version; with neither, the run
+   * continues as itself, its version kept.
    *
    * @generated from field: optional uint32 version = 5;
    */
   version?: number | undefined;
+
+  /**
+   * Without workflow: continue as itself into the highest version of its workflow the worker
+   * serves (RunInput.highest_version), its own version if the worker serves none.
+   *
+   * @generated from field: bool highest = 6;
+   */
+  highest: boolean;
 };
 
 /**
@@ -490,9 +571,9 @@ export type Call = Message$1<"substantial.boundary.v1.Call"> & {
     case: "iterate";
   } | {
     /**
-     * @generated from field: substantial.boundary.v1.Empty should_continue_as_new = 18;
+     * @generated from field: substantial.boundary.v1.Call.ShouldContinue should_continue_as_new = 18;
      */
-    value: Empty;
+    value: Call_ShouldContinue;
     case: "shouldContinueAsNew";
   } | {
     /**
@@ -520,6 +601,14 @@ export type Call = Message$1<"substantial.boundary.v1.Call"> & {
      */
     value: Call_ChainResult;
     case: "chainResult";
+  } | {
+    /**
+     * c.patched(id): answered with a JSON boolean, recorded as a patched event when live.
+     *
+     * @generated from field: string patched = 23;
+     */
+    value: string;
+    case: "patched";
   } | { case: undefined; value?: undefined };
 };
 
@@ -616,6 +705,14 @@ export type Call_Start = Message$1<"substantial.boundary.v1.Call.Start"> & {
    * @generated from field: substantial.layout.v1.Budget budget = 5;
    */
   budget?: Budget | undefined;
+
+  /**
+   * c.start(..., abandon=True): the child goes on when this run ends; by default the run's end,
+   * completed, failed or cancelled, cancels it.
+   *
+   * @generated from field: bool abandon = 6;
+   */
+  abandon: boolean;
 };
 
 /**
@@ -707,6 +804,26 @@ export const Call_ChainResultSchema: GenMessage<Call_ChainResult> = /*@__PURE__*
   messageDesc(file_substantial_boundary_v1_run, 8, 6);
 
 /**
+ * With highest, also true when the worker serves a version of the run's workflow higher than the
+ * run's (RunInput.highest_version).
+ *
+ * @generated from message substantial.boundary.v1.Call.ShouldContinue
+ */
+export type Call_ShouldContinue = Message$1<"substantial.boundary.v1.Call.ShouldContinue"> & {
+  /**
+   * @generated from field: bool highest = 1;
+   */
+  highest: boolean;
+};
+
+/**
+ * Describes the message substantial.boundary.v1.Call.ShouldContinue.
+ * Use `create(Call_ShouldContinueSchema)` to create a new message.
+ */
+export const Call_ShouldContinueSchema: GenMessage<Call_ShouldContinue> = /*@__PURE__*/
+  messageDesc(file_substantial_boundary_v1_run, 8, 7);
+
+/**
  * @generated from message substantial.boundary.v1.Call.SagaEnd
  */
 export type Call_SagaEnd = Message$1<"substantial.boundary.v1.Call.SagaEnd"> & {
@@ -733,7 +850,7 @@ export type Call_SagaEnd = Message$1<"substantial.boundary.v1.Call.SagaEnd"> & {
  * Use `create(Call_SagaEndSchema)` to create a new message.
  */
 export const Call_SagaEndSchema: GenMessage<Call_SagaEnd> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 8, 7);
+  messageDesc(file_substantial_boundary_v1_run, 8, 8);
 
 /**
  * A message handed to the code's handlers.
@@ -978,6 +1095,37 @@ export const ResolutionSchema: GenMessage<Resolution> = /*@__PURE__*/
   messageDesc(file_substantial_boundary_v1_run, 13);
 
 /**
+ * A limit of the run (RunSettings) and what the run uses of it.
+ *
+ * @generated from message substantial.boundary.v1.LimitUse
+ */
+export type LimitUse = Message$1<"substantial.boundary.v1.LimitUse"> & {
+  /**
+   * history_bytes, history_events, replay_inbox or seen.
+   *
+   * @generated from field: string limit = 1;
+   */
+  limit: string;
+
+  /**
+   * @generated from field: uint64 used = 2;
+   */
+  used: bigint;
+
+  /**
+   * @generated from field: uint64 max = 3;
+   */
+  max: bigint;
+};
+
+/**
+ * Describes the message substantial.boundary.v1.LimitUse.
+ * Use `create(LimitUseSchema)` to create a new message.
+ */
+export const LimitUseSchema: GenMessage<LimitUse> = /*@__PURE__*/
+  messageDesc(file_substantial_boundary_v1_run, 14);
+
+/**
  * @generated from message substantial.boundary.v1.Commit
  */
 export type Commit = Message$1<"substantial.boundary.v1.Commit"> & {
@@ -992,11 +1140,20 @@ export type Commit = Message$1<"substantial.boundary.v1.Commit"> & {
   segment?: Segment | undefined;
 
   /**
-   * Inbox keys this commit consumed or dropped as duplicates, deleted once it is durable.
+   * Message keys this commit consumed or dropped as duplicates: their due entries are deleted once
+   * it is durable.
    *
    * @generated from field: repeated string consumed = 3;
    */
   consumed: string[];
+
+  /**
+   * The limits this commit takes the run past history_warn_percent of, which no earlier commit of
+   * the run passed: the host warns and tells its observer.
+   *
+   * @generated from field: repeated substantial.boundary.v1.LimitUse near_limits = 4;
+   */
+  nearLimits: LimitUse[];
 };
 
 /**
@@ -1004,7 +1161,7 @@ export type Commit = Message$1<"substantial.boundary.v1.Commit"> & {
  * Use `create(CommitSchema)` to create a new message.
  */
 export const CommitSchema: GenMessage<Commit> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 14);
+  messageDesc(file_substantial_boundary_v1_run, 15);
 
 /**
  * Steps are in flight; until is the earliest timer or retry, when the host calls next again anyway.
@@ -1023,7 +1180,7 @@ export type WaitSteps = Message$1<"substantial.boundary.v1.WaitSteps"> & {
  * Use `create(WaitStepsSchema)` to create a new message.
  */
 export const WaitStepsSchema: GenMessage<WaitSteps> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 15);
+  messageDesc(file_substantial_boundary_v1_run, 16);
 
 /**
  * Nothing was recorded: no segment to write.
@@ -1042,7 +1199,7 @@ export type Idle = Message$1<"substantial.boundary.v1.Idle"> & {
  * Use `create(IdleSchema)` to create a new message.
  */
 export const IdleSchema: GenMessage<Idle> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 16);
+  messageDesc(file_substantial_boundary_v1_run, 17);
 
 /**
  * @generated from message substantial.boundary.v1.Next
@@ -1107,6 +1264,28 @@ export type Next = Message$1<"substantial.boundary.v1.Next"> & {
      */
     value: StoreOp;
     case: "store";
+  } | {
+    /**
+     * The code diverged from the recorded history (NonDeterminism), or ended with a result, a
+     * continuation's input or state past the value limit (ValueTooLarge): nothing is recorded. The
+     * host stops the code and its attempts, as for a dropped replay, and reports the replay blocked
+     * with this error (ReplayEnd.blocked).
+     *
+     * @generated from field: substantial.layout.v1.Failure blocked = 10;
+     */
+    value: Failure;
+    case: "blocked";
+  } | {
+    /**
+     * A step attempt is about to start and the agent holds no claim: the host sends
+     * AgentRequest.claim with the run and waits. At AgentCommand.claimed it answers
+     * RunRequest.claimed, then asks `next` again; at AgentCommand.stop_replay it drops the replay,
+     * which started no attempt, and reports it dropped.
+     *
+     * @generated from field: substantial.boundary.v1.Empty claim = 11;
+     */
+    value: Empty;
+    case: "claim";
   } | { case: undefined; value?: undefined };
 
   /**
@@ -1122,7 +1301,7 @@ export type Next = Message$1<"substantial.boundary.v1.Next"> & {
  * Use `create(NextSchema)` to create a new message.
  */
 export const NextSchema: GenMessage<Next> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 17);
+  messageDesc(file_substantial_boundary_v1_run, 18);
 
 /**
  * @generated from message substantial.boundary.v1.Next.Resolve
@@ -1144,7 +1323,7 @@ export type Next_Resolve = Message$1<"substantial.boundary.v1.Next.Resolve"> & {
  * Use `create(Next_ResolveSchema)` to create a new message.
  */
 export const Next_ResolveSchema: GenMessage<Next_Resolve> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 17, 0);
+  messageDesc(file_substantial_boundary_v1_run, 18, 0);
 
 /**
  * @generated from message substantial.boundary.v1.Next.Execute
@@ -1171,7 +1350,7 @@ export type Next_Execute = Message$1<"substantial.boundary.v1.Next.Execute"> & {
  * Use `create(Next_ExecuteSchema)` to create a new message.
  */
 export const Next_ExecuteSchema: GenMessage<Next_Execute> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 17, 1);
+  messageDesc(file_substantial_boundary_v1_run, 18, 1);
 
 /**
  * @generated from message substantial.boundary.v1.RunRequest
@@ -1219,6 +1398,14 @@ export type RunRequest = Message$1<"substantial.boundary.v1.RunRequest"> & {
      */
     value: OpResult;
     case: "stored";
+  } | {
+    /**
+     * The answer to Next.claim once the agent sent AgentCommand.claimed.
+     *
+     * @generated from field: substantial.boundary.v1.Empty claimed = 7;
+     */
+    value: Empty;
+    case: "claimed";
   } | { case: undefined; value?: undefined };
 };
 
@@ -1227,7 +1414,7 @@ export type RunRequest = Message$1<"substantial.boundary.v1.RunRequest"> & {
  * Use `create(RunRequestSchema)` to create a new message.
  */
 export const RunRequestSchema: GenMessage<RunRequest> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 18);
+  messageDesc(file_substantial_boundary_v1_run, 19);
 
 /**
  * @generated from message substantial.boundary.v1.RunRequest.MakeCall
@@ -1249,7 +1436,7 @@ export type RunRequest_MakeCall = Message$1<"substantial.boundary.v1.RunRequest.
  * Use `create(RunRequest_MakeCallSchema)` to create a new message.
  */
 export const RunRequest_MakeCallSchema: GenMessage<RunRequest_MakeCall> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 18, 0);
+  messageDesc(file_substantial_boundary_v1_run, 19, 0);
 
 /**
  * @generated from message substantial.boundary.v1.RunRequest.StepEnded
@@ -1288,7 +1475,7 @@ export type RunRequest_StepEnded = Message$1<"substantial.boundary.v1.RunRequest
  * Use `create(RunRequest_StepEndedSchema)` to create a new message.
  */
 export const RunRequest_StepEndedSchema: GenMessage<RunRequest_StepEnded> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 18, 1);
+  messageDesc(file_substantial_boundary_v1_run, 19, 1);
 
 /**
  * The messages of AgentCommand.Committed.inbox.
@@ -1314,7 +1501,7 @@ export type RunRequest_Arrived = Message$1<"substantial.boundary.v1.RunRequest.A
  * Use `create(RunRequest_ArrivedSchema)` to create a new message.
  */
 export const RunRequest_ArrivedSchema: GenMessage<RunRequest_Arrived> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 18, 2);
+  messageDesc(file_substantial_boundary_v1_run, 19, 2);
 
 /**
  * @generated from message substantial.boundary.v1.RunResponse
@@ -1355,7 +1542,7 @@ export type RunResponse = Message$1<"substantial.boundary.v1.RunResponse"> & {
  * Use `create(RunResponseSchema)` to create a new message.
  */
 export const RunResponseSchema: GenMessage<RunResponse> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_run, 19);
+  messageDesc(file_substantial_boundary_v1_run, 20);
 
 /**
  * @generated from enum substantial.boundary.v1.CommitKind

@@ -37,7 +37,7 @@ impl Script {
 
 // `redis` is a symlink to the repository's single copy: cargo package follows it, so the
 // published crate carries the scripts themselves.
-// § htbc4k715.e@xwvs2
+// § htbc4k715.f@y6501
 pub(super) static CREATE: LazyLock<Script> = LazyLock::new(|| {
     Script::shipped(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -50,7 +50,13 @@ pub(super) static DELETE: LazyLock<Script> = LazyLock::new(|| {
         "/redis/delete.lua"
     )))
 });
-// § end htbc4k715.e
+pub(super) static CAS: LazyLock<Script> = LazyLock::new(|| {
+    Script::shipped(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/redis/cas.lua"
+    )))
+});
+// § end htbc4k715.f
 
 /// How an operation of the adapter failed, before it is classified as a fault of its attempt.
 #[derive(Debug)]
@@ -330,7 +336,7 @@ impl Connector {
             Err(e) => return Err(e.into()),
             Ok(_) => {}
         }
-        for script in [&*CREATE, &*DELETE] {
+        for script in [&*CREATE, &*CAS, &*DELETE] {
             let loaded: String = ::redis::cmd("SCRIPT")
                 .arg("LOAD")
                 .arg(script.text)

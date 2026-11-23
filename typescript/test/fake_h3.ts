@@ -1,10 +1,18 @@
 // A fake h3 server on 127.0.0.1, ported from the Rust tests: the S3 calls of the store contract on
-// one in-memory bucket, its listings held on the wait headers, and every request recorded.
+// one in-memory bucket, its listings held on the wait headers, lifecycle rules that expire the keys
+// tagged with each retention the tests use, and every request recorded.
 import { createHash } from "node:crypto";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 const BUCKET = "h3";
+/** The retentions, in days, the bucket's lifecycle rules expire. */
+const EXPIRIES = [1, 30];
+
+/** A quoted digest of the bytes, as S3 answers an ETag. */
+function etagOf(data: Uint8Array): string {
+  return `"${createHash("md5").update(data).digest("hex")}"`;
+}
 
 /** A listing as the fake received it. */
 export interface Listed {
@@ -45,6 +53,8 @@ export class FakeH3 {
   holds = 0;
   /** Answers waiting listings without their etag, as a server whose listings cannot wait. */
   omitEtag = false;
+  /** The retentions, in days, the bucket's lifecycle rules expire. */
+  expiries: readonly number[] = EXPIRIES;
   readonly #server: Server;
   #changed = Promise.withResolvers<void>();
 
@@ -104,17 +114,27 @@ export class FakeH3 {
     if (method === "GET" && key === "" && parsed.searchParams.get("list-type") === "2") {
       return this.#list(headers, parsed.searchParams);
     }
+    if (method === "GET" && key === "" && parsed.searchParams.has("lifecycle")) {
+      return [200, this.#lifecycle()];
+    }
     if (method === "PUT" && key !== "") {
       if (headers["if-none-match"] === "*" && this.objects.has(key)) {
         return error(412, "PreconditionFailed");
       }
-      this.objects.set(key, new Uint8Array(body));
+      const matching = headers["if-match"];
+      if (matching !== undefined) {
+        const held = this.objects.get(key);
+        if (held === undefined) return error(404, "NoSuchKey");
+        if (etagOf(held) !== matching) return error(412, "PreconditionFailed");
+      }
+      const data = new Uint8Array(body);
+      this.objects.set(key, data);
       this.#change();
-      return [200, ""];
+      return [200, "", { etag: etagOf(data) }];
     }
     if (method === "GET" && key !== "") {
       const bytes = this.objects.get(key);
-      return bytes === undefined ? error(404, "NoSuchKey") : [200, bytes];
+      return bytes === undefined ? error(404, "NoSuchKey") : [200, bytes, { etag: etagOf(bytes) }];
     }
     if (method === "DELETE" && key !== "") {
       this.objects.delete(key);
@@ -122,6 +142,20 @@ export class FakeH3 {
       return [204, ""];
     }
     return error(400, "InvalidRequest");
+  }
+
+  #lifecycle(): string {
+    const rules = this.expiries.map(
+      (d) =>
+        `<Rule><ID>substantial-expire-${d}d</ID><Filter><Tag><Key>substantial-retention</Key>` +
+        `<Value>${d}d</Value></Tag></Filter><Status>Enabled</Status>` +
+        `<Expiration><Days>${d}</Days></Expiration></Rule>`,
+    );
+    return (
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+      `${rules.join("")}</LifecycleConfiguration>`
+    );
   }
 
   #page(prefix: string, after: string, maxKeys: number): [string[], boolean] {
@@ -139,8 +173,8 @@ export class FakeH3 {
     const prefix = query.get("prefix") ?? "";
     const after = query.get("start-after") ?? "";
     const maxKeys = Number(query.get("max-keys") ?? 1000);
-    const seconds = headers["x-substantial-wait-seconds"];
-    const waitEtag = headers["x-substantial-wait-etag"];
+    const seconds = headers["x-herald-wait-seconds"];
+    const waitEtag = headers["x-herald-wait-etag"];
     const deadline = performance.now() + Number(seconds ?? 0) * 1000;
     let held = false;
     let keys: string[];
@@ -149,8 +183,10 @@ export class FakeH3 {
     for (;;) {
       const changed = this.#changed.promise;
       [keys, truncated] = this.#page(prefix, after, maxKeys);
+      // Over the objects' ETags too, so a rewrite of a listed key, a head's cas, changes it.
+      const listed = keys.map((k) => [k, etagOf(this.objects.get(k) as Uint8Array)]);
       etag = createHash("sha256")
-        .update(JSON.stringify([keys, truncated]))
+        .update(JSON.stringify([listed, truncated]))
         .digest("hex");
       const left = deadline - performance.now();
       if (seconds === undefined || waitEtag !== etag || left <= 0) break;
@@ -172,7 +208,7 @@ export class FakeH3 {
       xml += `<Contents><Key>${xmlEscape(key)}</Key><Size>0</Size></Contents>`;
     xml += "</ListBucketResult>";
     const answer: Record<string, string> = {};
-    if (seconds !== undefined && !this.omitEtag) answer["x-substantial-listing-etag"] = etag;
+    if (seconds !== undefined && !this.omitEtag) answer["x-herald-listing-etag"] = etag;
     return [200, xml, answer];
   }
 }

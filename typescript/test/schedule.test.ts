@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import * as s from "../src/mod.ts";
 import { config, iso, messageId, nextFire, type Plan, parse, plan } from "../src/schedule.ts";
-import { withEnv } from "./testing_helpers.ts";
+import { blockedIn, withEnv } from "./testing_helpers.ts";
 
 interface Vectors {
   next: { cron: string; tz: string; after: string; fires: string[] }[];
@@ -177,18 +177,14 @@ test(
 );
 
 test(
-  "a malformed schedule message fails the run",
+  "a malformed schedule message blocks the run",
   scheduled(async (env) => {
     const run = await env.schedule(ticker, "tick", HOURLY, { revision: 1 });
     await run.send("schedule", { revision: 2, cron: "0 * * * *" });
-    {
-      await using _worker = env.worker([ticker], service);
-      await env.settle();
-    }
-    const failed = await run.result().catch((e) => e);
-    assert.ok(failed instanceof s.RunFailed, String(failed));
-    assert.equal(failed.error.type, "InvalidArgument");
-    assert.match(failed.error.message, /a schedule message is a config of sub.schedule/);
+    await using _worker = env.worker([ticker], service);
+    const error = await blockedIn(env, ticker, run);
+    assert.equal(error.type, "InvalidArgument");
+    assert.match(error.message, /a schedule message is a config of sub.schedule/);
   }),
 );
 
@@ -199,20 +195,16 @@ test("message ids are the same in every host", async () => {
 });
 
 test(
-  "two configs of one revision fail the run",
+  "two configs of one revision block the run",
   scheduled(async (env) => {
     await env.schedule(ticker, "tick", HOURLY, { revision: 1 });
     const run = await env.schedule(ticker, "tick", new s.Cron("30 * * * *", "UTC"), {
       revision: 1,
     });
-    {
-      await using _worker = env.worker([ticker], service);
-      await env.settle();
-    }
-    const failed = await run.result().catch((e) => e);
-    assert.ok(failed instanceof s.RunFailed, String(failed));
-    assert.equal(failed.error.type, "ConfigError");
-    assert.match(failed.error.message, /revision 1 came with two configs/);
+    await using _worker = env.worker([ticker], service);
+    const error = await blockedIn(env, ticker, run);
+    assert.equal(error.type, "ConfigError");
+    assert.match(error.message, /revision 1 came with two configs/);
   }),
 );
 
@@ -263,10 +255,7 @@ test(
     });
     await using _worker = env.worker([inline], service);
     const run = await env.start(inline);
-    await assert.rejects(
-      run.result(),
-      (e) => e instanceof s.RunFailed && /reserved/.test(e.message),
-    );
+    assert.match((await blockedIn(env, inline, run)).message, /reserved/);
   }),
 );
 

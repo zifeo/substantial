@@ -16,7 +16,7 @@ from substantial.boundary.v1 import run_pb2 as substantial_dot_boundary_dot_v1_d
 from substantial.layout.v1 import layout_pb2 as substantial_dot_layout_dot_v1_dot_layout__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#substantial/boundary/v1/agent.proto\x12\x17substantial.boundary.v1\x1a&substantial/boundary/v1/boundary.proto\x1a!substantial/boundary/v1/run.proto\x1a\"substantial/layout/v1/layout.proto\"\x89\x01\n\x06Served\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08versions\x18\x02 \x03(\r\x12\x18\n\x0bunversioned\x18\x03 \x01(\x08H\x00\x88\x01\x01\x12\x35\n\tretention\x18\x04 \x01(\x0b\x32\".substantial.boundary.v1.RetentionB\x0e\n\x0c_unversioned\"\xd0\x03\n\x0b\x41gentConfig\x12\x0e\n\x06prefix\x18\x01 \x01(\t\x12\x0e\n\x06worker\x18\x03 \x01(\t\x12\x32\n\tworkflows\x18\x04 \x03(\x0b\x32\x1f.substantial.boundary.v1.Served\x12\x13\n\x0b\x63oncurrency\x18\x05 \x01(\r\x12\x14\n\x0c\x63laim_ttl_ms\x18\x06 \x01(\x04\x12\x15\n\rclaim_skew_ms\x18\x07 \x01(\x04\x12\x13\n\x0bmax_idle_ms\x18\x08 \x01(\x04\x12\x10\n\x08\x64ue_page\x18\t \x01(\r\x12\x11\n\tdue_pages\x18\n \x01(\r\x12\x16\n\x0esnapshot_every\x18\x0b \x01(\x04\x12\x12\n\nop_retries\x18\x0c \x01(\r\x12\x0c\n\x04seed\x18\r \x01(\x0c\x12\x36\n\x08settings\x18\x0e \x01(\x0b\x32$.substantial.boundary.v1.RunSettings\x12\x13\n\x0bstore_waits\x18\x0f \x01(\x08\x12\x14\n\x0cwait_seconds\x18\x10 \x01(\r\x12\x14\n\x0ctombstone_ms\x18\x11 \x01(\x04\x12\x18\n\x10retention_min_ms\x18\x12 \x01(\x04\x12\x12\n\nrecheck_ms\x18\x13 \x01(\x04J\x04\x08\x02\x10\x03R\npartitions\"t\n\tReplayEnd\x12-\n\x04idle\x18\x01 \x01(\x0b\x32\x1d.substantial.boundary.v1.IdleH\x00\x12\x31\n\x07\x64ropped\x18\x02 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x42\x05\n\x03\x65nd\"\x9a\x05\n\x0c\x41gentRequest\x12+\n\x04next\x18\x01 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12:\n\x04\x66\x65\x65\x64\x18\x02 \x01(\x0b\x32*.substantial.boundary.v1.AgentRequest.FeedH\x00\x12\x41\n\x06\x63ommit\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentRequest.RunCommitH\x00\x12I\n\x0creplay_ended\x18\x04 \x01(\x0b\x32\x31.substantial.boundary.v1.AgentRequest.ReplayEndedH\x00\x12.\n\x04wake\x18\x05 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12\x32\n\x08shutdown\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12\x17\n\rwake_workflow\x18\x07 \x01(\tH\x00\x12,\n\x05\x64rain\x18\x08 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x1a\x45\n\x04\x46\x65\x65\x64\x12\n\n\x02id\x18\x01 \x01(\x04\x12\x31\n\x06result\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.OpResult\x1aI\n\tRunCommit\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x06\x63ommit\x18\x02 \x01(\x0b\x32\x1f.substantial.boundary.v1.Commit\x1aK\n\x0bReplayEnded\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x03\x65nd\x18\x02 \x01(\x0b\x32\".substantial.boundary.v1.ReplayEndB\t\n\x07request\"\x90\x06\n\x0c\x41gentCommand\x12<\n\x05store\x18\x01 \x01(\x0b\x32+.substantial.boundary.v1.AgentCommand.StoreH\x00\x12>\n\x06replay\x18\x02 \x01(\x0b\x32,.substantial.boundary.v1.AgentCommand.ReplayH\x00\x12\x44\n\tcommitted\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentCommand.CommittedH\x00\x12\x15\n\x0bstop_replay\x18\x04 \x01(\tH\x00\x12\x31\n\nwait_until\x18\x05 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12.\n\x04stop\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12@\n\x07scanned\x18\x07 \x01(\x0b\x32-.substantial.boundary.v1.AgentCommand.ScannedH\x00\x1a\x41\n\x05Store\x12\n\n\x02id\x18\x01 \x01(\x04\x12,\n\x02op\x18\x02 \x01(\x0b\x32 .substantial.boundary.v1.StoreOp\x1at\n\x06Replay\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\x30\n\x05input\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.RunInput\x12+\n\x06\x64ue_at\x18\x03 \x01(\x0b\x32\x1b.substantial.layout.v1.Time\x1a\x91\x01\n\tCommitted\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\t\n\x01n\x18\x02 \x01(\x04\x12\x0b\n\x03won\x18\x03 \x01(\x08\x12\x34\n\x05inbox\x18\x04 \x03(\x0b\x32%.substantial.boundary.v1.InboxMessage\x12)\n\x04\x63ost\x18\x05 \x01(\x0b\x32\x1b.substantial.layout.v1.Cost\x1a(\n\x07Scanned\x12\x10\n\x08workflow\x18\x01 \x01(\t\x12\x0b\n\x03\x64ue\x18\x02 \x01(\rB\t\n\x07\x63ommand\"\xba\x01\n\rAgentResponse\x12\x33\n\x05\x65rror\x18\x01 \x01(\x0b\x32\".substantial.boundary.v1.CoreErrorH\x00\x12\x38\n\x07\x63ommand\x18\x02 \x01(\x0b\x32%.substantial.boundary.v1.AgentCommandH\x00\x12.\n\x04\x64one\x18\x03 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x42\n\n\x08responseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#substantial/boundary/v1/agent.proto\x12\x17substantial.boundary.v1\x1a&substantial/boundary/v1/boundary.proto\x1a!substantial/boundary/v1/run.proto\x1a\"substantial/layout/v1/layout.proto\"\x89\x01\n\x06Served\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08versions\x18\x02 \x03(\r\x12\x18\n\x0bunversioned\x18\x03 \x01(\x08H\x00\x88\x01\x01\x12\x35\n\tretention\x18\x04 \x01(\x0b\x32\".substantial.boundary.v1.RetentionB\x0e\n\x0c_unversioned\"\x98\x04\n\x0b\x41gentConfig\x12\x0e\n\x06prefix\x18\x01 \x01(\t\x12\x0e\n\x06worker\x18\x03 \x01(\t\x12\x32\n\tworkflows\x18\x04 \x03(\x0b\x32\x1f.substantial.boundary.v1.Served\x12\x13\n\x0b\x63oncurrency\x18\x05 \x01(\r\x12\x14\n\x0c\x63laim_ttl_ms\x18\x06 \x01(\x04\x12\x15\n\rclaim_skew_ms\x18\x07 \x01(\x04\x12\x13\n\x0bmax_idle_ms\x18\x08 \x01(\x04\x12\x10\n\x08\x64ue_page\x18\t \x01(\r\x12\x11\n\tdue_pages\x18\n \x01(\r\x12\x12\n\nop_retries\x18\x0c \x01(\r\x12\x0c\n\x04seed\x18\r \x01(\x0c\x12\x36\n\x08settings\x18\x0e \x01(\x0b\x32$.substantial.boundary.v1.RunSettings\x12\x13\n\x0bstore_waits\x18\x0f \x01(\x08\x12\x14\n\x0cwait_seconds\x18\x10 \x01(\r\x12\x1a\n\x12\x62locked_initial_ms\x18\x14 \x01(\x04\x12\x16\n\x0e\x62locked_max_ms\x18\x15 \x01(\x04\x12\x1a\n\x12\x62locked_multiplier\x18\x16 \x01(\x01J\x04\x08\x02\x10\x03J\x04\x08\x0b\x10\x0cJ\x04\x08\x11\x10\x12J\x04\x08\x12\x10\x13J\x04\x08\x13\x10\x14R\npartitionsR\x0esnapshot_everyR\x0ctombstone_msR\x10retention_min_msR\nrecheck_ms\"\xa7\x01\n\tReplayEnd\x12-\n\x04idle\x18\x01 \x01(\x0b\x32\x1d.substantial.boundary.v1.IdleH\x00\x12\x31\n\x07\x64ropped\x18\x02 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12\x31\n\x07\x62locked\x18\x03 \x01(\x0b\x32\x1e.substantial.layout.v1.FailureH\x00\x42\x05\n\x03\x65nd\"\xab\x05\n\x0c\x41gentRequest\x12+\n\x04next\x18\x01 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12:\n\x04\x66\x65\x65\x64\x18\x02 \x01(\x0b\x32*.substantial.boundary.v1.AgentRequest.FeedH\x00\x12\x41\n\x06\x63ommit\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentRequest.RunCommitH\x00\x12I\n\x0creplay_ended\x18\x04 \x01(\x0b\x32\x31.substantial.boundary.v1.AgentRequest.ReplayEndedH\x00\x12.\n\x04wake\x18\x05 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12\x32\n\x08shutdown\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12\x17\n\rwake_workflow\x18\x07 \x01(\tH\x00\x12,\n\x05\x64rain\x18\x08 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12\x0f\n\x05\x63laim\x18\t \x01(\tH\x00\x1a\x45\n\x04\x46\x65\x65\x64\x12\n\n\x02id\x18\x01 \x01(\x04\x12\x31\n\x06result\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.OpResult\x1aI\n\tRunCommit\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x06\x63ommit\x18\x02 \x01(\x0b\x32\x1f.substantial.boundary.v1.Commit\x1aK\n\x0bReplayEnded\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\x03\x65nd\x18\x02 \x01(\x0b\x32\".substantial.boundary.v1.ReplayEndB\t\n\x07request\"\xe7\x07\n\x0c\x41gentCommand\x12<\n\x05store\x18\x01 \x01(\x0b\x32+.substantial.boundary.v1.AgentCommand.StoreH\x00\x12>\n\x06replay\x18\x02 \x01(\x0b\x32,.substantial.boundary.v1.AgentCommand.ReplayH\x00\x12\x44\n\tcommitted\x18\x03 \x01(\x0b\x32/.substantial.boundary.v1.AgentCommand.CommittedH\x00\x12\x15\n\x0bstop_replay\x18\x04 \x01(\tH\x00\x12\x31\n\nwait_until\x18\x05 \x01(\x0b\x32\x1b.substantial.layout.v1.TimeH\x00\x12.\n\x04stop\x18\x06 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x12@\n\x07scanned\x18\x07 \x01(\x0b\x32-.substantial.boundary.v1.AgentCommand.ScannedH\x00\x12>\n\x06skewed\x18\x08 \x01(\x0b\x32,.substantial.boundary.v1.AgentCommand.SkewedH\x00\x12\x11\n\x07\x63laimed\x18\t \x01(\tH\x00\x1a\x41\n\x05Store\x12\n\n\x02id\x18\x01 \x01(\x04\x12,\n\x02op\x18\x02 \x01(\x0b\x32 .substantial.boundary.v1.StoreOp\x1at\n\x06Replay\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\x30\n\x05input\x18\x02 \x01(\x0b\x32!.substantial.boundary.v1.RunInput\x12+\n\x06\x64ue_at\x18\x03 \x01(\x0b\x32\x1b.substantial.layout.v1.Time\x1a\x91\x01\n\tCommitted\x12\x0b\n\x03run\x18\x01 \x01(\t\x12\t\n\x01n\x18\x02 \x01(\x04\x12\x0b\n\x03won\x18\x03 \x01(\x08\x12\x34\n\x05inbox\x18\x04 \x03(\x0b\x32%.substantial.boundary.v1.InboxMessage\x12)\n\x04\x63ost\x18\x05 \x01(\x0b\x32\x1b.substantial.layout.v1.Cost\x1a\x81\x01\n\x06Skewed\x12\x0b\n\x03run\x18\x01 \x01(\t\x12/\n\nsegment_at\x18\x02 \x01(\x0b\x32\x1b.substantial.layout.v1.Time\x12(\n\x03now\x18\x03 \x01(\x0b\x32\x1b.substantial.layout.v1.Time\x12\x0f\n\x07\x63urrent\x18\x04 \x01(\t\x1a(\n\x07Scanned\x12\x10\n\x08workflow\x18\x01 \x01(\t\x12\x0b\n\x03\x64ue\x18\x02 \x01(\rB\t\n\x07\x63ommand\"\xba\x01\n\rAgentResponse\x12\x33\n\x05\x65rror\x18\x01 \x01(\x0b\x32\".substantial.boundary.v1.CoreErrorH\x00\x12\x38\n\x07\x63ommand\x18\x02 \x01(\x0b\x32%.substantial.boundary.v1.AgentCommandH\x00\x12.\n\x04\x64one\x18\x03 \x01(\x0b\x32\x1e.substantial.boundary.v1.EmptyH\x00\x42\n\n\x08responseb\x06proto3')
 
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, globals())
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'substantial.boundary.v1.agent_pb2', globals())
@@ -26,27 +26,29 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _SERVED._serialized_start=176
   _SERVED._serialized_end=313
   _AGENTCONFIG._serialized_start=316
-  _AGENTCONFIG._serialized_end=780
-  _REPLAYEND._serialized_start=782
-  _REPLAYEND._serialized_end=898
-  _AGENTREQUEST._serialized_start=901
-  _AGENTREQUEST._serialized_end=1567
-  _AGENTREQUEST_FEED._serialized_start=1335
-  _AGENTREQUEST_FEED._serialized_end=1404
-  _AGENTREQUEST_RUNCOMMIT._serialized_start=1406
-  _AGENTREQUEST_RUNCOMMIT._serialized_end=1479
-  _AGENTREQUEST_REPLAYENDED._serialized_start=1481
-  _AGENTREQUEST_REPLAYENDED._serialized_end=1556
-  _AGENTCOMMAND._serialized_start=1570
-  _AGENTCOMMAND._serialized_end=2354
-  _AGENTCOMMAND_STORE._serialized_start=1970
-  _AGENTCOMMAND_STORE._serialized_end=2035
-  _AGENTCOMMAND_REPLAY._serialized_start=2037
-  _AGENTCOMMAND_REPLAY._serialized_end=2153
-  _AGENTCOMMAND_COMMITTED._serialized_start=2156
-  _AGENTCOMMAND_COMMITTED._serialized_end=2301
-  _AGENTCOMMAND_SCANNED._serialized_start=2303
-  _AGENTCOMMAND_SCANNED._serialized_end=2343
-  _AGENTRESPONSE._serialized_start=2357
-  _AGENTRESPONSE._serialized_end=2543
+  _AGENTCONFIG._serialized_end=852
+  _REPLAYEND._serialized_start=855
+  _REPLAYEND._serialized_end=1022
+  _AGENTREQUEST._serialized_start=1025
+  _AGENTREQUEST._serialized_end=1708
+  _AGENTREQUEST_FEED._serialized_start=1476
+  _AGENTREQUEST_FEED._serialized_end=1545
+  _AGENTREQUEST_RUNCOMMIT._serialized_start=1547
+  _AGENTREQUEST_RUNCOMMIT._serialized_end=1620
+  _AGENTREQUEST_REPLAYENDED._serialized_start=1622
+  _AGENTREQUEST_REPLAYENDED._serialized_end=1697
+  _AGENTCOMMAND._serialized_start=1711
+  _AGENTCOMMAND._serialized_end=2710
+  _AGENTCOMMAND_STORE._serialized_start=2194
+  _AGENTCOMMAND_STORE._serialized_end=2259
+  _AGENTCOMMAND_REPLAY._serialized_start=2261
+  _AGENTCOMMAND_REPLAY._serialized_end=2377
+  _AGENTCOMMAND_COMMITTED._serialized_start=2380
+  _AGENTCOMMAND_COMMITTED._serialized_end=2525
+  _AGENTCOMMAND_SKEWED._serialized_start=2528
+  _AGENTCOMMAND_SKEWED._serialized_end=2657
+  _AGENTCOMMAND_SCANNED._serialized_start=2659
+  _AGENTCOMMAND_SCANNED._serialized_end=2699
+  _AGENTRESPONSE._serialized_start=2713
+  _AGENTRESPONSE._serialized_end=2899
 # @@protoc_insertion_point(module_scope)

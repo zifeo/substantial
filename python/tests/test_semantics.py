@@ -7,7 +7,7 @@ import asyncio
 from datetime import timedelta
 
 import pytest
-from conftest import LONG, eventually, script
+from conftest import LONG, blocked_with, eventually, script
 
 from substantial import (
     Cancelled,
@@ -178,7 +178,7 @@ async def test_handlers_bound_together_see_past_messages_in_arrival_order(store:
         await run.send(name, n)
     await run.send("go")
     async with script(sub, [ordered]):
-        # § n4zyj94mr@br7n3
+        # § n4zyj94mr@hwd6e
         assert await run.result(timeout=LONG) == {
             "seen": ["add:1", "remove:1", "add:2", "remove:2"],
             "adds": [1, 2],
@@ -314,6 +314,27 @@ async def test_published_values_are_read_by_clients(store: Store) -> None:
         await run.read("Not A Key")
 
 
+async def test_a_published_value_is_read_while_its_run_waits(store: Store) -> None:
+    @workflow
+    async def waiting_publisher(c: Context) -> int:
+        c.publish("p", 1)
+        return await c.receive("go")
+
+    sub = await Substantial._create(store)
+    async with script(sub, [waiting_publisher]):
+        run = await sub.start(waiting_publisher)
+
+        async def published() -> bool:
+            return await run.read("p") == 1
+
+        # § fx1tv8nqp.a@056jm
+        await eventually("the published value", published)
+        assert await run.status() == RunStatus.SUSPENDED
+        # § end fx1tv8nqp.a
+        await run.send("go", 2)
+        assert await run.result(timeout=LONG) == 2
+
+
 def versioned(version: int | None):
     @workflow(name="versioned", version=version)
     async def code(c: Context) -> str:
@@ -363,7 +384,9 @@ def changed(first: bool):
     return code
 
 
-async def test_an_incompatible_change_fails_the_run_with_non_determinism(store: Store) -> None:
+async def test_an_incompatible_change_blocks_the_run_until_the_code_is_rolled_back(
+    store: Store,
+) -> None:
     sub = await Substantial._create(store)
     async with script(sub, [changed(True)]):
         run = await sub.start(changed(True))
@@ -372,10 +395,14 @@ async def test_an_incompatible_change_fails_the_run_with_non_determinism(store: 
             return await run.status() == RunStatus.SUSPENDED
 
         await eventually("the wait", suspended)
-    async with script(sub, [changed(False)]):
+    # The worker that blocks the run sets when it is tried again, whatever the next worker's
+    # backoff: kept short, the rolled back code runs soon however long this phase took.
+    backoff = {"blocked_initial": timedelta(milliseconds=50), "blocked_max": timedelta(seconds=0.2)}
+    async with script(sub, [changed(False)], **backoff):
         await run.send("go", "now")
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-    assert failed.value.status == "failed"
-    assert failed.value.error.type == "NonDeterminism"
-    assert str(failed.value).endswith("; an incompatible change needs a new version (version=)")
+        # § rbwstdetg@rk5m6
+        error = await blocked_with(sub, run)
+    assert error.type == "NonDeterminism", error
+    async with script(sub, [changed(True)]):
+        assert await run.result(timeout=LONG) == 1
+    # § end rbwstdetg

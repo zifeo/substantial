@@ -53,11 +53,37 @@ message CoreError {
   string message = 2;
 }
 
-// The store contract's four operations (I-26).
+// The store contract's six operations (I-26): create, cas, get, list and delete, and an expiry
+// in whole days that every write carries.
+//
+// Expiry: a write with expiry_days sets its key to expire that many days after the write lands,
+// 1 to 36,500; a write without it clears any expiry the key had. The key reads as written until at
+// least the write plus expiry_days, and is removed, get answering missing and create writing, at
+// the latest 2 days after that; between the two it may read either way, but once removed it stays
+// removed until a new write. A key past its expiry and not yet removed may still be listed: the
+// core lists no key it writes with an expiry.
+//
+// ETags are opaque: an etag changes whenever the bytes change, and may change on a write of equal
+// bytes too. The core never compares them, it only names one in a cas.
+//
+// An ambiguous answer (a timeout, a dropped connection) is resolved by the adapter with one get,
+// counted in attempts. For a create: equal bytes mean it landed (created, with that etag), missing
+// means it is sent again, other bytes mean exists. For a cas: equal bytes mean it landed (written,
+// with that etag), the etag named still current means it is sent again with the same bytes,
+// anything else means mismatch. No bucket versioning is needed for either.
 message StoreOp {
   message Create {
     string key = 1;
     bytes bytes = 2;
+    optional uint32 expiry_days = 3;
+  }
+  // Writes bytes only if the key's current value has the etag, atomically with every other
+  // operation on the key; a missing key answers mismatch.
+  message Cas {
+    string key = 1;
+    bytes bytes = 2;
+    string etag = 3;
+    optional uint32 expiry_days = 4;
   }
   message List {
     string prefix = 1;
@@ -70,6 +96,7 @@ message StoreOp {
     string get = 2;
     List list = 3;
     string delete = 4;
+    Cas cas = 5;
   }
 }
 
@@ -88,14 +115,32 @@ message OpResult {
     repeated string keys = 1;
     optional string etag = 2;
   }
+  // A write that landed: the etag of the value written, for a later cas.
+  message Written {
+    string etag = 1;
+  }
+  // A get: the key's value and its etag.
+  message Object {
+    bytes bytes = 1;
+    string etag = 2;
+  }
+  // A get answered bytes alone before the etag existed.
+  reserved 3;
+  reserved "bytes";
   oneof result {
-    Empty created = 1;
+    // A create that wrote.
+    Written created = 1;
+    // A create that found the key.
     Empty exists = 2;
-    bytes bytes = 3;
+    Object object = 11;
     Empty missing = 4;
     Listing listing = 5;
     Empty deleted = 6;
     StoreFailure failed = 7;
+    // A cas that wrote.
+    Written written = 9;
+    // A cas whose etag is not the key's current one, or whose key is missing.
+    Empty mismatch = 10;
   }
   // The requests the adapter sent for the operation, its retries and read-backs included: at least
   // 1 on every result fed to an agent or a run machine, which count them; plans ignore it.

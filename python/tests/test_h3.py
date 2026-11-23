@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 
 import pytest
-from conftest import eventually
+from conftest import eventually, value
 from fake_h3 import CREDENTIALS, FakeH3
 
 from substantial import Context, Substantial, minutes, workflow
@@ -36,25 +36,25 @@ def signed(headers: dict[str, str]) -> list[str]:
 
 async def test_an_immediate_answer_carries_the_etag(h3: FakeH3, store: Store) -> None:
     assert store.capabilities.wait
-    await store.create("q/a", b"a")
+    await store.create("q/a", b"a", expiry=None)
     plain = await store.list("q/", start_after=None, max_keys=10, wait=None)
     assert plain.etag is None
-    assert "x-substantial-wait-seconds" not in h3.listed[-1].headers
+    assert "x-herald-wait-seconds" not in h3.listed[-1].headers
     started = time.monotonic()
     first = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0))
     assert first.keys == ["q/a"]
     assert first.etag is not None
     headers = h3.listed[-1].headers
-    assert headers["x-substantial-wait-seconds"] == "0"
-    assert "x-substantial-wait-etag" not in headers
-    assert "x-substantial-wait-seconds" in signed(headers)
+    assert headers["x-herald-wait-seconds"] == "0"
+    assert "x-herald-wait-etag" not in headers
+    assert "x-herald-wait-seconds" in signed(headers)
     again = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0, first.etag))
     assert again == first
     assert time.monotonic() - started < 1
 
 
 async def test_a_held_wait_is_answered_by_a_change(h3: FakeH3, store: Store) -> None:
-    await store.create("q/a", b"a")
+    await store.create("q/a", b"a", expiry=None)
     etag = (await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0))).etag
     held = asyncio.create_task(
         store.list("q/", start_after=None, max_keys=10, wait=ListWait(10, etag))
@@ -65,7 +65,7 @@ async def test_a_held_wait_is_answered_by_a_change(h3: FakeH3, store: Store) -> 
 
     await eventually("a held listing", holding)
     started = time.monotonic()
-    await store.create("q/b", b"b")
+    await store.create("q/b", b"b", expiry=None)
     woken = await held
     assert time.monotonic() - started < 2
     assert woken.keys == ["q/a", "q/b"]
@@ -73,18 +73,18 @@ async def test_a_held_wait_is_answered_by_a_change(h3: FakeH3, store: Store) -> 
     listed = h3.listed[-1]
     assert listed.woken
     assert (
-        listed.headers["x-substantial-wait-seconds"],
-        listed.headers["x-substantial-wait-etag"],
+        listed.headers["x-herald-wait-seconds"],
+        listed.headers["x-herald-wait-etag"],
     ) == (
         "10",
         etag,
     )
-    assert {"x-substantial-wait-etag", "x-substantial-wait-seconds"} <= set(signed(listed.headers))
+    assert {"x-herald-wait-etag", "x-herald-wait-seconds"} <= set(signed(listed.headers))
 
 
 async def test_a_wait_that_ends_unchanged_keeps_the_etag(h3: FakeH3, store: Store) -> None:
-    await store.create("q/a", b"a")
-    await store.create("other/x", b"x")
+    await store.create("q/a", b"a", expiry=None)
+    await store.create("other/x", b"x", expiry=None)
     before = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0))
     started = time.monotonic()
     held = asyncio.create_task(
@@ -95,7 +95,7 @@ async def test_a_wait_that_ends_unchanged_keeps_the_etag(h3: FakeH3, store: Stor
         return h3.holds == 1
 
     await eventually("a held listing", holding)
-    await store.create("other/y", b"y")
+    await store.create("other/y", b"y", expiry=None)
     assert await held == before
     assert time.monotonic() - started >= 2
     assert not h3.listed[-1].woken
@@ -103,7 +103,7 @@ async def test_a_wait_that_ends_unchanged_keeps_the_etag(h3: FakeH3, store: Stor
 
 async def test_a_missing_etag_is_a_store_failure(h3: FakeH3, store: Store) -> None:
     h3.omit_etag = True
-    with pytest.raises(StoreFailure, match="x-substantial-listing-etag"):
+    with pytest.raises(StoreFailure, match="x-herald-listing-etag"):
         await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0))
     assert len(h3.listed) == 1, "a missing etag is not retried"
     await store.list("q/", start_after=None, max_keys=10, wait=None)
@@ -141,17 +141,17 @@ async def countdown(c: Context, n: int) -> str:
     return "liftoff"
 
 
-async def test_a_result_is_waited_on_its_key_through_a_continuation(h3: FakeH3) -> None:
+async def test_a_result_is_waited_on_its_head_through_a_continuation(h3: FakeH3) -> None:
     sub = await Substantial.create(h3.url("results"), credentials=CREDENTIALS)
     async with sub.worker([countdown], preset="script"):
         run = await sub.start(countdown, {"n": 1})
         assert await run.result(timeout=timedelta(seconds=10)) == "liftoff"
-    waits = [listed for listed in h3.listed if listed.prefix.endswith("/result")]
-    runs = list(dict.fromkeys(listed.prefix for listed in waits))
-    assert len(runs) == 2, f"the first run, then the one it continued into: {runs}"
-    assert len(waits) <= 4, f"a listing for the etag, then one held, per run: {waits}"
-    assert all("x-substantial-wait-seconds" in listed.headers for listed in waits)
-    assert any(listed.woken for listed in waits), waits
+    head = f"results/runs/{run.chain}"
+    waits = [listed for listed in h3.listed if listed.prefix.startswith("results/runs/")]
+    assert {listed.prefix for listed in waits} == {head}, "the chain's head, continued in place"
+    assert waits[0].headers["x-herald-wait-seconds"] == "0", "the first takes the etag"
+    assert all(listed.headers["x-herald-wait-seconds"] == "20" for listed in waits[1:]), waits
+    assert any(listed.woken for listed in waits), "a commit of the head wakes the wait"
     await sub.close()
 
 
@@ -170,7 +170,7 @@ async def test_a_get_is_not_queued_behind_waiting_listings(h3: FakeH3, store: St
 
     await eventually("64 held listings", holding, within=1)
     started = time.monotonic()
-    assert await store.get("k") is None
+    assert await value(store, "k") is None
     took = time.monotonic() - started
     await asyncio.gather(*held)
     assert took < 0.5, f"a get took {took:.2f} s behind 64 held listings"
@@ -195,3 +195,12 @@ async def test_a_run_ends_promptly_with_4_workflows_waiting(h3: FakeH3) -> None:
         assert await run.result(timeout=timedelta(seconds=10)) == 1
         took = time.monotonic() - started
     assert took < 2, f"a run took {took:.2f} s"
+
+
+async def test_a_bucket_is_used_whatever_its_versioning(h3: FakeH3) -> None:
+    # The fake answers no versioning request: an adapter reading it would fail to open.
+    url = h3.url("unversioned")
+    # § x79k6r9e5@6td1h
+    await (await Substantial.create(url, credentials=CREDENTIALS)).close()
+    await (await Substantial.open(url, credentials=CREDENTIALS)).close()
+    assert not [target for _, target in h3.requests if "versioning" in target]

@@ -1,6 +1,3 @@
-// The environment: a `Substantial` on a namespace in memory and a virtual clock, its clients, and
-// what a test asks of them.
-import { fromBinary } from "@bufbuild/protobuf";
 import { createInput, type Host, opening, openOn, Substantial } from "../client.ts";
 import type { CoreModule } from "../core.ts";
 import type { Prices } from "../cost.ts";
@@ -13,7 +10,7 @@ import {
   WaitTimeout,
 } from "../errors.ts";
 import { Metering, type Observed } from "../observe.ts";
-import { layout } from "../proto.ts";
+import type { layout } from "../proto.ts";
 import {
   type Ended,
   ended,
@@ -79,12 +76,6 @@ class EnvRun<O> extends Run<O> {
   }
 }
 
-function startOf(world: World, run: string): layout.Start {
-  const bytes = world.objects.get(`runs/${run}/start`);
-  if (bytes === undefined) throw new Error(`run ${run} has no start`);
-  return fromBinary(layout.StartSchema, bytes);
-}
-
 function serves(world: World, start: layout.Start): boolean {
   return world.pods.some(
     (p) => p.worker?.alive && p.workflows.get(start.workflow, start.version) !== undefined,
@@ -98,24 +89,30 @@ function named(start: layout.Start): string {
 }
 
 function waitsOn(world: World, run: string): string {
-  const start = startOf(world, run);
+  const head = world.head(run);
+  const start = head.start;
+  if (start === undefined) throw new Error(`runs/${run}: a head without start`);
   const what: string[] = [];
   if (!serves(world, start)) what.push(`workflow ${named(start)}, which no worker serves`);
   for (const hold of world.holds) {
     for (const h of hold.entries) if (h.run === run) what.push(`step ${hold.step}, held`);
   }
-  for (const key of world.keys(`queues/${start.workflow}/`)) {
+  const error = head.blocked?.error;
+  if (head.blocked !== undefined) {
+    what.push(`a fix of its code, blocked by ${error?.type}: ${error?.message}`);
+  }
+  for (const key of world.keys(`queues/${start.workflow}/due/`)) {
     const entry = key.slice(key.lastIndexOf("/") + 1);
-    if (entry.split("~")[1] === run) {
+    const [, chain, tag] = entry.split("~");
+    // A message's entry, at the epoch, is no timer.
+    if (chain === start.chain && tag?.startsWith("s")) {
       what.push(`a timer due at ${new Date(dueMs(entry)).toISOString()}`);
     }
   }
   if (what.length === 0) what.push("a message, or the end of a run it started");
-  const runs = world.keys("runs/").flatMap((k) => (k.endsWith("/start") ? [k.split("/")[1]] : []));
-  const unserved = runs
-    .filter((r) => r !== undefined && r !== run && !world.objects.has(`runs/${r}/result`))
-    .map((r) => [r, startOf(world, r as string)] as const)
-    .filter(([, s]) => !serves(world, s))
+  const unserved = world
+    .pending()
+    .filter(([r, s]) => r !== run && !serves(world, s))
     .map(([r, s]) => `${r} (${named(s)})`);
   if (unserved.length > 0) {
     what.push(`while runs of workflows no worker serves wait: ${unserved.join(", ")}`);

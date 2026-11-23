@@ -106,6 +106,13 @@ pub(crate) fn ulid(ms: i64) -> String {
     ULIDS.next(ms)
 }
 
+/// An id of this opener's own, so that two processes opening one namespace at once never share a
+/// probe key.
+pub(crate) fn probe() -> String {
+    // § mgfgmd25p.e@g2zm3
+    ulid(crate::time::now().ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::ulid;

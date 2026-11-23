@@ -51,7 +51,7 @@ async def failing(c: s.Context) -> None:
 
 @s.workflow
 async def failing_parent(c: s.Context) -> None:
-    await c.start(failing, id="its-child")
+    await c.start(failing, id="its-child", abandon=True)
 
 
 @s.workflow
@@ -134,7 +134,7 @@ async def test_a_run_failing_in_the_background_fails_the_test() -> None:
         await env.check()
 
 
-@s.workflow(retention=s.hours(1))
+@s.workflow(retention=1)
 async def failing_briefly_kept(c: s.Context) -> None:
     async def fail() -> None:
         raise s.Permanent("card declined")
@@ -163,13 +163,13 @@ async def test_a_child_failure_its_parent_read_is_read() -> None:
         await env.check()
 
 
-async def test_a_failed_run_collected_before_check_is_reported() -> None:
+async def test_a_failed_run_removed_before_check_is_reported() -> None:
     async with (
         s.testing.Env.open(now=T0) as env,
         env.worker([failing_briefly_kept], preset="service"),
     ):
         run = await env.start(failing_briefly_kept, id="nightly")
-        await env.advance(s.days(1))
+        await env.advance(s.days(2))
         with pytest.raises(s.RunNotFound):
             await run.status()
         with pytest.raises(s.testing.Unchecked, match=r"nightly \(StepFailed: .*card declined\)"):
@@ -423,13 +423,13 @@ async def test_chaos_faults_the_scans_of_an_idle_worker() -> None:
 async def test_chaos_counts_a_create_that_found_its_key_as_failed() -> None:
     async with s.testing.Env.open(now=T0, chaos=s.testing.Chaos(seed=1, rate=1)) as env:
         world = env._world
-        await world.memory.create("taken", b"x")
+        await world.memory.create("taken", b"x", expiry=None)
         clock = SimpleNamespace(id="w", paused=False, tries=Counter())
         store = world.store(clock)  # type: ignore[arg-type]
         world.time.open = True
         for _ in range(20):
             with pytest.raises((Transient, Ambiguous)):
-                await store._try("create", "taken", lambda: store._create("taken", b"x"))
+                await store._try("create", "taken", lambda: store._create("taken", b"x", None))
         world.time.open = False
         assert (env.faults.failed, env.faults.ambiguous) == (20, 0)
 

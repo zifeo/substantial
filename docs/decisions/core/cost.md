@@ -8,17 +8,27 @@ On S3 a run costs its requests, and a step may cost money of its own (I-27, I-28
 
 - (a) The core counts as many requests as each answer says the adapter sent for it.
 
-- (b) A worker's scans, the collection of ended runs and client calls belong to no run.
+- (b) ~~A worker's scans, the collection of ended runs and client calls belong to no run.~~
 
-- (c) Each segment records the chain's cost up to it, the requests of its own commit included as planned, so a run's cost is a lower bound, exact but for what its plan did not foresee and no later segment of the same worker recorded.
+- (c) ~~Each segment records the chain's cost up to it, the requests of its own commit included as planned, so a run's cost is a lower bound, exact but for what its plan did not foresee and no later segment of the same worker recorded.~~
+
+- (d) A worker's scans, its serving of a chain that ended and client calls belong to no run, and expiry sends no request.
+
+- (e) ~~Each segment records the chain's cost up to it, every request its worker sent for the chain included, so a run's cost leaves out only the requests no later segment of its own follows: a commit that lost its race, the telling of its watchers after its end, and the wakeups that release it while it is kept.~~
+
+- (f) Each segment records the chain's cost up to it, every request its worker sent for the chain included, so a run's cost leaves out only the requests no later segment of its own follows: a commit that lost its race, the telling of its watchers after its end, and the wakeups a child's late end brings after it.
 
 **§ <a id="m0vtdttae">m0vtdttae</a> `c.cost()` is the chain's cost, not the run's: a continued run carries its chain's total to the next run, and a retry the failed run's.**
 
 - (a) A child's total reaches its parent with its end, and the parent's cost includes it from the place the run received it.
 
-- (b) A cancelled run's cost is the requests of its own replays, the fan-out that cancels its children apart.
+- (b) ~~A cancelled run's cost is the requests of its own replays, the fan-out that cancels its children apart.~~
 
 - (c) `c.cost()` is recorded, so a replay gets the value the first run saw.
+
+- (d) ~~A run's cost is the requests of its own replays, the fan-out of its end that cancels its children apart.~~
+
+- (e) A run's cost is the requests of its own replays, the fan-out of its end that cancels its children included.
 
 ## Charges
 
@@ -52,10 +62,14 @@ On S3 a run costs its requests, and a step may cost money of its own (I-27, I-28
 
 The cost of a namespace on S3 is its requests ([Architecture](../../architecture.md#monthly-cost-on-s3)). These bounds make it predictable.
 
-**§ <a id="aqrdmj10z">aqrdmj10z</a> A wakeup reads at most one snapshot and the segments after it, at most `snapshot_every - 1`, and none a worker still holds of the run.**
+**§ <a id="aqrdmj10z">aqrdmj10z</a> ~~A wakeup reads at most one snapshot and the segments after it, at most `snapshot_every - 1`, and none a worker still holds of the run.~~**
+
+A chain's current run lives whole in its head, so a wakeup reads one object, and a worker that wrote the head last knows it already: a stale copy only loses its first compare-and-set, after which the worker reads the head again.
+
+**§ <a id="hdzwp5tnf">hdzwp5tnf</a> A wakeup reads one object of its chain, its head, or none when its worker holds the head it wrote last.**
 
 **§ <a id="gnhavbn5m">gnhavbn5m</a> An idle worker costs one listing per workflow it serves per `max_idle`, whatever runs, and a suspended run sends no request until its wakeup.**
 
-What a run costs is the sum of what its verbs and wakeups cost, and users price a workflow from the per-verb tables before they run it: the README's "a run that starts, calls 3 steps, sleeps a day and completes makes 13 PUT, 6 GET, 9 LIST and 13 free DELETE" is arithmetic on them. "The core decides every store operation, so the Python and TypeScript hosts perform the same ones", and "A change of the core or of a host that changes a count fails" the test that measures every row ([Architecture](../../architecture.md#keeping-this-document-true)).
+What a run costs is the sum of what its verbs and wakeups cost, and users price a workflow from the per-verb tables before they run it: the count of a run that starts, calls 3 steps, sleeps a day and completes ([Architecture](../../architecture.md#monthly-cost-on-s3)) is arithmetic on them. "The core decides every store operation, so the Python and TypeScript hosts perform the same ones", and "A change of the core or of a host that changes a count fails" the test that measures every row ([Architecture](../../architecture.md#keeping-this-document-true)).
 
 **§ <a id="qashr34zn">qashr34zn</a> Each client verb, workflow verb and wakeup makes the store requests that the per-verb tables of the architecture document list for it, in every host, so a run's request cost follows from the verbs it calls.**

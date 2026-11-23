@@ -17,7 +17,7 @@ use super::{derive, unit};
 use crate::error::{Error, Result};
 use crate::observe::Metering;
 use crate::plan::Ulids;
-use crate::proto::layout::v1::{self as layout, Status};
+use crate::proto::layout::v1 as layout;
 use crate::store::MemoryStore;
 use crate::time::millis;
 
@@ -26,7 +26,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// The earliest due entries of a workflow: of any kind, and of those that wake a run, a timer or
-/// a message; a collection entry sets no worker's timer, the next scan serves it.
+/// a message, which every due entry is.
 #[derive(Clone, Copy)]
 pub(super) struct Due {
     any: i64,
@@ -43,7 +43,7 @@ pub(super) fn idle_phase(seed: &[u8; 32], max: i64) -> i64 {
     ((z ^ (z >> 31)) % max as u64) as i64
 }
 
-/// The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<run>~<tag>`.
+/// The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<chain>~<tag>`.
 pub(super) fn due_ms(entry: &str) -> i64 {
     let t = entry.split('~').next().unwrap_or_default();
     let n = |range: std::ops::Range<usize>| -> u32 {
@@ -87,6 +87,9 @@ pub(crate) struct World {
     /// Off only in the test that compares a scenario with and without skipping.
     pub(super) skipping: AtomicBool,
     pub(super) skipped: AtomicU64,
+    /// For the replay tester: each run its replays checked against their history, with the
+    /// divergence they met; `None` in every other environment, whose replays go on.
+    checks: Mutex<Option<BTreeMap<String, Option<String>>>>,
 }
 
 impl World {
@@ -102,15 +105,17 @@ impl World {
             })?
             .id();
         let seed = chaos.map_or(0, |c| c.seed);
+        let time = Arc::new(Time::new(ms));
+        let clock = time.clone();
         Ok(Self {
             runtime,
             metering,
-            memory: MemoryStore::open(&ns)?,
+            memory: MemoryStore::with_clock(&ns, Arc::new(move || clock.now()))?,
             ns,
-            time: Arc::new(Time::new(ms)),
+            time,
             chaos,
             seed,
-            // § hz0ve24df@b6a1m
+            // § hz0ve24df@f2qqg
             core_seed: derive(seed, &[&"core"]),
             ulids: Ulids::seeded(seed),
             // § end hz0ve24df
@@ -125,28 +130,64 @@ impl World {
             due: Mutex::default(),
             skipping: AtomicBool::new(true),
             skipped: AtomicU64::new(0),
+            checks: Mutex::default(),
         })
     }
 
-    /// Records a failed end as its result is written: retention may collect it before `check`.
+    /// Has every replay of its workers stop at the end of its history, as the replay tester's.
+    pub(super) fn check_only(&self) {
+        *lock(&self.checks) = Some(BTreeMap::new());
+    }
+
+    pub(crate) fn checks_only(&self) -> bool {
+        lock(&self.checks).is_some()
+    }
+
+    /// A replay of `run` reached the end of its history, or diverged before it.
+    pub(crate) fn checked(&self, run: &str, diverged: Option<String>) {
+        if let Some(checks) = lock(&self.checks).as_mut() {
+            checks.insert(run.to_owned(), diverged);
+        }
+    }
+
+    pub(super) fn checked_run(&self, run: &str) -> Option<Option<String>> {
+        lock(&self.checks).as_ref()?.get(run).cloned()
+    }
+
+    /// The errors the workers died of, for a run the replay tester saw no replay of.
+    pub(super) fn worker_errors(&self) -> String {
+        let errors = lock(&self.errors);
+        if errors.is_empty() {
+            return "no worker died".into();
+        }
+        let each: Vec<String> = errors.iter().map(|(w, e)| format!("{w}: {e}")).collect();
+        each.join("; ")
+    }
+
+    /// Records a failed end as its head is written: its expiry may remove it before `check`.
     pub(super) fn written(&self, key: &str, bytes: &[u8]) {
-        let Some(run) = key
+        if !key
             .strip_prefix("runs/")
-            .and_then(|k| k.strip_suffix("/result"))
-            .filter(|run| !run.contains('/'))
-        else {
-            return;
-        };
-        let result = layout::Result::decode(bytes).expect("the core writes a result it decodes");
-        if result.status() != Status::Failed {
+            .is_some_and(|id| !id.contains('/'))
+        {
             return;
         }
-        let start = self.object(&format!("runs/{run}/start"));
-        let start = layout::Start::decode(start.expect("a run ends after its start"))
-            .expect("the core writes a start it decodes");
-        let error = result.error.unwrap_or_default();
-        let failure = format!("{run} ({}: {})", error.r#type, error.message);
-        lock(&self.failed).insert(run.to_owned(), (start.chain, failure));
+        let run = layout::Run::decode(bytes).expect("the core writes a run it decodes");
+        let Some(layout::run::Kind::Head(head)) = run.kind else {
+            return;
+        };
+        let failed = head.segments.last().and_then(|s| {
+            s.events.iter().find_map(|e| match &e.kind {
+                Some(layout::event::Kind::Failed(f)) => Some(f.error.clone().unwrap_or_default()),
+                _ => None,
+            })
+        });
+        let Some(error) = failed else {
+            return;
+        };
+        let chain = head.start.unwrap_or_default().chain;
+        let failure = format!("{} ({}: {})", head.run, error.r#type, error.message);
+        lock(&self.failed).insert(head.run, (chain, failure));
     }
 
     pub(super) fn worker_id(&self, place: usize, replaced: u32) -> String {
@@ -306,15 +347,12 @@ impl World {
             }
             let entry = key.rsplit('/').next().unwrap_or_default();
             let at = due_ms(entry);
-            let wakes = !(entry.ends_with("~c") || entry.ends_with("~g"));
             let earliest = due.entry(workflow.to_owned()).or_insert(Due {
                 any: at,
                 wake: None,
             });
             earliest.any = earliest.any.min(at);
-            if wakes {
-                earliest.wake = Some(earliest.wake.map_or(at, |w| w.min(at)));
-            }
+            earliest.wake = Some(earliest.wake.map_or(at, |w| w.min(at)));
         }
         *cached = Some((writes, due.clone()));
         due

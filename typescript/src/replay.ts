@@ -1,6 +1,6 @@
 // One replay: a run machine driven by the workflow's code (I-23, I-24).
 import { setImmediate } from "node:timers";
-import { create } from "@bufbuild/protobuf";
+import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { abandonedReplay, type Clock, Future, Inbox } from "./clock.ts";
 import { RunContext } from "./context.ts";
 import type { Core } from "./core.ts";
@@ -8,24 +8,36 @@ import type { Duration } from "./durations.ts";
 import {
   Cancelled,
   ContinuedAsNew,
+  endsRun,
   type Failure,
   failureOf,
   InvalidArgument,
   messageOf,
+  NEW_VERSION,
+  NonDeterminism,
   ProtocolError,
   StepFailed,
   StoreError,
 } from "./errors.ts";
 import { RunMachine } from "./machines.ts";
-import { Attempt, type Metering, type Observed, ObserverRaised, Replay } from "./observe.ts";
+import {
+  Attempt,
+  Blocked,
+  type Metering,
+  NearLimit,
+  type Observed,
+  ObserverRaised,
+  Replay,
+} from "./observe.ts";
 import {
   agent,
   type boundary,
   capped,
   decodeValue,
+  failureFrom,
   jsonText,
   jsonValue,
-  type layout,
+  layout,
   run,
 } from "./proto.ts";
 import { current, makeCall, type PendingStep, Shared, stepFailures } from "./scheduler.ts";
@@ -35,8 +47,9 @@ import type { Store } from "./stores/store.ts";
 import type { AnyWorkflow } from "./workflow.ts";
 
 export type ReplayEvent =
-  | { readonly kind: "commit"; readonly run: string; readonly commit: run.Commit }
-  | { readonly kind: "ended"; readonly run: string; readonly end: agent.ReplayEnd }
+  | { readonly kind: "commit"; readonly chain: string; readonly commit: run.Commit }
+  | { readonly kind: "claim"; readonly chain: string }
+  | { readonly kind: "ended"; readonly chain: string; readonly end: agent.ReplayEnd }
   /** The observer raised: the worker stops with its error. */
   | { readonly kind: "died"; readonly error: unknown };
 
@@ -61,10 +74,11 @@ function tell(host: ReplayHost, emit: Emit, event: Observed): void {
   }
 }
 
-/** What the agent loop tells a replay: the answer to its commit, or to stop. */
+/** What the agent loop tells a replay: the answer to its commit or its claim, or to stop. */
 export class Channel {
   readonly stopping: Future = new Future();
   readonly #committed = new Inbox<agent.AgentCommand_Committed>();
+  readonly claim: Future = new Future();
 
   get stopped(): boolean {
     return this.stopping.done;
@@ -76,6 +90,10 @@ export class Channel {
 
   committed(c: agent.AgentCommand_Committed): void {
     this.#committed.push(c);
+  }
+
+  claimed(): void {
+    this.claim.resolve();
   }
 
   hasCommitted(): boolean {
@@ -99,11 +117,13 @@ export function dropped(): agent.ReplayEnd {
 /** The kind of the last commit of a replay that won. */
 type Committed = { kind?: run.CommitKind };
 
-/** Runs one replay to its end, which it always reports, dropped when it could not go on;
- * `dueAt` is the earliest due entry it serves. */
+/** Runs one replay of `chain` to its end, which it always reports, dropped when it could not go
+ * on; `dueAt` is the earliest due entry it serves. Its requests to the agent name the chain, its
+ * logs and observer events the run, `data.run`. */
 export async function replay(
   core: Core,
   workflow: AnyWorkflow,
+  chain: string,
   data: run.RunInput,
   dueAt: layout.Time | undefined,
   clock: Clock,
@@ -115,7 +135,7 @@ export async function replay(
   const committed: Committed = {};
   let end: agent.ReplayEnd;
   try {
-    end = await drive(core, workflow, data, clock, emit, channel, host, committed);
+    end = await drive(core, workflow, chain, data, clock, emit, channel, host, committed);
   } catch (e) {
     console.error(`substantial: replay of ${data.run} dropped:`, e);
     end = dropped();
@@ -126,7 +146,7 @@ export async function replay(
   else if (committed.kind === run.CommitKind.END) ended = "ended";
   const delay = dueAt === undefined ? undefined : (now - Number(dueAt.ms)) / 1000;
   tell(host, emit, new Replay(workflow.name, delay, (clock.elapsed() - started) / 1000, ended));
-  emit({ kind: "ended", run: data.run, end });
+  emit({ kind: "ended", chain, end });
 }
 
 // Every microtask runs before a macrotask: once it fires, the code waits only on the host.
@@ -137,7 +157,7 @@ function quiescent(): Promise<void> {
 type Settled = { ok: true; value: unknown } | { ok: false; error: unknown };
 
 function inputOf(start: layout.Start): unknown {
-  // § e1dc4dar4.a@n8y3f
+  // § e1dc4dar4.a@exdgg
   const input = start.input?.kind.case === undefined ? {} : decodeValue(start.input);
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     throw new InvalidArgument(`an input is a JSON object, not ${jsonText(input)}`);
@@ -149,7 +169,7 @@ function inputOf(start: layout.Start): unknown {
 function spawn(shared: Shared, workflow: AnyWorkflow): { settled?: Settled } {
   const code: { settled?: Settled } = {};
   const context = new RunContext(shared);
-  // § one g4kv2kj51@3wd0m
+  // § one g4kv2kj51@9zmz6
   const promise = current.run(shared, async () => workflow.fn(context, inputOf(shared.start)));
   promise.then(
     (value) => {
@@ -162,47 +182,52 @@ function spawn(shared: Shared, workflow: AnyWorkflow): { settled?: Settled } {
   return code;
 }
 
-function endOf(workflow: AnyWorkflow, settled: Settled): run.End {
-  // § g039jvy6k@eh23v
+/** How the code's end ends its run, or the failure that blocks the run instead. */
+type Outcome = { readonly end: run.End } | { readonly blocked: Failure };
+
+function ending(end: MessageInitShape<typeof run.EndSchema>["end"]): Outcome {
+  return { end: create(run.EndSchema, { end }) };
+}
+
+function endOf(workflow: AnyWorkflow, settled: Settled): Outcome {
+  // § dxgjekysz@ba8vq
   if (!settled.ok) {
     const e = settled.error;
-    if (e instanceof Cancelled) {
-      return create(run.EndSchema, { end: { case: "cancelled", value: { reason: e.reason } } });
-    }
+    if (e instanceof Cancelled) return ending({ case: "cancelled", value: { reason: e.reason } });
     if (e instanceof ContinuedAsNew) {
       const continued = {
         input: jsonValue(e.input),
         ...(e.workflow === undefined ? {} : { workflow: e.workflow }),
         ...(e.version === undefined ? {} : { version: e.version }),
         ...(e.state === undefined ? {} : { state: jsonValue(e.state) }),
+        highest: e.highest,
       };
-      return create(run.EndSchema, { end: { case: "continued", value: continued } });
+      return ending({ case: "continued", value: continued });
     }
-    return create(run.EndSchema, {
-      end: { case: "failed", value: { error: endFailure(settled.error) } },
-    });
+    if (!endsRun(e)) return { blocked: failureOf(e) };
+    return ending({ case: "failed", value: { error: endFailure(e) } });
   }
   let text: string;
   try {
     text = jsonText(settled.value);
   } catch (e) {
-    // § g039jvy6k.a@q8xf2
-    const error = { type: "Json", message: `the value of ${workflow.name}: ${messageOf(e)}` };
-    return create(run.EndSchema, { end: { case: "failed", value: { error } } });
+    // § dxgjekysz.a@6qq3p
+    const message = `the value of ${workflow.name}: ${messageOf(e)}`;
+    return { blocked: { type: "Json", message, retryable: false } };
   }
   let json: Uint8Array;
   try {
     json = capped(new TextEncoder().encode(text), `the value of ${workflow.name}`);
   } catch (e) {
-    // § h8wg39cct.d@vydbn
-    return create(run.EndSchema, { end: { case: "failed", value: { error: failureOf(e) } } });
+    // § h8wg39cct.e@96tkv
+    return { blocked: { ...failureOf(e), retryable: false } };
   }
-  return create(run.EndSchema, { end: { case: "completed", value: { value: jsonValue(json) } } });
+  return ending({ case: "completed", value: { value: jsonValue(json) } });
 }
 
 /** The failure an error of the code ends its run with. */
 function endFailure(e: unknown) {
-  // § r3sd261h4.b@2qwrs
+  // § r3sd261h4.b@zbchy
   const failure = endedWith(failureOf(e));
   if (!(e instanceof StepFailed)) return failure;
   const core = stepFailures.get(e);
@@ -219,37 +244,41 @@ function endedWith({ type, message, retryable }: Failure) {
   return { type, message, retryable };
 }
 
-/** Records the end of the code: its value, its failure, its cancellation or its
- * continuation. */
-function endRun(shared: Shared, workflow: AnyWorkflow, settled: Settled): void {
-  shared.call(makeCall({ case: "end", value: endOf(workflow, settled) }));
+/** Records the end of the code: its value, its failure, its cancellation or its continuation;
+ * the failure that blocks the run instead, recording nothing. */
+function endRun(shared: Shared, workflow: AnyWorkflow, settled: Settled): Failure | undefined {
   shared.abandoned = true;
+  const outcome = endOf(workflow, settled);
+  if ("blocked" in outcome) return outcome.blocked;
+  shared.call(makeCall({ case: "end", value: outcome.end }));
+  return undefined;
 }
 
 type Code = { settled?: Settled } | undefined;
 
-/** Ends the run with a failure the code could not see, a handler's, and drops the code. */
-function failCode(shared: Shared, code: Code): Code {
+/** Whether the run's code may still end it: no core error, no divergence, no end the core made. */
+function open(shared: Shared): boolean {
+  return shared.fatal === undefined && shared.diverged === undefined && !shared.tooLarge;
+}
+
+/** Drops the code on a failure it could not see, a handler's, which blocks the run. */
+function failCode(shared: Shared, code: Code): [Code, Failure | undefined] {
   const f = shared.codeFailure;
   shared.codeFailure = undefined;
-  if (f === undefined || code === undefined) return code;
-  if (shared.fatal === undefined && shared.diverged === undefined) {
-    const end = create(run.EndSchema, { end: { case: "failed", value: { error: endedWith(f) } } });
-    shared.call(makeCall({ case: "end", value: end }));
-  }
+  if (f === undefined || code === undefined) return [code, undefined];
   shared.abandoned = true;
-  return undefined;
+  return [undefined, open(shared) ? endedWith(f) : undefined];
 }
 
 /** Logs a failed or cancelled end the commit recorded, once per run as only one commit wins. */
-function warnEnd(chain: string, c: run.Commit): void {
+function warnEnd(runId: string, c: run.Commit): void {
   for (const event of c.segment?.events ?? []) {
     const k = event.kind;
     if (k.case === "failed") {
       const error = k.value.error;
-      console.warn(`run ${chain} failed: ${error?.type}: ${error?.message}`);
+      console.warn(`run ${runId} failed: ${error?.type}: ${error?.message}`);
     } else if (k.case === "cancelled") {
-      console.warn(`run ${chain} cancelled: ${k.value.reason}`);
+      console.warn(`run ${runId} cancelled: ${k.value.reason}`);
     }
   }
 }
@@ -257,14 +286,14 @@ function warnEnd(chain: string, c: run.Commit): void {
 /** Hands a commit to the agent; whether the replay goes on. */
 async function commit(
   shared: Shared,
-  runId: string,
+  chain: string,
   c: run.Commit,
   emit: Emit,
   channel: Channel,
 ): Promise<boolean> {
   const clock = shared.clock;
   const n = c.segment?.n;
-  emit({ kind: "commit", run: runId, commit: c });
+  emit({ kind: "commit", chain, commit: c });
   for (;;) {
     if (channel.stopped) return false;
     const answer = channel.takeCommitted();
@@ -273,7 +302,7 @@ async function commit(
       if (n !== undefined && n !== answer.n) {
         throw new ProtocolError(`commit of segment ${n} acknowledged as ${answer.n}`);
       }
-      warnEnd(shared.start.chain, c);
+      warnEnd(shared.run, c);
       if (answer.cost !== undefined) shared.arrived(answer.inbox, answer.cost);
       else if (answer.inbox.length > 0) {
         throw new ProtocolError("messages arrived without the chain's cost");
@@ -330,12 +359,13 @@ function spawnAttempt(
 ): Future<Ended> {
   const timeout = e.timeoutMs === undefined ? undefined : Number(e.timeoutMs);
   return clock.spawn(async (): Promise<Ended> => {
-    // § yp7fv5sa7.a@mzt2w
+    // § yp7fv5sa7.a@jnaaz
     const started = clock.elapsed();
     // Unless it reaches its outcome: abandoned by a shutdown, a lost claim or a stop.
     let ended: Attempt["outcome"] = "abandoned";
     try {
-      const done = await attempt(clock, step.name, step.body, step.key, timeout, abandoned);
+      const { name, body, key, heartbeatMs } = step;
+      const done = await attempt(clock, name, body, key, timeout, abandoned, heartbeatMs);
       if (!done.abandoned) ended = attemptOutcome(done.outcome, e.attempt, step.maxAttempts);
       return [e.call, e.attempt, done.outcome, done.charges];
     } finally {
@@ -348,6 +378,7 @@ function spawnAttempt(
 async function drive(
   core: Core,
   workflow: AnyWorkflow,
+  chain: string,
   data: run.RunInput,
   clock: Clock,
   emit: Emit,
@@ -357,32 +388,59 @@ async function drive(
 ): Promise<agent.ReplayEnd> {
   if (data.start === undefined) throw new ProtocolError(`replay of ${data.run} without start`);
   const machine = new RunMachine(core, data);
-  // § one aym52h8ch@1fd5z
+  // § one aym52h8ch@ea0k1
   const stepTimeout = workflow.stepTimeout ?? host.stepTimeout;
-  const shared = new Shared(machine, clock, data, data.start, stepTimeout);
+  const shared = new Shared(
+    machine,
+    clock,
+    data,
+    data.start,
+    stepTimeout,
+    workflow.heartbeatTimeout,
+  );
   const attempts = new Set<Future<Ended>>();
   // Aborted as the replay ends: an attempt still in flight is abandoned.
   const abandoned = new AbortController();
+  /** Stops the code and its attempts as for a dropped replay, and reports the run blocked. */
+  const block = async (raised: Failure): Promise<agent.ReplayEnd> => {
+    // § dxgjekysz.e@sdxtb
+    const hinted = raised.type === "NonDeterminism" && !raised.message.endsWith(NEW_VERSION);
+    const failure = hinted ? { ...raised, message: `${raised.message}; ${NEW_VERSION}` } : raised;
+    abandoned.abort(abandonedReplay());
+    attempts.clear();
+    shared.abandoned = true;
+    if (clock.checksOnly()) {
+      clock.checked(data.run, `${failure.type}: ${failure.message}`);
+      await clock.wait([], undefined);
+    }
+    // § yp7fv5sa7.c@w5ngw
+    console.warn(`run ${data.run} blocked: ${failure.type}: ${failure.message}`);
+    tell(host, emit, new Blocked(workflow.name, data.run, failure));
+    // § end yp7fv5sa7.c
+    const error = create(layout.FailureSchema, endedWith(failure));
+    return create(agent.ReplayEndSchema, { end: { case: "blocked", value: error } });
+    // § end dxgjekysz.e
+  };
   try {
     let code: Code = spawn(shared, workflow);
     for (;;) {
-      // § k3zma9hjs@v7nwv
-      code = failCode(shared, code);
+      // § k3zma9hjs@4w2t0
+      let blocked: Failure | undefined;
+      [code, blocked] = failCode(shared, code);
       if (code !== undefined) {
         await quiescent();
-        code = failCode(shared, code);
+        [code, blocked] = failCode(shared, code);
         if (code?.settled !== undefined) {
-          if (shared.fatal === undefined && shared.diverged === undefined) {
-            endRun(shared, workflow, code.settled);
-          }
+          if (open(shared)) blocked = endRun(shared, workflow, code.settled);
           code = undefined;
         }
       }
-      // The core recorded the failure, which `next` commits: the code is abandoned and its
-      // attempts in flight stopped, never reported.
-      if (shared.diverged !== undefined) {
+      if (blocked !== undefined) return await block(blocked);
+      // The core blocks the run, which `next` says, or ended it past a limit, which `next`
+      // commits: the code is abandoned and its attempts in flight stopped, never reported.
+      if (shared.diverged !== undefined || shared.tooLarge) {
         code = undefined;
-        // § v4n6ja42e.a@8k48t
+        // § v4n6ja42e.a@zp1z1
         abandoned.abort(abandonedReplay());
         attempts.clear();
         // § end v4n6ja42e.a
@@ -399,7 +457,35 @@ async function drive(
         attempts.delete(a);
         shared.stepEnded(...a.result());
       }
-      const next = shared.next().next;
+      let answer: run.Next | undefined;
+      let failed: unknown;
+      try {
+        answer = shared.next();
+      } catch (e) {
+        failed = e;
+      }
+      // § awhhtbr5n.b@5sajg
+      if (clock.checksOnly()) {
+        const next = answer?.next;
+        const diverged =
+          shared.diverged ??
+          (failed instanceof NonDeterminism ? failed.message : undefined) ??
+          (next?.case === "blocked" ? next.value.message : undefined);
+        const replaying =
+          failed !== undefined ||
+          next?.case === "resolve" ||
+          next?.case === "deliver" ||
+          next?.case === "childEnded";
+        if (diverged !== undefined || !replaying) {
+          clock.checked(data.run, diverged);
+          // Parked for good, so nothing past the history runs or is written: the tester crashes
+          // the worker once it read the outcome.
+          await clock.wait([], undefined);
+        }
+      }
+      // § end awhhtbr5n.b
+      if (answer === undefined) throw failed;
+      const next = answer.next;
       switch (next.case) {
         case "resolve":
           shared.resolve(next.value);
@@ -419,9 +505,27 @@ async function drive(
           break;
         }
         case "commit":
-          if (!(await commit(shared, data.run, next.value, emit, channel))) return dropped();
+          if (!(await commit(shared, chain, next.value, emit, channel))) return dropped();
           committed.kind = next.value.kind;
+          for (const near of next.value.nearLimits) {
+            const { limit, used, max } = near;
+            console.warn(`run ${data.run} near its ${limit} limit: ${used} of ${max}`);
+            // § yp7fv5sa7.c@m8vbz
+            tell(
+              host,
+              emit,
+              new NearLimit(workflow.name, data.run, limit, Number(used), Number(max)),
+            );
+          }
           break;
+        case "claim":
+          emit({ kind: "claim", chain });
+          await clock.wait([channel.claim, channel.stopping], undefined);
+          if (channel.stopped) return dropped();
+          machine.claimed();
+          break;
+        case "blocked":
+          return await block(failureFrom(next.value));
         case "waitSteps": {
           if (attempts.size === 0) throw new ProtocolError("wait_steps with no step in flight");
           const until = next.value.until;
@@ -440,14 +544,14 @@ async function drive(
           break;
         }
         case "idle":
-          // § one d9818h4m4@gm564
+          // § one d9818h4m4@1aq2w
           return create(agent.ReplayEndSchema, { end: { case: "idle", value: next.value } });
         default:
           throw new ProtocolError("empty next");
       }
     }
   } finally {
-    // § one v4n6ja42e.a@k3cp0
+    // § one v4n6ja42e.a@0pjxz
     abandoned.abort(abandonedReplay());
     shared.closed = true;
     machine.close();

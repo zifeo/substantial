@@ -4,9 +4,10 @@
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeZone, Utc};
+use prost::Message;
 use serde::Deserialize;
 use serde_json::json;
-use substantial::__internal::MemoryStore;
+use substantial::__internal::{MemoryStore, layout};
 use substantial::testing::{Chaos, Env};
 use substantial::{Context, Error, Preset, RunStatus, Workflow, days, minutes, seconds};
 
@@ -218,8 +219,18 @@ async fn two_sends_in_a_row_reach_the_run_together() {
     assert_eq!(together.result().await.unwrap(), 2);
     assert_eq!(apart.result().await.unwrap(), 2);
     // One replay took both messages, in one segment; the other run woke for each.
-    assert_eq!(env.__keys("runs/together/log/").len(), 1);
-    assert_eq!(env.__keys("runs/apart/log/").len(), 2);
+    let segments = |chain: &str| {
+        let objects = env.__objects();
+        let (_, bytes) = (objects.iter())
+            .find(|(k, _)| *k == format!("runs/{chain}"))
+            .unwrap();
+        match layout::Run::decode(bytes.as_slice()).unwrap().kind {
+            Some(layout::run::Kind::Head(head)) => head.segments.len(),
+            other => panic!("runs/{chain}: {other:?}"),
+        }
+    };
+    assert_eq!(segments("together"), 1);
+    assert_eq!(segments("apart"), 2);
     worker.shutdown().await.unwrap();
     done(env).await;
 }

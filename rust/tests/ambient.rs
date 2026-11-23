@@ -29,7 +29,11 @@ async fn the_aws_environment_and_files_are_not_read() {
     }
     let h3 = FakeH3::start().await;
     let s = internal::open(&h3.url("ambient"), &FakeH3::credentials(), STORE_RETRY).unwrap();
-    let created = s.create("q/a", Bytes::from_static(b"a")).await.unwrap();
-    assert_eq!(created, Create::Created);
-    assert_eq!(s.get("q/a").await.unwrap(), Some(Bytes::from_static(b"a")));
+    let created = s
+        .create("q/a", Bytes::from_static(b"a"), None)
+        .await
+        .unwrap();
+    assert!(matches!(created, Create::Created { .. }));
+    let found = s.get("q/a").await.unwrap().map(|o| o.bytes);
+    assert_eq!(found, Some(Bytes::from_static(b"a")));
 }

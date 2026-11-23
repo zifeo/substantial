@@ -13,12 +13,17 @@ use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
 use aws_sdk_s3::operation::list_objects_v2::builders::ListObjectsV2FluentBuilder;
 use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::types::{ExpirationStatus, LifecycleRule, Tag};
 use bytes::Bytes;
+use futures::future::BoxFuture;
 
 use super::credentials::{Credentials, Refresh, S3Auth, Signing};
 use super::h3;
 use super::retry::{self, Fault};
-use super::{Capabilities, Create, ListWait, Listing, Store, StoreFuture};
+use super::{
+    Capabilities, Cas, Create, ListWait, Listing, Object, Store, StoreFailure, StoreFuture,
+    check_days,
+};
 use crate::error::{Error, Result};
 use crate::settings::StoreRetry;
 
@@ -28,6 +33,11 @@ pub(super) const PAGE: u32 = 1000;
 /// waiting listing (20 s at most) with 40 s to spare.
 // § one gvqb04830.b@1twx3
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The suffix of an S3 directory bucket's name.
+const DIRECTORY_BUCKET: &str = "--x-s3";
+const DIRECTORY_REFUSED: &str = "names an S3 directory bucket, whose listings are not in byte \
+     order of the key as the store contract requires: use a general purpose bucket";
 
 /// `s3://<endpoint>/<bucket>/<ns>?region=<r>`: one object per key under the prefix `<ns>/`,
 /// created with `If-None-Match: *`. `h3://` is the same adapter, its listings declared able to
@@ -87,12 +97,17 @@ impl S3Location {
         if bucket.is_empty() {
             return Err(invalid("names no bucket"));
         }
+        // § h1b3afst6@q2tq4
+        if bucket.ends_with(DIRECTORY_BUCKET) {
+            return Err(invalid(DIRECTORY_REFUSED));
+        }
+        // § end h1b3afst6
         if namespace.split('/').any(str::is_empty) {
             return Err(invalid(
                 "names no namespace, or one with an empty component",
             ));
         }
-        // § e9ern38bz.b@m1bwf
+        // § e9ern38bz.b@9abwz
         let mut query = BTreeMap::new();
         for (name, value) in parsed.query_pairs() {
             if query.insert(name.to_string(), value.to_string()).is_some() {
@@ -210,8 +225,8 @@ impl S3Store {
         format!("{}{key}", self.prefix)
     }
 
-    async fn put(&self, key: &str, bytes: &Bytes) -> Result<Create, Fault> {
-        // § gvqb04830@xhtdq
+    async fn put(&self, key: &str, bytes: &Bytes, expiry: Option<u32>) -> Result<Create, Fault> {
+        // § gvqb04830@a2x2r
         self.fresh().await?;
         let sent = self
             .client
@@ -219,11 +234,23 @@ impl S3Store {
             .bucket(&self.bucket)
             .key(self.full(key))
             .if_none_match("*")
+            .set_tagging(tagging(expiry))
             .body(ByteStream::from(bytes.clone()))
             .send()
             .await;
-        let Err(e) = sent else {
-            return Ok(Create::Created);
+        let e = match sent {
+            // An answer without its ETag is read back, as one lost.
+            Ok(out) => {
+                return match out.e_tag() {
+                    Some(etag) => Ok(Create::Created {
+                        etag: etag.to_owned(),
+                    }),
+                    None => Err(Fault::Ambiguous(format!(
+                        "create {key}: created without an ETag in the answer"
+                    ))),
+                };
+            }
+            Err(e) => e,
         };
         let message = describe("create", key, &e);
         match status(&e) {
@@ -237,8 +264,78 @@ impl S3Store {
         }
     }
 
-    async fn read(&self, key: &str) -> Result<Option<Bytes>, Fault> {
-        // § gvqb04830.a@mq5p6
+    async fn put_if_match(
+        &self,
+        key: &str,
+        bytes: &Bytes,
+        etag: &str,
+        expiry: Option<u32>,
+    ) -> Result<Cas, Fault> {
+        // § c4fyc3wyk@qsv0p
+        self.fresh().await?;
+        let sent = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(self.full(key))
+            .if_match(etag)
+            .set_tagging(tagging(expiry))
+            .body(ByteStream::from(bytes.clone()))
+            .send()
+            .await;
+        let e = match sent {
+            // § one c4fyc3wyk.b@wk49z
+            Ok(out) => {
+                return match out.e_tag() {
+                    Some(etag) => Ok(Cas::Written {
+                        etag: etag.to_owned(),
+                    }),
+                    None => Err(Fault::Ambiguous(format!(
+                        "cas {key}: written without an ETag in the answer"
+                    ))),
+                };
+            }
+            Err(e) => e,
+        };
+        let message = describe("cas", key, &e);
+        // § c4fyc3wyk.a@2qetg
+        match status(&e) {
+            Some(412) => Ok(Cas::Mismatch),
+            Some(404) if e.code() == Some("NoSuchKey") => Ok(Cas::Mismatch),
+            Some(409) | Some(429) => Err(Fault::Transient(message)),
+            Some(s) if s >= 500 || s == 408 => Err(Fault::Ambiguous(message)),
+            Some(_) => Err(Fault::Permanent(message)),
+            None if matches!(e, SdkError::ConstructionFailure(_)) => Err(Fault::Permanent(message)),
+            None => Err(Fault::Ambiguous(message)),
+        }
+        // § end c4fyc3wyk.a
+    }
+
+    /// The bucket's lifecycle rules, none when it has no configuration.
+    async fn lifecycle(&self) -> Result<Vec<LifecycleRule>, Fault> {
+        self.fresh().await?;
+        let sent = self
+            .client
+            .get_bucket_lifecycle_configuration()
+            .bucket(&self.bucket)
+            .send()
+            .await;
+        match sent {
+            Ok(out) => Ok(out.rules().to_vec()),
+            Err(e) if e.code() == Some("NoSuchLifecycleConfiguration") => Ok(Vec::new()),
+            // § one cfdckf61n.a@bzsay
+            Err(e) if status(&e) == Some(403) => Err(Fault::Permanent(format!(
+                "reading the lifecycle rules of the bucket {:?} needs the permission \
+                 s3:GetLifecycleConfiguration: {}",
+                self.bucket,
+                describe("lifecycle of", &self.bucket, &e)
+            ))),
+            Err(e) => Err(fault("lifecycle of", &self.bucket, &e)),
+        }
+    }
+
+    async fn read(&self, key: &str) -> Result<Option<Object>, Fault> {
+        // § gvqb04830.a@jny3c
         self.fresh().await?;
         let sent = self
             .client
@@ -248,10 +345,19 @@ impl S3Store {
             .send()
             .await;
         match sent {
-            Ok(out) => match out.body.collect().await {
-                Ok(data) => Ok(Some(data.into_bytes())),
-                Err(e) => Err(Fault::Transient(format!("get {key}: {e}"))),
-            },
+            Ok(out) => {
+                let etag = out.e_tag().map(str::to_owned);
+                let bytes = match out.body.collect().await {
+                    Ok(data) => data.into_bytes(),
+                    Err(e) => return Err(Fault::Transient(format!("get {key}: {e}"))),
+                };
+                match etag {
+                    Some(etag) => Ok(Some(Object { bytes, etag })),
+                    None => Err(Fault::Permanent(format!(
+                        "get {key}: answered without an ETag"
+                    ))),
+                }
+            }
             Err(e) if e.code() == Some("NoSuchKey") => Ok(None),
             Err(e) => Err(fault("get", key, &e)),
         }
@@ -266,7 +372,7 @@ impl S3Store {
         self.fresh().await?;
         let mut keys = Vec::new();
         let mut after = start_after.map(|s| self.full(s));
-        // § dfd6vt90h.c@xpz7x
+        // § dfd6vt90h.c@zqqpa
         while (keys.len() as u32) < max_keys {
             let page = (max_keys - keys.len() as u32).min(PAGE);
             let out = self
@@ -297,7 +403,7 @@ impl S3Store {
         max_keys: u32,
         wait: &ListWait,
     ) -> Result<Listing, Fault> {
-        // § gvqb04830.c@4g0yw
+        // § gvqb04830.d@ny3tr
         self.fresh().await?;
         let page = self.page(prefix, start_after.map(|s| self.full(s)), max_keys);
         let (list, answer) = h3::wait(page.customize(), max_keys, wait)?;
@@ -353,6 +459,62 @@ impl S3Store {
     }
 }
 
+/// The tag of a write's expiry, which a lifecycle rule of the bucket expires.
+fn tagging(expiry: Option<u32>) -> Option<String> {
+    // § one c4fyc3wyk@vr1yy
+    expiry.map(|d| format!("{RETENTION_TAG}={d}d"))
+}
+
+const RETENTION_TAG: &str = "substantial-retention";
+
+/// Whether `rule` expires, after `days`, the keys under `prefix` tagged with that expiry.
+fn expires(rule: &LifecycleRule, prefix: &str, days: u32) -> bool {
+    // § cfdckf61n@3d4af
+    let value = format!("{days}d");
+    let tagged =
+        |tags: &[Tag]| matches!(tags, [tag] if tag.key() == RETENTION_TAG && tag.value() == value);
+    let filtered = match rule.filter() {
+        Some(filter) => match (filter.and(), filter.tag()) {
+            (Some(and), None) => {
+                and.object_size_greater_than().is_none()
+                    && and.object_size_less_than().is_none()
+                    && prefix.starts_with(and.prefix().unwrap_or_default())
+                    && tagged(and.tags())
+            }
+            (None, Some(tag)) => tagged(std::slice::from_ref(tag)),
+            _ => false,
+        },
+        None => false,
+    };
+    filtered
+        && rule.status() == &ExpirationStatus::Enabled
+        && rule.expiration().and_then(|e| e.days()) == Some(days as i32)
+}
+
+/// Why a store would never expire the keys of `missing` expiries, with the rules to add as JSON.
+fn missing_rules(bucket: &str, prefix: &str, missing: &[u32]) -> String {
+    let rules: Vec<serde_json::Value> = missing
+        .iter()
+        .map(|d| {
+            let tag = serde_json::json!({"Key": RETENTION_TAG, "Value": format!("{d}d")});
+            serde_json::json!({
+                "ID": format!("substantial-expire-{d}d"),
+                "Status": "Enabled",
+                "Filter": {"And": {"Prefix": prefix, "Tags": [tag]}},
+                "Expiration": {"Days": d},
+            })
+        })
+        .collect();
+    let tags: Vec<String> = missing.iter().map(|d| format!("{d}d")).collect();
+    format!(
+        "the bucket {bucket:?} has no lifecycle rule expiring the keys under {prefix:?} tagged \
+         {RETENTION_TAG}={} after as many days, so they would never expire: add these rules to \
+         its lifecycle configuration, which needs the permission s3:PutLifecycleConfiguration: {}",
+        tags.join(", "),
+        serde_json::json!({ "Rules": rules })
+    )
+}
+
 fn status<E>(e: &SdkError<E, aws_sdk_s3::config::http::HttpResponse>) -> Option<u16> {
     e.raw_response().map(|r| r.status().as_u16())
 }
@@ -390,25 +552,63 @@ impl Store for S3Store {
         Capabilities { wait: self.wait }
     }
 
-    fn open(&self) -> futures::future::BoxFuture<'_, crate::error::Result<()>> {
+    fn open(&self) -> BoxFuture<'_, Result<()>> {
+        // § x79k6r9e5@pnpr1
         Box::pin(async { Ok(()) })
     }
 
-    fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
+    fn create<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Create> {
         Box::pin(async move {
-            let attempt = || self.put(key, &bytes);
-            retry::create(
-                self.retry,
-                &bytes,
-                attempt,
-                || self.read(key),
-                tokio::time::sleep,
-            )
-            .await
+            check_days(expiry).map_err(StoreFailure::new)?;
+            let attempt = || self.put(key, &bytes, expiry);
+            let read = || self.read(key);
+            retry::create(self.retry, &bytes, attempt, read, tokio::time::sleep).await
         })
     }
 
-    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>> {
+    fn cas<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        etag: &'a str,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Cas> {
+        Box::pin(async move {
+            check_days(expiry).map_err(StoreFailure::new)?;
+            let attempt = || self.put_if_match(key, &bytes, etag, expiry);
+            let read = || self.read(key);
+            retry::cas(self.retry, &bytes, etag, attempt, read, tokio::time::sleep).await
+        })
+    }
+
+    fn check_expiry<'a>(&'a self, days: &'a [u32]) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            super::check_all_days(days)?;
+            let attempt = || self.lifecycle();
+            let rules = retry::with_retry(self.retry, attempt, tokio::time::sleep)
+                .await
+                .map_err(|e| Error::ConfigError(e.message))?;
+            let mut missing: Vec<u32> = days
+                .iter()
+                .copied()
+                .filter(|d| !rules.iter().any(|r| expires(r, &self.prefix, *d)))
+                .collect();
+            missing.sort_unstable();
+            missing.dedup();
+            if missing.is_empty() {
+                return Ok(());
+            }
+            let why = missing_rules(&self.bucket, &self.prefix, &missing);
+            Err(Error::ConfigError(why))
+        })
+    }
+
+    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Object>> {
         Box::pin(retry::with_retry(
             self.retry,
             move || self.read(key),

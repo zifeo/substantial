@@ -52,6 +52,7 @@ async fn the_named_prices_and_what_prices_refuse() {
         Prices {
             currency: "USD".into(),
             create: 5_000_000,
+            cas: 5_000_000,
             get: 400_000,
             list: 5_000_000,
             delete: 0,
@@ -135,7 +136,7 @@ async fn charges_reach_the_cost_by_step_and_in_total() {
     );
     assert_eq!(
         cost.requests,
-        cost.create + cost.get + cost.list + cost.delete
+        cost.create + cost.cas + cost.get + cost.list + cost.delete
     );
     assert_eq!(cost.children.requests, 0);
     worker.shutdown().await.unwrap();
@@ -285,6 +286,7 @@ async fn a_budget_passed_is_recorded_and_raised_at_the_same_place_on_replay() {
                     initial: minutes(1),
                     max: minutes(1),
                     multiplier: 1.0,
+                    deadline: None,
                 })
                 .undo(move |_: ()| {
                     let first = undos.fetch_add(1, Ordering::SeqCst) == 0;
@@ -306,7 +308,7 @@ async fn a_budget_passed_is_recorded_and_raised_at_the_same_place_on_replay() {
     env.advance(minutes(2)).await.unwrap();
     let failed = run.result().await.unwrap_err();
     assert_eq!(undos.load(Ordering::SeqCst), 2);
-    // § j2xzy4akb.a@94rzs
+    // § j2xzy4akb.a@mjx71
     let history = run.history().await.unwrap();
     let passed: Vec<&serde_json::Value> = (history.iter())
         .filter(|e| e.kind == "budget_exceeded")
@@ -498,7 +500,7 @@ async fn a_run_failed_by_its_budget_or_a_step_gives_the_failure_details() {
     });
     let declined = Workflow::without_input("declined", |c| async move {
         c.step("pay", || async {
-            Err::<(), _>(Error::failed("Declined", "not today"))
+            Err::<(), _>(Error::fail("Declined", "not today"))
         })
         .await
     });

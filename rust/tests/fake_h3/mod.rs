@@ -1,5 +1,6 @@
 //! A fake h3 server on 127.0.0.1: the S3 calls of the store contract on one in-memory bucket, its
-//! listings held on the wait headers, and the headers of every listing recorded.
+//! listings held on the wait headers, the headers of every listing recorded, and lifecycle rules
+//! that expire the keys tagged with each retention the tests use.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -45,6 +46,10 @@ struct State {
     holds: AtomicUsize,
     omit_etag: AtomicBool,
 }
+
+/// The retentions, in days, the bucket's lifecycle rules expire, as the dev bucket's
+/// (`dev/compose.yaml`).
+const EXPIRIES: [u32; 2] = [1, 30];
 
 type Answer = Response<Full<Bytes>>;
 
@@ -132,9 +137,10 @@ async fn handle(state: Arc<State>, request: Request<Incoming>) -> Result<Answer,
     let listing = query.get("list-type").is_some_and(|t| t == "2");
     Ok(match (&parts.method, key) {
         (&Method::GET, None) if listing => state.list(&parts.headers, &query).await,
+        (&Method::GET, None) if query.contains_key("lifecycle") => state.lifecycle(),
         (&Method::PUT, Some(key)) => state.put(&parts.headers, key, body),
         (&Method::GET, Some(key)) => match state.objects.lock().unwrap().get(key) {
-            Some(bytes) => Response::new(Full::new(bytes.clone())),
+            Some(bytes) => tagged(Response::new(Full::new(bytes.clone())), bytes),
             None => error(StatusCode::NOT_FOUND, "NoSuchKey"),
         },
         (&Method::DELETE, Some(key)) => {
@@ -149,32 +155,49 @@ async fn handle(state: Arc<State>, request: Request<Incoming>) -> Result<Answer,
 impl State {
     fn put(&self, headers: &HeaderMap, key: &str, body: Bytes) -> Answer {
         let exclusive = header(headers, "if-none-match") == Some("*");
+        let matching = header(headers, "if-match");
         {
             let mut objects = self.objects.lock().unwrap();
             if exclusive && objects.contains_key(key) {
                 return error(StatusCode::PRECONDITION_FAILED, "PreconditionFailed");
             }
-            objects.insert(key.to_owned(), body);
+            if let Some(etag) = matching {
+                match objects.get(key) {
+                    None => return error(StatusCode::NOT_FOUND, "NoSuchKey"),
+                    Some(held) if etag_of(held) != etag => {
+                        return error(StatusCode::PRECONDITION_FAILED, "PreconditionFailed");
+                    }
+                    Some(_) => {}
+                }
+            }
+            objects.insert(key.to_owned(), body.clone());
         }
         self.changes.send_modify(|n| *n += 1);
-        reply(StatusCode::OK, "")
+        tagged(reply(StatusCode::OK, ""), &body)
     }
 
     async fn list(&self, headers: &HeaderMap, query: &BTreeMap<String, String>) -> Answer {
         let prefix = query.get("prefix").cloned().unwrap_or_default();
         let after = query.get("start-after").cloned().unwrap_or_default();
         let max_keys: usize = query.get("max-keys").map_or(1000, |m| m.parse().unwrap());
-        let seconds =
-            header(headers, "x-substantial-wait-seconds").map(|s| s.parse::<u64>().unwrap());
-        let wait_etag = header(headers, "x-substantial-wait-etag");
+        let seconds = header(headers, "x-herald-wait-seconds").map(|s| s.parse::<u64>().unwrap());
+        let wait_etag = header(headers, "x-herald-wait-etag");
         let deadline = Instant::now() + Duration::from_secs(seconds.unwrap_or(0));
         let mut changes = self.changes.subscribe();
         let mut held = false;
         let (keys, truncated, etag) = loop {
             changes.borrow_and_update();
             let (keys, truncated) = self.page(&prefix, &after, max_keys);
+            // Over the keys and their objects' ETags, as Herald's: a rewrite of a key listed
+            // changes it.
+            let etags: Vec<Option<String>> = {
+                let objects = self.objects.lock().unwrap();
+                keys.iter()
+                    .map(|k| objects.get(k).map(|b| etag_of(b.as_ref())))
+                    .collect()
+            };
             let mut hasher = DefaultHasher::new();
-            (&keys, truncated).hash(&mut hasher);
+            (&keys, &etags, truncated).hash(&mut hasher);
             let etag = format!("{:016x}", hasher.finish());
             if seconds.is_none() || wait_etag != Some(etag.as_str()) || Instant::now() >= deadline {
                 break (keys, truncated, etag);
@@ -210,11 +233,25 @@ impl State {
         let mut answer = reply(StatusCode::OK, &xml);
         if seconds.is_some() && !self.omit_etag.load(Ordering::SeqCst) {
             let value = etag.parse().unwrap();
-            answer
-                .headers_mut()
-                .insert("x-substantial-listing-etag", value);
+            answer.headers_mut().insert("x-herald-listing-etag", value);
         }
         answer
+    }
+
+    fn lifecycle(&self) -> Answer {
+        let mut xml = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <LifecycleConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">",
+        );
+        for d in EXPIRIES {
+            xml += &format!(
+                "<Rule><ID>substantial-expire-{d}d</ID><Filter><Tag>\
+                 <Key>substantial-retention</Key><Value>{d}d</Value></Tag></Filter>\
+                 <Status>Enabled</Status><Expiration><Days>{d}</Days></Expiration></Rule>"
+            );
+        }
+        xml += "</LifecycleConfiguration>";
+        reply(StatusCode::OK, &xml)
     }
 
     fn page(&self, prefix: &str, after: &str, max_keys: usize) -> (Vec<String>, bool) {
@@ -229,6 +266,19 @@ impl State {
         keys.truncate(max_keys);
         (keys, truncated)
     }
+}
+
+/// A quoted digest of the bytes, as S3 answers an ETag.
+fn etag_of(bytes: &[u8]) -> String {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("\"{:016x}\"", hasher.finish())
+}
+
+fn tagged(mut answer: Answer, bytes: &[u8]) -> Answer {
+    let etag = etag_of(bytes).parse().unwrap();
+    answer.headers_mut().insert("etag", etag);
+    answer
 }
 
 fn reply(status: StatusCode, body: &str) -> Answer {

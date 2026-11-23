@@ -27,7 +27,7 @@ def test_presets_differ_where_the_table_says() -> None:
     assert (script.shutdown_grace, service.shutdown_grace) == (seconds(5), seconds(25))
     assert script.continue_as_new_after == ContinueAsNewAfter(1000, 8 * 1024 * 1024)
     assert script.step_timeout == service.step_timeout == minutes(5)
-    assert script.retention == service.retention == days(30)
+    assert script.retention == service.retention == 30
 
 
 def test_override_replaces_and_refuses() -> None:
@@ -38,11 +38,11 @@ def test_override_replaces_and_refuses() -> None:
         claim_ttl=seconds(40),
         continue_as_new_after=0,
         step_timeout=seconds(30),
-        retention=days(400),
+        retention=400,
     )
     assert s.step_timeout == seconds(30)
-    assert s.retention == days(400)
-    assert s.override(retention=days(90)).retention == days(90)
+    assert s.retention == 400
+    assert s.override(retention=90).retention == 90
     assert (s.concurrency, s.max_idle, s.shutdown_grace) == (4, seconds(2), seconds(3))
     assert s.claim_ttl == seconds(40)
     assert s.continue_as_new_after == ContinueAsNewAfter(0, 0)
@@ -58,13 +58,18 @@ def test_override_replaces_and_refuses() -> None:
         {"step_timeout": 300},
         {"continue_as_new_after": 1},
         {"continue_as_new_after": (1, 2)},
-        {"retention": minutes(59)},
+        {"retention": 0},
+        {"retention": 36_501},
+        {"retention": True},
+        {"retention": days(30)},
         {"retention": None},
         {"retention": "forever"},
     ]
     for override in refused:
         with pytest.raises(ConfigError):
             s.override(**override)
+    with pytest.raises(ConfigError, match=r"^retention must be whole days from 1 to 36500, not 0$"):
+        s.override(retention=0)
     with pytest.raises(ConfigError):
         Settings.preset("daemon", waiting_store=False)
 
@@ -101,8 +106,6 @@ def test_the_hidden_settings_are_still_checked() -> None:
         {"wait": timedelta(0)},
         {"wait": seconds(21)},
         {"wait": timedelta(milliseconds=1500)},
-        {"tombstone": timedelta(0)},
-        {"retention_min": days(31)},
     ]:
         with pytest.raises(ConfigError):
             dataclasses.replace(s, **hidden).validate()

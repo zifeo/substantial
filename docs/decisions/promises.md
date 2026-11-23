@@ -4,7 +4,7 @@ A workflow is a plain async function, and after a crash, a restart or a deploy i
 
 ## A finished step never runs again
 
-A run executes the function from its first line at every wakeup, and a recorded call returns its recorded outcome without running (I-1). [ftq7bbgff](core/steps.md#ftq7bbgff) states the promise: a recorded step never runs again, as every call the history answers returns its recorded outcome ([twravbm6m](core/history.md#twravbm6m)). Every worker commits each step as it returns ([ry26kkc7v.a](workers.md#ry26kkc7v), [wkryj60b0](core/lifecycle.md#wkryj60b0)), by an exclusive create of the next segment, so of two workers racing on a run only one outcome stands ([czkkbyhe0](core/commit.md#czkkbyhe0)).
+A run executes the function from its first line at every wakeup, and a recorded call returns its recorded outcome without running (I-1). [ftq7bbgff](core/steps.md#ftq7bbgff) states the promise: a recorded step never runs again, as every call the history answers returns its recorded outcome ([rbwstdetg](core/history.md#rbwstdetg)). Every worker commits each step as it returns ([ry26kkc7v.a](workers.md#ry26kkc7v), [wkryj60b0](core/lifecycle.md#wkryj60b0)), by a compare-and-set of the chain's head, so of two workers racing on a run only one outcome stands ([rnx5b50bn](core/commit.md#rnx5b50bn)).
 
 **§ <a id="g4kv2kj51">g4kv2kj51</a> Every replay of a run calls its workflow function anew, from its first line, with the run's input.**
 
@@ -14,17 +14,17 @@ Effects once is "Not guaranteed" ([Integration](../integration.md#what-start-and
 
 ## Durable when it returns
 
-A start and a send are durable when they return: the run's `start` and due entry, or the message's inbox key and the run's due entry, exist in the store, as [ct862686r](core/lifecycle.md#ct862686r) states for a start and [dva6cx6nb.a](core/messages.md#dva6cx6nb) for a send. That rests on the store contract: an acknowledged create survives a crash of the store ([dfd6vt90h](store.md#dfd6vt90h)), and no object is ever overwritten ([kwvhb7ehw](store.md#kwvhb7ehw)).
+A start and a send are durable when they return: the chain's head and its due entry, or the message's entry, exist in the store, as [jbkv4v0we](core/lifecycle.md#jbkv4v0we) states for a start and [dva6cx6nb](core/messages.md#dva6cx6nb) for a send. That rests on the store contract: an acknowledged create survives a crash of the store ([dfd6vt90h](store.md#dfd6vt90h)), and an object is replaced only by a compare-and-set naming the value it replaces ([kkad6aqxp](store.md#kkad6aqxp)).
 
 ## Idempotent under the caller's ids
 
-A webhook route is idempotent "as long as the provider retries until it gets a 2xx and the ids are stable" ([Integration](../integration.md#what-start-and-send-guarantee)). A start is named by the caller's id ([cq034wpjp](clients.md#cq034wpjp)) and a second start of it returns the same run, as [ct862686r.a](core/lifecycle.md#ct862686r) states, its input compared in canonical JSON ([aaev3rs1q](values.md#aaev3rs1q)). A resend with the same id is delivered once within the dedup window, as [r1nrgn5h8](core/messages.md#r1nrgn5h8) states, and a workflow's own send is delivered once, its run crashing after it or not ([b7g8bsqaq](core/messages.md#b7g8bsqaq)).
+A webhook route is idempotent "as long as the provider retries until it gets a 2xx and the ids are stable" ([Integration](../integration.md#what-start-and-send-guarantee)). A start is named by the caller's id ([cq034wpjp](clients.md#cq034wpjp)) and a second start of it returns the same run, as [jbkv4v0we.a](core/lifecycle.md#jbkv4v0we) states, its input compared in canonical JSON ([aaev3rs1q](values.md#aaev3rs1q)). A resend with the same id is delivered once within the dedup window, as [r1nrgn5h8](core/messages.md#r1nrgn5h8) states, and a workflow's own send is delivered once, its run crashing after it or not ([b7g8bsqaq](core/messages.md#b7g8bsqaq)).
 
-A call that failed is the case the ids are for: "A `start` or `send` that raised `StoreError` may have landed or not: call it again with the same ids" ([Integration](../integration.md#what-start-and-send-guarantee), "Not guaranteed"). A start that stopped halfway is completed by the next one ([ct862686r.a](core/lifecycle.md#ct862686r)), and a message sent again under its id is consumed once ([r1nrgn5h8](core/messages.md#r1nrgn5h8)).
+A call that failed is the case the ids are for: "A `start` or `send` that raised `StoreError` may have landed or not: call it again with the same ids" ([Integration](../integration.md#what-start-and-send-guarantee), "Not guaranteed"). A start that stopped halfway is completed by the next one ([jbkv4v0we.a](core/lifecycle.md#jbkv4v0we)), and a message sent again under its id is consumed once ([r1nrgn5h8](core/messages.md#r1nrgn5h8)).
 
 ## Ordered messages
 
-[a1qvxtaj6](core/messages.md#a1qvxtaj6) states it: a run consumes the messages of one sender in the order sent, each one recorded where the code first sees it ([vcgwgaf4n](core/messages.md#vcgwgaf4n)), as a client's ids are monotonic ([wtwx1e769](clients.md#wtwx1e769)).
+[a1qvxtaj6](core/messages.md#a1qvxtaj6) states it: a run consumes the messages of one sender in the order sent, each one recorded where the code first sees it ([dnxwdv0ac](core/messages.md#dnxwdv0ac)), as a client's ids are monotonic ([wtwx1e769](clients.md#wtwx1e769)).
 
 ## Waiting holds no process
 
@@ -32,17 +32,23 @@ A call that failed is the case the ids are for: "A `start` or `send` that raised
 
 ## No broker, no server
 
-[w89qkqkaj](store.md#w89qkqkaj) states it: workers and clients share the store alone, and due runs are keys every worker lists ([e3rcyme0p](core/lifecycle.md#e3rcyme0p)), a claim keeps two workers from doing the same work ([t452yredf](core/lifecycle.md#t452yredf)), and a crashed worker's runs are taken over once its claims expire.
+[karttrcdb](store.md#karttrcdb) states it: workers and clients share the store alone, and due runs are keys every worker lists ([d9vmk6y6y](core/lifecycle/queue.md#d9vmk6y6y)), a lease keeps two workers from running the same step ([j1nq6rqpf](core/lifecycle/leases.md#j1nq6rqpf)), and a crashed worker's runs are taken over once its leases expire.
 
 ## Deterministic replay
 
-The code runs again at every wakeup, so it must make the same calls in the same order, branching only on step values, inputs and messages (I-2). The order in which parallel branches see their outcomes is recorded and delivered one at a time ([k3zma9hjs](hosts.md#k3zma9hjs)), and [twravbm6m](core/history.md#twravbm6m) states the promise: every call the history answers returns its recorded outcome, in order, and a call it does not answer fails the run with `NonDeterminism`. An incompatible change of unversioned code fails its runs that way (I-5).
+The code runs again at every wakeup, so it must make the same calls in the same order, branching only on step values, inputs and messages (I-2). The order in which parallel branches see their outcomes is recorded and delivered one at a time ([k3zma9hjs](hosts.md#k3zma9hjs)), and [rbwstdetg](core/history.md#rbwstdetg) states the promise: every call the history answers returns its recorded outcome, in order, and a call it does not answer blocks the run with `NonDeterminism`. An incompatible change of unversioned code blocks its runs that way until it is rolled back or given a version (I-5).
 
 ## Versions through a deploy
 
 A deploy changes code under runs in flight. A version lets old and new code run side by side through a deploy, the old one served until its runs end (I-5, "so old and new code run side by side through a deploy"), as [pjrbw31h4](#pjrbw31h4) states. A continuation keeps the run's version unless it names another workflow ([deycjjrap](core/lifecycle.md#deycjjrap), [gjnefe4w6](chains.md#gjnefe4w6)), a retry runs the failed run's version ([vb6krfmej](core/lifecycle.md#vb6krfmej)), and a worker takes only the runs of the versions it serves ([e3rcyme0p.d](core/lifecycle.md#e3rcyme0p)). `runs` lists the live runs of every version, each with its version ([j08c2ntyv](core/lifecycle.md#j08c2ntyv)), so an old version has drained once none of them has it.
 
 **§ <a id="pjrbw31h4">pjrbw31h4</a> A worker replays each run with the code it was given under the run's workflow name and version, or under that name alone for a run without a version, so old and new code run side by side through a deploy.**
+
+A small change, a fix in one branch, does not need a version when the code can tell the runs that started before it from the others: a patch records, at the point of the change, that the run took the new branch, so a run recorded before the change keeps its history and every replay takes the branch it took.
+
+**§ <a id="hbsrjm0w2">hbsrjm0w2</a> `c.patched(id)` is true when the run first reaches it live and at every replay of a history that recorded it, and false at a replay of a history recorded before the code asked.**
+
+- (a) An `id` outside the rules of a step name, or reserved, raises `InvalidArgument`.
 
 ## One core, three languages
 
@@ -58,9 +64,9 @@ The hosts run where the maintainer supports them: "Substantial runs on Linux, ma
 
 [qashr34zn](core/cost.md#qashr34zn) states it: on S3 a run costs its requests, and the per-verb tables of the architecture document give each verb's. Counting them adds no request ([czph3f9yv](core/cost.md#czph3f9yv)), an idle worker costs one listing per workflow per `max_idle` ([gnhavbn5m](core/cost.md#gnhavbn5m)), and a budget stops a run that passes it ([fkgsx3gvk](core/cost.md#fkgsx3gvk)).
 
-## Every run ends and is collected
+## Every run ends and expires
 
-A run ends completed, failed, cancelled or continued ([g039jvy6k](workflows.md#g039jvy6k)); a cancel reaches every call the run is blocked on and ends it cancelled ([vmk2ydwta](core/lifecycle.md#vmk2ydwta)), and a saga or a rollback runs its undos first ([ctp0q370t](sagas.md#ctp0q370t), [zjw5cess8](sagas.md#zjw5cess8)). [yx9pxz6mr](core/lifecycle.md#yx9pxz6mr) states the promise: every ended run is collected once its retention passes, so a namespace stops growing.
+A run ends completed, failed, cancelled or continued, and a bug of its code blocks it instead ([dxgjekysz](workflows.md#dxgjekysz)); a cancel reaches every call the run is blocked on and ends it cancelled ([vmk2ydwta](core/lifecycle.md#vmk2ydwta)), and a saga or a rollback runs its undos first ([ctp0q370t](sagas.md#ctp0q370t), [zjw5cess8](sagas.md#zjw5cess8)). [a1ys7at7p](core/lifecycle/expiry.md#a1ys7at7p) states the promise: every ended run stays readable by its id, its id refused to a new start, for its retention counted from its own end, then the store removes it, so a namespace stops growing. A child may outlive its parent, and its end or a cancel that reaches a chain gone or retaken is ignored without harm ([n0ge6zsws](core/lifecycle/expiry.md#n0ge6zsws)); on S3 a worker checks at start that the bucket expires what it writes ([cfdckf61n.c](adapters.md#cfdckf61n)).
 
 ## Tests run the real protocol
 
@@ -68,4 +74,4 @@ A run ends completed, failed, cancelled or continued ([g039jvy6k](workflows.md#g
 
 ## Reading order
 
-The other notes follow in this order. The architecture: [the store](store.md) and [one core, three hosts](hosts.md) and [Wasm workflows](wasm-workflows.md), then the laws of the core, [the commit point](core/commit.md), [a run's lifecycle](core/lifecycle.md), [the history](core/history.md), [steps and waits](core/steps.md), [messages](core/messages.md), [undos, rollbacks and sagas](core/sagas.md), [children and chains](core/children.md) and [cost and budgets](core/cost.md). A run's life, from its start to its collection: [lifecycle](lifecycle.md). The programming model: [clients](clients.md), [the replay drive](workflows.md), [steps](steps.md), [waiting](waiting.md), [messages and handlers](messages.md), [sagas](sagas.md), [children, chains and loops](chains.md), [values](values.md) and [polling and schedules](schedules.md). Operating: [logs, progress and observing](observing.md), [workers](workers.md), [store adapters](adapters.md), [cost](cost.md) and [errors](errors.md). Testing: [the test environment](testing.md).
+The other notes follow in this order. The architecture: [the store](store.md) and [one core, three hosts](hosts.md) and [Wasm workflows](wasm-workflows.md), then the laws of the core, [the commit point](core/commit.md), [a run's lifecycle](core/lifecycle.md) with [its queue](core/lifecycle/queue.md), [leases](core/lifecycle/leases.md), [chains](core/lifecycle/chains.md) and [expiry](core/lifecycle/expiry.md), [the history](core/history.md), [steps and waits](core/steps.md), [messages](core/messages.md), [undos, rollbacks and sagas](core/sagas.md), [children and chains](core/children.md) and [cost and budgets](core/cost.md). A run's life, from its start to its expiry: [lifecycle](lifecycle.md). The programming model: [clients](clients.md), [the replay drive](workflows.md), [steps](steps.md), [waiting](waiting.md), [messages and handlers](messages.md), [sagas](sagas.md), [children, chains and loops](chains.md), [values](values.md) and [polling and schedules](schedules.md). Operating: [logs, progress and observing](observing.md), [workers](workers.md), [store adapters](adapters.md), [cost](cost.md) and [errors](errors.md). Testing: [the test environment](testing.md).

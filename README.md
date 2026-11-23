@@ -54,7 +54,7 @@ shipping a-42 to 1 rue du Lac, Lausanne
 ```
 
 - `charge` and `ship` are steps: their results are recorded, and the function, replayed from its first line at every wakeup, gets them back without running them again. A step can be declared, as `charge` is with its retry of up to five attempts and an exponential backoff, or wrapped inline on the fly under a name, as `c.step("ship", ...)` does with `ship`, a plain function.
-- `c.receive("address")` takes the message the client sends with `run.send`. A message sent before the workflow asks for it waits in the run's inbox.
+- `c.receive("address")` takes the message the client sends with `run.send`. A message sent before the workflow asks for it waits in the store until the workflow takes it.
 - `c.sleep` is a durable timer: while it waits, the run is suspended and holds no process.
 - The worker runs the workflow; the client starts it, messages it and awaits its result. They can be the same process, as here, or many processes on many machines sharing the store. Leaving `async with` stops the worker, then closes the client.
 - `id="order-a-42"` makes the start idempotent: starting it again finds the same run.
@@ -80,7 +80,7 @@ struct Receipt {
     tracking: String,
 }
 
-#[s::step(retry = s::Retry { max_attempts: 5, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0 })]
+#[s::step(retry = s::Retry { max_attempts: 5, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0, deadline: None })]
 async fn charge(order: &str, amount: u32) -> anyhow::Result<String> {
     println!("charging {amount} for {order}");
     Ok(format!("pay-{order}"))
@@ -219,6 +219,14 @@ A run replays its function from the first line at every wakeup. So side effects 
 async def upload(archive: str, target: str) -> str:
     return await s3.put(archive, target, idempotency_key=s.step_key())
 
+@s.step(timeout=s.hours(2), heartbeat_timeout=s.minutes(1))
+async def export(table: str) -> int:
+    rows = 0
+    async for page in db.pages(table):
+        rows += await upload_page(page)
+        s.heartbeat()                                                                # alive: a hung page fails within a minute
+    return rows
+
 size = await c.step("size", lambda: os.path.getsize(archive))                       # an inline step
 a, b = await asyncio.gather(fetch(url_a), fetch(url_b))                               # steps in parallel
 sizes = await asyncio.gather(*[c.step("size", os.path.getsize, f) for f in files])   # arguments after the function
@@ -228,7 +236,7 @@ sizes = await asyncio.gather(*[c.step("size", os.path.getsize, f) for f in files
 <summary>In Rust and TypeScript</summary>
 
 ```rust
-#[s::step(retry = s::Retry { max_attempts: 5, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0 }, timeout = s::minutes(10))]
+#[s::step(retry = s::Retry { max_attempts: 5, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0, deadline: None }, timeout = s::minutes(10))]
 async fn upload(archive: &str, target: &str) -> anyhow::Result<String> {
     s3.put(archive, target, s::step_key()).await
 }
@@ -250,7 +258,7 @@ const [a, b] = await Promise.all([fetch(urlA), fetch(urlB)]);              // st
 
 </details>
 
-An inline step takes its name first; in Python, the function's arguments may follow it, since a lambda in a comprehension would read the loop's last value. A crash during a step runs it again, so a step runs at least once: `s.step_key()` is the same for every attempt and replay, for an idempotency key. `raise s.Permanent(...)` fails a step without retrying it. Every attempt has a timeout: the step's own, else its workflow's `step_timeout`, else the worker's, 5 minutes by default. A step out of attempts raises `StepFailed`, whose `cause` is the last attempt's failure, such as `StepTimeout`. More in [I-6].
+An inline step takes its name first; in Python, the function's arguments may follow it, since a lambda in a comprehension would read the loop's last value. A crash during a step runs it again, so a step runs at least once: `s.step_key()` is the same for every attempt and replay, for an idempotency key. `raise s.Permanent(...)` fails a step without retrying it. Every attempt has a timeout: the step's own, else its workflow's `step_timeout`, else the worker's, 5 minutes by default. A long step that calls `s.heartbeat()` as it progresses takes a `heartbeat_timeout` too, so an attempt that hangs fails long before its timeout. `s.Retry(..., deadline=s.minutes(5))` bounds the retries as a whole: no attempt starts once 5 minutes passed since the first one started. A step out of attempts raises `StepFailed`, whose `cause` is the last attempt's failure, such as `StepTimeout`. More in [I-6].
 
 ### Sleeping and waiting
 
@@ -383,6 +391,7 @@ Messages come from clients (`run.send`) or other runs (`c.send`), and a message 
 check = await c.start(verify, {"archive": archive})     # a run of its own
 ok = await check.result()
 await other.cancel("not needed")                         # a child ends cancelled
+await c.start(reindex, {"archive": archive}, abandon=True)  # goes on after this run ends
 paid = await c.result("payment-42")                      # the end of any chain, a child or not
 ```
 
@@ -393,6 +402,7 @@ paid = await c.result("payment-42")                      # the end of any chain,
 let check = c.start(&verify, VerifyInput { archive }).await?;   // a run of its own
 let ok = check.result().await?;
 other.cancel("not needed").await?;
+c.start(&reindex, ReindexInput { archive }).abandon().await?;
 let paid: Paid = c.result("payment-42").await?;
 ```
 
@@ -400,12 +410,13 @@ let paid: Paid = c.result("payment-42").await?;
 const check = await c.start(verify, { archive });   // a run of its own
 const ok = await check.result();
 await other.cancel("not needed");
+await c.start(reindex, { archive }, { abandon: true });
 const paid = await c.result<Paid>("payment-42");
 ```
 
 </details>
 
-A parent cancels a child it started as a client would, its outcome recorded. `c.result` awaits the end of any chain, without polling: the awaited run tells the waiting one when it ends. A child may start itself, for recursion over a tree, and may be a workflow of another language, through a stub of the same name. More in [I-11] and [I-5].
+A parent cancels a child it started as a client would, its outcome recorded. A run's end, completed, failed or cancelled, cancels its children still running, but those started with `abandon`. `c.result` awaits the end of any chain, without polling: the awaited run tells the waiting one when it ends. A child may start itself, for recursion over a tree, and may be a workflow of another language, through a stub of the same name. More in [I-11] and [I-5].
 
 ### Loops and continue as new
 
@@ -449,7 +460,7 @@ for await (const w of c.iterate(new Walk())) {
 
 </details>
 
-Once the history passes a threshold, `iterate` continues the run as a new one carrying the loop's state, and only it, so a loop can run forever on a short history. `await c.continue_as_new(input)` does it by hand. More in [I-12].
+Once the history passes a threshold, `iterate` continues the run as a new one carrying the loop's state, and only it, so a loop can run forever on a short history. `await c.continue_as_new(input)` does it by hand. A loop keeps its version through its continuations; `c.iterate(Walk(), upgrade=True)` (TypeScript `{ upgrade: true }`, Rust `.upgrade()`) moves it at its next iteration to the highest version of its workflow the worker serves, and `c.schedule(upgrade=True)` does the same for a schedule, which `sub.schedule` with the new version then moves instead of raising `RunExists`. More in [I-12] and [I-31].
 
 ### Undo and sagas
 
@@ -543,9 +554,10 @@ async with s.Substantial.open(url) as sub: ...           # closed at the end
 run = await sub.start(checkout, {"order": "a-42", "amount": 1999}, id="order-a-42")
 run = sub.run(checkout, "order-a-42")                 # a handle on an existing run
 await run.send("address", "1 rue du Lac", id="address-a-42")
-status = await run.status()       # pending, running, suspended, completed, failed, cancelled
+status = await run.status()       # pending, running, suspended, blocked, completed, failed, cancelled
 result = await run.result(timeout=s.hours(2))
 progress = await run.read("progress")                 # what the run published with c.publish
+cart = await sub.start(shopping, {}, id="cart-7", message=s.Message("add", item, id="add-1"))   # starts or finds it, then sends
 ```
 
 <details>
@@ -559,6 +571,7 @@ run.send("address", "1 rue du Lac").id("address-a-42").await?;
 let status = run.status().await?;                         // an s::RunStatus
 let result = run.result().timeout(s::hours(2)).await?;
 let progress: Option<Progress> = run.read("progress").await?;
+let cart = sub.start(shopping, Cart {}).id("cart-7").message(s::Message::new("add", item).id("add-1")).await?;
 ```
 
 ```ts
@@ -569,17 +582,18 @@ await run.send("address", "1 rue du Lac", { id: "address-a-42" });
 const status = await run.status();
 const result = await run.result({ timeout: s.hours(2) });
 const progress = await run.read("progress");
+const cart = await sub.start(shopping, {}, { id: "cart-7", message: { name: "add", value: item, id: "add-1" } });
 ```
 
 </details>
 
-`create` makes the namespace or opens it; `open` refuses one that does not exist. A Rust `Substantial` is freed when dropped. More in [I-16] and [I-17].
+`create` makes the namespace or opens it; `open` refuses one that does not exist. A start given a `message` sends it once the run is created or found, so the first event of a cart both starts it and lands in it. A Rust `Substantial` is freed when dropped. More in [I-16] and [I-17].
 
 ### Live runs, history and retry
 
 ```python
-async for info in sub.runs(checkout):        # pending, waiting on time or messages, every version
-    print(info.run, info.version, info.waiting_on, info.due_at)
+async for info in sub.runs(checkout):        # pending, waiting on time or messages, blocked, every version
+    print(info.run, info.version, info.waiting_on, info.due_at, info.error)
 
 for event in await run.history():            # the events its replays read
     print(event.segment, event.at, event.kind, event.data)
@@ -589,6 +603,13 @@ try:
 except s.RunFailed:
     ...                                      # fix the code, or wait out the outage
     await run.retry()                        # recorded steps return their values, the failed step runs again
+
+await run.retry(keep=3)                      # an ended run reset: its first 3 events kept, the rest run again
+
+@s.workflow
+async def refund(c: s.Context, order: str) -> None:
+    if not await c.step("eligible", is_eligible, order):
+        raise s.Fail("NotEligible", f"order {order} is past its refund window")   # ends the run failed
 ```
 
 <details>
@@ -607,6 +628,9 @@ for event in run.history().await? {
 if run.result().await.is_err() {
     run.retry().await?;
 }
+run.retry().keep(3).await?;                  // an ended run reset
+
+return Err(s::Error::fail("NotEligible", format!("order {order} is past its refund window")));
 ```
 
 ```ts
@@ -618,11 +642,14 @@ try {
   if (!(e instanceof s.RunFailed)) throw e;
   await run.retry();
 }
+await run.retry({ keep: 3 });                // an ended run reset
+
+throw new s.Fail("NotEligible", `order ${order} is past its refund window`);
 ```
 
 </details>
 
-`runs` reads a workflow's queue, never its histories: ended runs are not listed, though one that just ended may be for a moment. `retry` starts a new run of the chain that replays the failed one without its failure, so a payment that succeeded is not charged again and the failed step gets a fresh retry budget; `s.step_key()` stays the same. More in [I-17].
+A bug of the code, an exception it lets out or a change its history does not match, blocks the run instead of failing it: nothing is recorded, the worker logs a warning and tells its observer, `status` reads `blocked`, `runs` lists the run with its error, and the run is tried again with a backoff until a deploy fixes or rolls back the code, then goes on as if nothing happened. A run fails only with an outcome Substantial recorded, a step out of attempts, a budget passed, a rollback, or `s.Fail`, which the code raises on purpose. `runs` reads a workflow's queue, never its histories: ended runs are not listed, though one that just ended may be for a moment. `retry(keep=n)` resets an ended run, completed, failed or cancelled, to its first `n` events of `history()` and runs the code live from there. `retry` starts a new run of the chain that replays the failed one without its failure, so a payment that succeeded is not charged again and the failed step gets a fresh retry budget; `s.step_key()` stays the same. More in [I-17].
 
 ### Cost, budgets and observing
 
@@ -706,6 +733,9 @@ The core counts each run's store requests, the adapter's retries included, and w
 ```python
 @s.workflow(name="checkout", version=2)
 async def checkout_v2(c: s.Context, order: str, amount: int) -> dict: ...
+
+if c.patched("fraud-check"):                 # true for runs that reach it with this code, false for older ones
+    await c.step("fraud", check_fraud, order)
 ```
 
 <details>
@@ -714,15 +744,28 @@ async def checkout_v2(c: s.Context, order: str, amount: int) -> dict: ...
 ```rust
 #[s::workflow(name = "checkout", version = 2)]
 async fn checkout_v2(c: s::Context, input: Order) -> s::Result<Receipt> { ... }
+
+if c.patched("fraud-check")? {
+    check_fraud(order.clone()).await?;
+}
 ```
 
 ```ts
 const checkoutV2 = s.workflow("checkout", async (c, input: Order) => { ... }, { version: 2 });
+
+if (c.patched("fraud-check")) await checkFraud(order);
 ```
 
 </details>
 
-A run started with a version is replayed only by that version's code, so old and new code serve their runs side by side through a deploy. More in [I-5].
+A run started with a version is replayed only by that version's code, so old and new code serve their runs side by side through a deploy. A smaller change needs no version: `c.patched(id)` records which branch a run takes, true when the run first reaches it with the new code, false when it replays a history recorded before, so runs in flight keep their histories. To know whether new code still matches the runs in flight, replay them in CI before the deploy: the replay tester copies them from the store and replays them against their histories, writing nothing to the store and running no step.
+
+```python
+replayed = await s.testing.replay(url, [checkout], runs=[info.run async for info in sub.runs(checkout)], credentials="env")
+assert [r.run for r in replayed if r.outcome == "diverged"] == []          # else give the change a new version
+```
+
+More in [I-5] and [I-19].
 
 ### Stores
 
@@ -730,7 +773,7 @@ A run started with a version is replayed only by that version's code, so old and
 | --- | --- |
 | `memory://<ns>` | memory, in the process, for tests |
 | `file:<path>` | a directory, for development and one machine |
-| `s3://<endpoint>/<bucket>/<ns>?region=<r>` | S3 with conditional writes: AWS, MinIO, Ceph RGW, R2 |
+| `s3://<endpoint>/<bucket>/<ns>?region=<r>` | a versioned S3 bucket with conditional writes: AWS, MinIO, Ceph RGW, R2 |
 | `redis://<host>:<port>/<ns>?db=0&replicas=0`, `redis+sentinel://`, `redis+cluster://` | Redis or Valkey 7.2+ with AOF, one server, Sentinel or a cluster, every create fsynced on every replica; workers wake as soon as a run is started or messaged |
 
 ```python
@@ -762,7 +805,7 @@ const sub = await s.Substantial.open(redisUrl, {
 
 </details>
 
-S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Redis takes none, `"env"` (`REDIS_PASSWORD`, `REDIS_USERNAME`), a password, or such a function returning one (`s::Credentials::password_provider` in Rust). Ended runs are deleted 30 days after they end, or after the `retention` a worker or a workflow sets, at most 100 years; never delete keys under a namespace yourself, by hand or with a lifecycle rule. More in [I-16].
+S3 takes `"env"` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), explicit `s.Credentials(...)`, or a function, sync or async, returning keys with an optional `expires_at`: it is called at open and again within 5 minutes of that expiry, for roles and other temporary keys. `s3+http://` reaches a local server. Redis takes none, `"env"` (`REDIS_PASSWORD`, `REDIS_USERNAME`), a password, or such a function returning one (`s::Credentials::password_provider` in Rust). An ended run stays readable by its id, and its id refused to a new start, for 30 days after it ends, or the `retention` in whole days a worker or a workflow sets (Python `retention=30`, TypeScript `retention: 30`, Rust `.set("retention", "30d")` or `.with_retention(30)`), and as long as a run it started is kept; then the store removes it by itself, with no worker involved. On S3, each retention in use needs one lifecycle rule of the bucket, which a worker checks when it starts, failing with the JSON of the rule to add. Bucket versioning is optional. Never delete keys under a namespace yourself. More in [I-16].
 
 ### Workers
 
@@ -809,7 +852,7 @@ await sub.worker([nightly, report], { preset: "script" }).drain({ within: s.minu
 
 </details>
 
-`drain` serves every run due now or within 2 minutes, takes over the runs of crashed workers whose claims expire by then, and returns once nothing is due within that horizon and nothing is in flight; between two jobs no worker lists the store. A schedule it serves needs a `backfill` of at least the job's period divided by the cron's. More in [I-18] and the [integration] guide.
+`drain` serves every run due now or within 2 minutes, takes over the runs of crashed workers whose leases expire by then, and returns once nothing is due within that horizon and nothing is in flight; between two jobs no worker lists the store. A schedule it serves needs a `backfill` of at least the job's period divided by the cron's. More in [I-18] and the [integration] guide.
 
 ### Wasm workflows
 
@@ -863,9 +906,10 @@ A Wasm workflow has no network, clock or filesystem: its workflow code calls onl
 
 ## How it works
 
-- **No broker, no server.** Workers and clients coordinate through the store alone, with four operations: an exclusive create, a get, a list and a delete. A run's history is a sequence of keys, each created once and never overwritten. A worker takes a run with a claim, an exclusive create it renews while it works, and finds due runs, timers and messages by listing the due entries of each workflow it serves, one prefix per workflow.
-- **Checked at open.** Opening a namespace creates a key twice and refuses a store that accepts both, as an S3-compatible store ignoring conditional writes would.
-- **What it costs.** On S3, a run that starts, calls 3 steps, sleeps a day and completes makes 13 PUT, 6 GET, 9 LIST and 13 free DELETE over its life, collection included: $1.12 a month for 10,000 runs. An idle worker of the `service` preset lists each workflow it serves every 30 s, $0.43 a month per workflow.
+- **No broker, no server.** Workers and clients coordinate through the store alone, with six operations: an exclusive create, a compare-and-set naming an ETag, a get, a list, a delete, and an expiry in days that every write carries. A chain of runs is one object, its head, rewritten at every commit only if it is still the value its writer read, so of two workers racing on a run one wins. Every run stays readable by its id, the runs a chain continued from in archives. A worker leases a run in its head before it runs a step, and finds due runs, timers and messages by listing the entries of each workflow it serves, one prefix per workflow.
+- **Checked at open.** Opening a namespace refuses a store that accepts two creates of one key, writes under an ETag that is not the key's, or brings a deleted key back, as an S3-compatible store ignoring conditional writes would.
+- **Removed by the store.** An ended run expires with its retention: S3 lifecycle rules, Redis expiries and the file store's sweep remove it, with no worker collecting anything, so a namespace stops growing.
+- **What it costs.** On S3 a run costs its requests: a commit is one write of its head, a wakeup one read. The per-verb counts and the monthly cost of typical workflows are in [the architecture](https://github.com/zifeo/substantial/blob/main/docs/architecture.md). An idle worker of the `service` preset lists each workflow it serves every 30 s, $0.43 a month per workflow.
 - **One core.** The protocol lives in a core compiled to WebAssembly, with no I/O, clock or randomness of its own. Every host loads the same module and only runs your code and talks to the store, so a namespace can be shared by workers and clients in all three languages.
 
 The store contract and the core's boundary are in [the reference][I-22]. What each verb does to the store, its round trips, its failure behaviour and its monthly cost on S3 are in [the architecture](https://github.com/zifeo/substantial/blob/main/docs/architecture.md).
@@ -878,16 +922,14 @@ uv run pytest
 npm ci && npm run check && npm test
 ```
 
-The Redis tests run, in Rust with `--features redis`, when `SUBSTANTIAL_REDIS_URL`, `SUBSTANTIAL_REDIS_SENTINEL_URL` or `SUBSTANTIAL_REDIS_CLUSTER_URL` is set, against the Valkey of `dev/redis.compose.yaml`, `dev/redis-sentinel.compose.yaml` or `dev/redis-cluster.compose.yaml`, whose headers give each URL.
-
-The S3 tests run when `SUBSTANTIAL_S3_URL` is set, against a local RustFS:
+The tests run against every store, S3 on a local RustFS and Redis on Valkey standalone, with Sentinel and as a cluster, all in `dev/compose.yaml`. Start them first: a test whose store does not answer fails, none is skipped.
 
 ```sh
-docker compose -f dev/rustfs.compose.yaml up -d --wait
-AWS_ACCESS_KEY_ID=substantial AWS_SECRET_ACCESS_KEY=substantial-secret \
-SUBSTANTIAL_S3_URL='s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1' \
-cargo test --workspace  # or uv run pytest, or npm test
+docker compose -f dev/compose.yaml up -d --wait
+cargo test --workspace --all-features  # or uv run pytest, or npm test
 ```
+
+`dev/stores.env` gives the tests of every host and `dev/cross` the URL and test credentials of each store; a variable set in the environment wins over its line there. The Rust Redis tests need the `redis` feature.
 
 Each host has two examples on a file or memory store, `first_workflow` and `backup`: `cargo run -p substantial --example first_workflow -- /tmp/demo`, `uv run python/examples/first_workflow.py /tmp/demo-py`, `node --conditions=substantial-source typescript/examples/first_workflow.ts /tmp/demo-ts`.
 
@@ -911,6 +953,7 @@ Each host has two examples on a file or memory store, `first_workflow` and `back
 [I-16]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-16-creating-and-opening-a-namespace
 [I-17]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-17-starting-and-following-runs
 [I-18]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-18-workers
+[I-19]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-19-testing
 [I-21]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-21-actions-in-each-host
 [I-22]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-22-for-implementers
 [I-27]: https://github.com/zifeo/substantial/blob/main/docs/interfaces.md#i-27-cost-and-charges

@@ -130,6 +130,7 @@ fn flaky(pokes: &Pokes) -> Workflow<Option<u64>> {
                 initial: seconds(1),
                 max: seconds(1),
                 multiplier: 1.0,
+                deadline: None,
             };
             c.poll("check", move || {
                 let pokes = pokes.clone();
@@ -177,10 +178,10 @@ async fn poll_checks_every_and_timeout() {
         let wf = poller(&Pokes::default());
         let worker = env.worker(&wf).preset(Preset::Service).start().unwrap();
         let run = env.start(&wf, input).await.unwrap();
-        let failed = run.result().await;
+        let blocked = run.result().await;
         assert!(
-            matches!(&failed, Err(e @ Error::RunFailed { .. }) if e.to_string().contains(message)),
-            "{failed:?}"
+            matches!(&blocked, Err(Error::Stuck(m)) if m.contains("blocked by InvalidArgument") && m.contains(message)),
+            "{blocked:?}"
         );
         worker.shutdown().await.unwrap();
         done(env).await;

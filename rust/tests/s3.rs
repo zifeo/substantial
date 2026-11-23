@@ -1,5 +1,5 @@
-//! What the S3 adapter does beyond the shared contract; all but URL parsing run only when
-//! `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`).
+//! What the S3 adapter does beyond the shared contract; all but URL parsing on the RustFS
+//! `SUBSTANTIAL_S3_URL` names (see `dev/compose.yaml`).
 
 mod common;
 
@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
-use common::{retry, s3_url};
+use common::{retry, s3_credentials, s3_url, setting};
 use futures::{StreamExt, TryStreamExt};
 use substantial::__internal::{self as internal, Create, ListWait, S3Location};
 use substantial::{Credentials, Error, Keys, Substantial};
@@ -60,6 +60,8 @@ fn urls_need_every_part() {
         "s3://h/b/ns?region=r#x",
         "s3+https://h/b/ns?region=r",
         "gs://h/b/ns?region=r",
+        "s3://s3express-use1-az4.us-east-1.amazonaws.com/b--use1-az4--x-s3/ns?region=us-east-1",
+        "h3://h/b--x-s3/ns?region=r",
     ] {
         assert!(
             matches!(S3Location::parse(url), Err(Error::ConfigError(_))),
@@ -77,10 +79,10 @@ fn urls_need_every_part() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn create_and_open_run_the_probe() {
-    let Some(url) = s3_url("s3") else { return };
-    let env = &Credentials::Env;
+    let url = s3_url("s3");
+    let keys = &s3_credentials();
     assert!(matches!(
-        Substantial::open(&url).credentials(Credentials::Env).await,
+        Substantial::open(&url).credentials(s3_credentials()).await,
         Err(Error::LayoutError(_))
     ));
     assert!(matches!(
@@ -88,25 +90,28 @@ async fn create_and_open_run_the_probe() {
         Err(Error::ConfigError(_))
     ));
     let created = Substantial::create(&url)
-        .credentials(Credentials::Env)
+        .credentials(s3_credentials())
         .await
         .unwrap();
     drop(created);
     Substantial::open(&url)
-        .credentials(Credentials::Env)
+        .credentials(s3_credentials())
         .await
         .unwrap();
-    let s = internal::open(&url, env, retry()).unwrap();
+    let s = internal::open(&url, keys, retry()).unwrap();
+    // § mgfgmd25p.e@hb3r0
     let probes = s.list("probe/", None, 10, None).await.unwrap().keys;
-    // § mgfgmd25p.b@gp5ac
-    assert_eq!(probes, ["probe/exclusive"], "one probe key, kept");
+    assert!(
+        probes.is_empty(),
+        "the probe keys, deleted after the probes: {probes:?}"
+    );
 }
 
 #[tokio::test]
 async fn wrong_credentials_are_a_store_error() {
-    let Some(url) = s3_url("s3") else { return };
+    let url = s3_url("s3");
     let wrong = Credentials::S3 {
-        access_key_id: std::env::var("AWS_ACCESS_KEY_ID").unwrap(),
+        access_key_id: setting("AWS_ACCESS_KEY_ID"),
         secret_access_key: "not-the-secret".into(),
         session_token: None,
     };
@@ -122,26 +127,26 @@ async fn wrong_credentials_are_a_store_error() {
 
 #[tokio::test]
 async fn a_missing_bucket_is_a_store_error_not_a_missing_key() {
-    let Some(url) = s3_url("s3") else { return };
+    let url = s3_url("s3");
     let (endpoint, rest) = url.split_once("://").unwrap().1.split_once('/').unwrap();
     let (_, path) = rest.split_once('/').unwrap();
     let scheme = url.split_once("://").unwrap().0;
     let missing = format!("{scheme}://{endpoint}/substantial-no-such-bucket/{path}");
-    let s = internal::open(&missing, &Credentials::Env, retry()).unwrap();
+    let s = internal::open(&missing, &s3_credentials(), retry()).unwrap();
     assert!(s.get("runs/a/start").await.is_err());
     assert!(s.delete("runs/a/start").await.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listings_go_past_one_page() {
-    let Some(url) = s3_url("s3") else { return };
-    let s = internal::open(&url, &Credentials::Env, retry()).unwrap();
+    let url = s3_url("s3");
+    let s = internal::open(&url, &s3_credentials(), retry()).unwrap();
     let keys: Vec<String> = (0..1005).map(|i| format!("due/{i:05}")).collect();
     futures::stream::iter(&keys)
-        .map(|k| s.create(k, Bytes::new()))
+        .map(|k| s.create(k, Bytes::new(), None))
         .buffer_unordered(32)
         .try_for_each(|c| async move {
-            assert_eq!(c, Create::Created);
+            assert!(matches!(c, Create::Created { .. }));
             Ok(())
         })
         .await
@@ -154,10 +159,12 @@ async fn listings_go_past_one_page() {
 
 #[tokio::test]
 async fn h3_on_a_plain_s3_server_fails_waiting_listings_for_want_of_an_etag() {
-    let Some(url) = s3_url("h3") else { return };
-    let s = internal::open(&url, &Credentials::Env, retry()).unwrap();
+    let url = s3_url("h3");
+    let s = internal::open(&url, &s3_credentials(), retry()).unwrap();
     assert!(s.capabilities().wait);
-    s.create("q/a", Bytes::from_static(b"a")).await.unwrap();
+    s.create("q/a", Bytes::from_static(b"a"), None)
+        .await
+        .unwrap();
     assert_eq!(s.list("q/", None, 10, None).await.unwrap().keys, ["q/a"]);
     let wait = Some(ListWait {
         etag: None,
@@ -165,7 +172,7 @@ async fn h3_on_a_plain_s3_server_fails_waiting_listings_for_want_of_an_etag() {
     });
     let failure = s.list("q/", None, 10, wait).await.unwrap_err();
     assert!(
-        failure.message.contains("x-substantial-listing-etag"),
+        failure.message.contains("x-herald-listing-etag"),
         "{failure}"
     );
 }
@@ -180,8 +187,8 @@ fn counted(expires_in: Option<TimeDelta>, failing: u32) -> (Credentials, Arc<Ato
             Err("no keys yet")
         } else {
             Ok(Keys {
-                access_key_id: std::env::var("AWS_ACCESS_KEY_ID").unwrap(),
-                secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").unwrap(),
+                access_key_id: setting("AWS_ACCESS_KEY_ID"),
+                secret_access_key: setting("AWS_SECRET_ACCESS_KEY"),
                 session_token: None,
                 expires_at: expires_in.map(|d| DateTime::<Utc>::from(SystemTime::now()) + d),
             })
@@ -192,7 +199,7 @@ fn counted(expires_in: Option<TimeDelta>, failing: u32) -> (Credentials, Arc<Ato
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_credentials_provider_is_called_again_near_expiry() {
-    let Some(url) = s3_url("s3") else { return };
+    let url = s3_url("s3");
     let (provider, calls) = counted(Some(TimeDelta::hours(1)), 0);
     let sub = Substantial::create(&url)
         .credentials(provider)
@@ -202,7 +209,7 @@ async fn a_credentials_provider_is_called_again_near_expiry() {
     assert_eq!(calls.load(Ordering::SeqCst), 1, "called at open, then kept");
 
     let four_requests = async |s: &dyn internal::Store| {
-        s.create("k", Bytes::from_static(b"v")).await.unwrap();
+        s.create("k", Bytes::from_static(b"v"), None).await.unwrap();
         s.get("k").await.unwrap();
         s.list("", None, 10, None).await.unwrap();
         s.delete("k").await.unwrap();
@@ -212,7 +219,7 @@ async fn a_credentials_provider_is_called_again_near_expiry() {
         (Some(TimeDelta::hours(1)), 1),
         (None, 1),
     ] {
-        let url = s3_url("s3").unwrap();
+        let url = s3_url("s3");
         let (provider, calls) = counted(expires_in, 0);
         let s = internal::open(&url, &provider, retry()).unwrap();
         four_requests(&*s).await;
@@ -321,4 +328,42 @@ async fn a_listing_without_is_truncated_is_complete() {
     let listing = s.list("q/", None, 10, None).await.unwrap();
     assert_eq!(listing.keys, ["q/a"]);
     assert_eq!(*methods.lock().unwrap(), ["GET"]);
+}
+
+/// A worker checks at start that the bucket expires the keys of every retention it writes: the
+/// dev bucket's rules expire 1 and 30 days under `tests/`, so a worker of 7 days dies with the
+/// rule to add, and one of 30 serves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worker_refuses_a_retention_no_lifecycle_rule_expires() {
+    // § cfdckf61n.c@f3wb7
+    let quick = substantial::Workflow::without_input("quick", |_c| async { Ok(1) });
+    let sub = Substantial::create(s3_url("s3").as_str())
+        .credentials(s3_credentials())
+        .await
+        .unwrap();
+    let run = sub.start(&quick, ()).await.unwrap();
+    let worker = common::script(&sub, &quick)
+        .set("retention", "7d")
+        .start()
+        .unwrap();
+    let rule = |m: &str| {
+        m.contains(r#""Expiration":{"Days":7}"#)
+            && m.contains(r#""Value":"7d""#)
+            && m.contains("s3:PutLifecycleConfiguration")
+            && !m.contains(r#""Days":30"#)
+    };
+    match run.result().timeout(common::LONG).await {
+        Err(Error::ConfigError(m)) => assert!(rule(&m), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    match worker.shutdown().await {
+        Err(Error::ConfigError(m)) => assert!(rule(&m), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    let worker = common::script(&sub, &quick)
+        .set("retention", "30d")
+        .start()
+        .unwrap();
+    assert_eq!(run.result().timeout(common::LONG).await.unwrap(), 1);
+    worker.shutdown().await.unwrap();
 }

@@ -28,6 +28,7 @@ const ONCE: s::Retry = s::Retry {
     initial: std::time::Duration::from_secs(1),
     max: std::time::Duration::from_secs(1),
     multiplier: 1.0,
+    deadline: None,
 };
 
 /// Tried thrice if retryable, so that one attempt shows a failure that is not.
@@ -36,6 +37,7 @@ const THRICE: s::Retry = s::Retry {
     initial: std::time::Duration::from_millis(1),
     max: std::time::Duration::from_millis(1),
     multiplier: 1.0,
+    deadline: None,
 };
 
 /// Spins without a host call, which only an interruption ends.

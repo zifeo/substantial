@@ -17,6 +17,7 @@ const TWICE: s::Retry = s::Retry {
     initial: std::time::Duration::from_millis(1),
     max: std::time::Duration::from_millis(1),
     multiplier: 1.0,
+    deadline: None,
 };
 
 #[s::step(retry = TWICE)]
@@ -49,7 +50,7 @@ async fn failures(c: s::Context, input: Input) -> s::Result<f64> {
         "nan-value" => not_a_number().await,
         "step-error" => failing().await.map(|()| 0.0),
         "step-permanent" => permanent().await.map(|()| 0.0),
-        "own-failure" => Err(s::Error::Failed(s::Failure {
+        "own-failure" => Err(s::Error::Fail(s::Failure {
             kind: "Mine".into(),
             message: "mine".into(),
             retryable: false,

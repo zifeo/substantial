@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from redis.asyncio import Redis
@@ -13,7 +13,19 @@ from redis.exceptions import AuthenticationError, NoPermissionError, RedisError,
 
 from substantial.errors import ConfigError
 from substantial.stores import retry
-from substantial.stores.base import Capabilities, Create, Listing, ListWait
+from substantial.stores.base import (
+    DAY_MS,
+    Capabilities,
+    Cas,
+    Create,
+    Created,
+    Listing,
+    ListWait,
+    Object,
+    Written,
+    check_all_days,
+    check_days,
+)
 from substantial.stores.credentials import CredentialsArg
 from substantial.stores.redis import (
     ATTEMPT_TIMEOUT,
@@ -22,16 +34,47 @@ from substantial.stores.redis import (
     WAITAOF_MS,
     RedisLocation,
 )
-from substantial.stores.redis_connect import CREATE, DELETE, Connector, Primary, ProviderFailed
+from substantial.stores.redis_connect import (
+    CAS,
+    CREATE,
+    DELETE,
+    Connector,
+    Primary,
+    ProviderFailed,
+)
 from substantial.stores.redis_notify import Notifications
 from substantial.stores.retry import STORE_RETRY, Ambiguous, Fault, Permanent, Transient
+
+
+def _expiry_ms(expiry: int | None) -> int:
+    """The expiry of a write in ms for the scripts, 0 for none."""
+    # § hxvcx7f2a@kp3nm
+    return 0 if expiry is None else expiry * DAY_MS
+
+
+def _sha1_etag(data: bytes) -> str:
+    """The ETag of a value: the digest the compare-and-set script computes with `redis.sha1hex`."""
+    return hashlib.sha1(data).hexdigest()
+
+
+def _page_etag(keys: list[str], etags: list[bytes | None], more: bool) -> str:
+    """The etag of a waiting listing's page: its keys, their ETags, and whether more follow, so a
+    page changes when a key under it is added, removed or rewritten."""
+    digest = hashlib.sha256()
+    for key, etag in zip(keys, etags, strict=True):
+        for part in (key.encode(), etag or b""):
+            digest.update(len(part).to_bytes(8, "big"))
+            digest.update(part)
+    digest.update(bytes([more]))
+    return digest.hexdigest()[:16]
 
 
 class RedisStore:
     """`redis://`, `redis+sentinel://` and `redis+cluster://`: the namespace `<ns>` is the hash
     tag of its keys, so they live on one slot. A key is the string `{<ns>}:o:<key>` and a member
-    of the sorted set `{<ns>}:i`, its index, listed by lex range; every create and delete
-    publishes the key on `{<ns>}:c`, which waiting listings subscribe to.
+    of the sorted set `{<ns>}:i`, its index, listed by lex range, its ETag the field of the key in
+    the hash `{<ns>}:t`; every create, cas and delete publishes the key on `{<ns>}:c`, which
+    waiting listings subscribe to.
 
     A create is the script `create.lua`, then `WAITAOF` on the same connection: acknowledged
     once fsynced on the primary and on `replicas`. The client's own retries are off:
@@ -49,6 +92,8 @@ class RedisStore:
         self._object = f"{tag}:o:".encode()
         self._index = f"{tag}:i"
         self._fence = f"{tag}:f"
+        self._expiries = f"{tag}:e"
+        self._etags = f"{tag}:t"
         self._channel = f"{tag}:c"
         cluster = location.topology == "cluster"
         self._publish = "SPUBLISH" if cluster else "PUBLISH"
@@ -70,7 +115,7 @@ class RedisStore:
             if self._closed:
                 raise Permanent("the store is closed")
             if self._current is None:
-                self._current = await self._connector.connect((CREATE, DELETE))
+                self._current = await self._connector.connect((CREATE, CAS, DELETE))
             return self._current
 
     def _lost(self, primary: Primary) -> None:
@@ -114,13 +159,13 @@ class RedisStore:
 
         A separate round trip: with the write in the same pipeline, replicas acknowledge their
         fsync only at their next second."""
-        # § htbc4k715@0hvbz
+        # § htbc4k715@wfgv7
         fault = Ambiguous if created else Transient
         try:
             replicas = await self._replicas(primary)
         except Transient as e:
             raise fault(f"{what}: {e}") from None
-        # § one dfd6vt90h.e@qraz5
+        # § one dfd6vt90h.e@wy1dk
         try:
             waited: Any = await conn.execute_command("WAITAOF", 1, replicas, WAITAOF_MS)
             if waited[0] >= 1 and waited[1] >= replicas:
@@ -142,7 +187,7 @@ class RedisStore:
         if asyncio.get_running_loop().time() - primary.counted_at >= RECOUNT_EVERY:
             await self._count(primary)
         if primary.replicas == 0 and self._location.topology != "standalone":
-            # § htbc4k715.c@cqmb4
+            # § htbc4k715.c@tapsh
             raise Transient(f"{primary.where} has no replica online")
         return primary.replicas
 
@@ -154,25 +199,39 @@ class RedisStore:
     def _key(self, key: str) -> bytes:
         return self._object + key.encode()
 
-    async def _put(self, primary: Primary, key: str, data: bytes) -> Create:
+    async def _put(self, primary: Primary, key: str, data: bytes, expiry: int | None) -> Create:
         await self._replicas(primary)
         async with primary.client.client() as conn:
-            keys = (self._key(key), self._index, self._fence)
+            keys = (self._key(key), self._index, self._fence, self._expiries, self._etags)
             created = await conn.evalsha(
-                CREATE.sha, 3, *keys, key, data, self._channel, self._publish
+                CREATE.sha, 5, *keys, key, data, self._channel, self._publish, _expiry_ms(expiry)
             )
-            outcome: Create = "created" if created == 1 else "exists"
-            await self._durable(primary, conn, f"create {key}", created=outcome == "created")
+            outcome: Create = Created(_sha1_etag(data)) if created == 1 else "exists"
+            await self._durable(primary, conn, f"create {key}", created=outcome != "exists")
+            return outcome
+
+    async def _put_if_match(
+        self, primary: Primary, key: str, data: bytes, etag: str, expiry: int | None
+    ) -> Cas:
+        # § rz3se15bd@fjtyt
+        await self._replicas(primary)
+        async with primary.client.client() as conn:
+            keys = (self._key(key), self._index, self._fence, self._expiries, self._etags)
+            args = (key, data, etag, _expiry_ms(expiry), self._channel, self._publish)
+            written = await conn.evalsha(CAS.sha, 5, *keys, *args)
+            # § htbc4k715.g@jfjhb
+            outcome: Cas = Written(_sha1_etag(data)) if written == 1 else "mismatch"
+            await self._durable(primary, conn, f"cas {key}", created=outcome != "mismatch")
             return outcome
 
     async def _read(self, primary: Primary, what: str, *command: Any, resolving: bool) -> Any:
         """A read answered once what it saw is durable: a fence written after it on this
         connection, then fsynced, covers it, as the AOF and the replication stream are one ordered
         log. A key once read never disappears in a failover, nor does one once missing come back,
-        as history keys are deleted too, by collections. `resolving` marks the get that resolves
-        an ambiguous create, ambiguous again when the fence falls short."""
+        as deletes wait for the same fsync. `resolving` marks the get that resolves an ambiguous
+        create, ambiguous again when the fence falls short."""
         async with primary.client.client() as conn:
-            # § htbc4k715.a@1hd39
+            # § htbc4k715.a@9ggzq
             pipe = conn.pipeline(transaction=False)
             pipe.execute_command(*command)
             pipe.incr(self._fence)
@@ -210,8 +269,8 @@ class RedisStore:
                     what, lambda p: self._page(p, prefix, start_after, max_keys + 1)
                 )
                 keys = page[:max_keys]
-                digest = hashlib.sha256(repr((keys, len(page) > max_keys)).encode())
-                etag = digest.hexdigest()[:16]
+                etags = await self._attempt(what, lambda p, listed=keys: self._etags_of(p, listed))
+                etag = _page_etag(keys, etags, len(page) > max_keys)
                 if event is None or etag != wait.etag:
                     return Listing(keys=keys, etag=etag)
                 try:
@@ -229,20 +288,48 @@ class RedisStore:
 
         await retry.with_retry(STORE_RETRY, lambda: self._attempt("connect", connected))
 
-    async def create(self, key: str, data: bytes) -> Create:
+    async def _etags_of(self, primary: Primary, keys: list[str]) -> list[bytes | None]:
+        if not keys:
+            return []
+        return await primary.client.hmget(self._etags, keys)
+
+    async def create(self, key: str, data: bytes, *, expiry: int | None) -> Create:
+        check_days(expiry)
         data = bytes(data)
+
         return await retry.create(
             STORE_RETRY,
             data,
-            lambda: self._attempt(f"create {key}", lambda p: self._put(p, key, data), create=True),
+            lambda: self._attempt(
+                f"create {key}", lambda p: self._put(p, key, data, expiry), create=True
+            ),
             lambda: self._attempt(f"get {key}", lambda p: self._get(p, key, resolving=True)),
         )
 
-    async def _get(self, primary: Primary, key: str, *, resolving: bool) -> bytes | None:
-        what = f"get {key}"
-        return await self._read(primary, what, "GET", self._key(key), resolving=resolving)
+    async def cas(self, key: str, data: bytes, etag: str, *, expiry: int | None) -> Cas:
+        check_days(expiry)
+        data = bytes(data)
+        return await retry.cas(
+            STORE_RETRY,
+            data,
+            etag,
+            lambda: self._attempt(
+                f"cas {key}",
+                lambda p: self._put_if_match(p, key, data, etag, expiry),
+                create=True,
+            ),
+            lambda: self._attempt(f"get {key}", lambda p: self._get(p, key, resolving=True)),
+        )
 
-    async def get(self, key: str) -> bytes | None:
+    async def check_expiry(self, days: Sequence[int]) -> None:
+        check_all_days(days)
+
+    async def _get(self, primary: Primary, key: str, *, resolving: bool) -> Object | None:
+        what = f"get {key}"
+        found = await self._read(primary, what, "GET", self._key(key), resolving=resolving)
+        return None if found is None else Object(found, _sha1_etag(found))
+
+    async def get(self, key: str) -> Object | None:
         return await retry.with_retry(
             STORE_RETRY,
             lambda: self._attempt(f"get {key}", lambda p: self._get(p, key, resolving=False)),
@@ -258,9 +345,9 @@ class RedisStore:
     async def delete(self, key: str) -> None:
         async def remove(p: Primary) -> None:
             async with p.client.client() as conn:
-                # § htbc4k715.a@akd7b
-                keys = (self._key(key), self._index, self._fence)
-                await conn.evalsha(DELETE.sha, 3, *keys, key, self._channel, self._publish)
+                # § htbc4k715.a@1qf9m
+                keys = (self._key(key), self._index, self._fence, self._expiries, self._etags)
+                await conn.evalsha(DELETE.sha, 5, *keys, key, self._channel, self._publish)
                 await self._durable(p, conn, f"delete {key}", created=False)
 
         await retry.with_retry(STORE_RETRY, lambda: self._attempt(f"delete {key}", remove))

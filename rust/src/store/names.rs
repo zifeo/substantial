@@ -13,6 +13,9 @@ fn component_error(c: &str) -> Option<&'static str> {
             Some("uppercase, which a file system may fold")
         }
         _ if c.contains('\0') => Some("holds a NUL byte"),
+        _ if c.len() > 1 && c.starts_with('.') && c[1..].bytes().all(|b| b.is_ascii_digit()) => {
+            Some("a dot and digits, the name of a version")
+        }
         _ => None,
     }
 }
@@ -42,6 +45,8 @@ mod tests {
     fn components() {
         assert!(check_key("runs/01arz3ndektsv4rrffq69g5fav/start").is_ok());
         assert!(check_key(".tmp/x").is_err());
+        assert!(check_key("a/.00000000000000000001").is_err());
+        assert!(check_key("a/.v1").is_ok());
         assert!(check_key("a/.tmp").is_ok());
         assert!(!is_component(&"x".repeat(256)));
         assert!(is_component("a.b-c_d"));

@@ -10,7 +10,7 @@ import type { CoreError, Empty, OpResult, StoreOp } from "./boundary_pb.ts";
 import { file_substantial_boundary_v1_boundary } from "./boundary_pb.ts";
 import type { Commit, Idle, InboxMessage, Retention, RunInput, RunSettings } from "./run_pb.ts";
 import { file_substantial_boundary_v1_run } from "./run_pb.ts";
-import type { Cost, Time } from "../../layout/v1/layout_pb.ts";
+import type { Cost, Failure, Time } from "../../layout/v1/layout_pb.ts";
 import { file_substantial_layout_v1_layout } from "../../layout/v1/layout_pb.ts";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file substantial/boundary/v1/agent.proto.
  */
 export const file_substantial_boundary_v1_agent: GenFile = /*@__PURE__*/
-  fileDesc("CiNzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9hZ2VudC5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiiQEKBlNlcnZlZBIMCgRuYW1lGAEgASgJEhAKCHZlcnNpb25zGAIgAygNEhgKC3VudmVyc2lvbmVkGAMgASgISACIAQESNQoJcmV0ZW50aW9uGAQgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmV0ZW50aW9uQg4KDF91bnZlcnNpb25lZCLQAwoLQWdlbnRDb25maWcSDgoGcHJlZml4GAEgASgJEg4KBndvcmtlchgDIAEoCRIyCgl3b3JrZmxvd3MYBCADKAsyHy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TZXJ2ZWQSEwoLY29uY3VycmVuY3kYBSABKA0SFAoMY2xhaW1fdHRsX21zGAYgASgEEhUKDWNsYWltX3NrZXdfbXMYByABKAQSEwoLbWF4X2lkbGVfbXMYCCABKAQSEAoIZHVlX3BhZ2UYCSABKA0SEQoJZHVlX3BhZ2VzGAogASgNEhYKDnNuYXBzaG90X2V2ZXJ5GAsgASgEEhIKCm9wX3JldHJpZXMYDCABKA0SDAoEc2VlZBgNIAEoDBI2CghzZXR0aW5ncxgOIAEoCzIkLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlJ1blNldHRpbmdzEhMKC3N0b3JlX3dhaXRzGA8gASgIEhQKDHdhaXRfc2Vjb25kcxgQIAEoDRIUCgx0b21ic3RvbmVfbXMYESABKAQSGAoQcmV0ZW50aW9uX21pbl9tcxgSIAEoBBISCgpyZWNoZWNrX21zGBMgASgESgQIAhADUgpwYXJ0aXRpb25zInQKCVJlcGxheUVuZBItCgRpZGxlGAEgASgLMh0uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuSWRsZUgAEjEKB2Ryb3BwZWQYAiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAQgUKA2VuZCKaBQoMQWdlbnRSZXF1ZXN0EisKBG5leHQYASABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEjoKBGZlZWQYAiABKAsyKi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudFJlcXVlc3QuRmVlZEgAEkEKBmNvbW1pdBgDIAEoCzIvLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50UmVxdWVzdC5SdW5Db21taXRIABJJCgxyZXBsYXlfZW5kZWQYBCABKAsyMS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudFJlcXVlc3QuUmVwbGF5RW5kZWRIABIuCgR3YWtlGAUgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABIyCghzaHV0ZG93bhgGIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAASFwoNd2FrZV93b3JrZmxvdxgHIAEoCUgAEiwKBWRyYWluGAggASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWVIABpFCgRGZWVkEgoKAmlkGAEgASgEEjEKBnJlc3VsdBgCIAEoCzIhLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk9wUmVzdWx0GkkKCVJ1bkNvbW1pdBILCgNydW4YASABKAkSLwoGY29tbWl0GAIgASgLMh8uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29tbWl0GksKC1JlcGxheUVuZGVkEgsKA3J1bhgBIAEoCRIvCgNlbmQYAiABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SZXBsYXlFbmRCCQoHcmVxdWVzdCKQBgoMQWdlbnRDb21tYW5kEjwKBXN0b3JlGAEgASgLMisuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlN0b3JlSAASPgoGcmVwbGF5GAIgASgLMiwuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlJlcGxheUgAEkQKCWNvbW1pdHRlZBgDIAEoCzIvLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50Q29tbWFuZC5Db21taXR0ZWRIABIVCgtzdG9wX3JlcGxheRgEIAEoCUgAEjEKCndhaXRfdW50aWwYBSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEi4KBHN0b3AYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEkAKB3NjYW5uZWQYByABKAsyLS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudENvbW1hbmQuU2Nhbm5lZEgAGkEKBVN0b3JlEgoKAmlkGAEgASgEEiwKAm9wGAIgASgLMiAuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuU3RvcmVPcBp0CgZSZXBsYXkSCwoDcnVuGAEgASgJEjAKBWlucHV0GAIgASgLMiEuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUnVuSW5wdXQSKwoGZHVlX2F0GAMgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWUakQEKCUNvbW1pdHRlZBILCgNydW4YASABKAkSCQoBbhgCIAEoBBILCgN3b24YAyABKAgSNAoFaW5ib3gYBCADKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5JbmJveE1lc3NhZ2USKQoEY29zdBgFIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5Db3N0GigKB1NjYW5uZWQSEAoId29ya2Zsb3cYASABKAkSCwoDZHVlGAIgASgNQgkKB2NvbW1hbmQiugEKDUFnZW50UmVzcG9uc2USMwoFZXJyb3IYASABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5Db3JlRXJyb3JIABI4Cgdjb21tYW5kGAIgASgLMiUuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kSAASLgoEZG9uZRgDIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SABCCgoIcmVzcG9uc2ViBnByb3RvMw", [file_substantial_boundary_v1_boundary, file_substantial_boundary_v1_run, file_substantial_layout_v1_layout]);
+  fileDesc("CiNzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9hZ2VudC5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiiQEKBlNlcnZlZBIMCgRuYW1lGAEgASgJEhAKCHZlcnNpb25zGAIgAygNEhgKC3VudmVyc2lvbmVkGAMgASgISACIAQESNQoJcmV0ZW50aW9uGAQgASgLMiIuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuUmV0ZW50aW9uQg4KDF91bnZlcnNpb25lZCKYBAoLQWdlbnRDb25maWcSDgoGcHJlZml4GAEgASgJEg4KBndvcmtlchgDIAEoCRIyCgl3b3JrZmxvd3MYBCADKAsyHy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TZXJ2ZWQSEwoLY29uY3VycmVuY3kYBSABKA0SFAoMY2xhaW1fdHRsX21zGAYgASgEEhUKDWNsYWltX3NrZXdfbXMYByABKAQSEwoLbWF4X2lkbGVfbXMYCCABKAQSEAoIZHVlX3BhZ2UYCSABKA0SEQoJZHVlX3BhZ2VzGAogASgNEhIKCm9wX3JldHJpZXMYDCABKA0SDAoEc2VlZBgNIAEoDBI2CghzZXR0aW5ncxgOIAEoCzIkLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlJ1blNldHRpbmdzEhMKC3N0b3JlX3dhaXRzGA8gASgIEhQKDHdhaXRfc2Vjb25kcxgQIAEoDRIaChJibG9ja2VkX2luaXRpYWxfbXMYFCABKAQSFgoOYmxvY2tlZF9tYXhfbXMYFSABKAQSGgoSYmxvY2tlZF9tdWx0aXBsaWVyGBYgASgBSgQIAhADSgQICxAMSgQIERASSgQIEhATSgQIExAUUgpwYXJ0aXRpb25zUg5zbmFwc2hvdF9ldmVyeVIMdG9tYnN0b25lX21zUhByZXRlbnRpb25fbWluX21zUgpyZWNoZWNrX21zIqcBCglSZXBsYXlFbmQSLQoEaWRsZRgBIAEoCzIdLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLklkbGVIABIxCgdkcm9wcGVkGAIgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABIxCgdibG9ja2VkGAMgASgLMh4uc3Vic3RhbnRpYWwubGF5b3V0LnYxLkZhaWx1cmVIAEIFCgNlbmQiqwUKDEFnZW50UmVxdWVzdBIrCgRuZXh0GAEgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLlRpbWVIABI6CgRmZWVkGAIgASgLMiouc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRSZXF1ZXN0LkZlZWRIABJBCgZjb21taXQYAyABKAsyLy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudFJlcXVlc3QuUnVuQ29tbWl0SAASSQoMcmVwbGF5X2VuZGVkGAQgASgLMjEuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRSZXF1ZXN0LlJlcGxheUVuZGVkSAASLgoEd2FrZRgFIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAASMgoIc2h1dGRvd24YBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEhcKDXdha2Vfd29ya2Zsb3cYByABKAlIABIsCgVkcmFpbhgIIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lSAASDwoFY2xhaW0YCSABKAlIABpFCgRGZWVkEgoKAmlkGAEgASgEEjEKBnJlc3VsdBgCIAEoCzIhLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLk9wUmVzdWx0GkkKCVJ1bkNvbW1pdBILCgNydW4YASABKAkSLwoGY29tbWl0GAIgASgLMh8uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQ29tbWl0GksKC1JlcGxheUVuZGVkEgsKA3J1bhgBIAEoCRIvCgNlbmQYAiABKAsyIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SZXBsYXlFbmRCCQoHcmVxdWVzdCLnBwoMQWdlbnRDb21tYW5kEjwKBXN0b3JlGAEgASgLMisuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlN0b3JlSAASPgoGcmVwbGF5GAIgASgLMiwuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuQWdlbnRDb21tYW5kLlJlcGxheUgAEkQKCWNvbW1pdHRlZBgDIAEoCzIvLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50Q29tbWFuZC5Db21taXR0ZWRIABIVCgtzdG9wX3JlcGxheRgEIAEoCUgAEjEKCndhaXRfdW50aWwYBSABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZUgAEi4KBHN0b3AYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEkAKB3NjYW5uZWQYByABKAsyLS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudENvbW1hbmQuU2Nhbm5lZEgAEj4KBnNrZXdlZBgIIAEoCzIsLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkFnZW50Q29tbWFuZC5Ta2V3ZWRIABIRCgdjbGFpbWVkGAkgASgJSAAaQQoFU3RvcmUSCgoCaWQYASABKAQSLAoCb3AYAiABKAsyIC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wGnQKBlJlcGxheRILCgNydW4YASABKAkSMAoFaW5wdXQYAiABKAsyIS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5SdW5JbnB1dBIrCgZkdWVfYXQYAyABKAsyGy5zdWJzdGFudGlhbC5sYXlvdXQudjEuVGltZRqRAQoJQ29tbWl0dGVkEgsKA3J1bhgBIAEoCRIJCgFuGAIgASgEEgsKA3dvbhgDIAEoCBI0CgVpbmJveBgEIAMoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkluYm94TWVzc2FnZRIpCgRjb3N0GAUgASgLMhsuc3Vic3RhbnRpYWwubGF5b3V0LnYxLkNvc3QagQEKBlNrZXdlZBILCgNydW4YASABKAkSLwoKc2VnbWVudF9hdBgCIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEigKA25vdxgDIAEoCzIbLnN1YnN0YW50aWFsLmxheW91dC52MS5UaW1lEg8KB2N1cnJlbnQYBCABKAkaKAoHU2Nhbm5lZBIQCgh3b3JrZmxvdxgBIAEoCRILCgNkdWUYAiABKA1CCQoHY29tbWFuZCK6AQoNQWdlbnRSZXNwb25zZRIzCgVlcnJvchgBIAEoCzIiLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkNvcmVFcnJvckgAEjgKB2NvbW1hbmQYAiABKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5BZ2VudENvbW1hbmRIABIuCgRkb25lGAMgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIAEIKCghyZXNwb25zZWIGcHJvdG8z", [file_substantial_boundary_v1_boundary, file_substantial_boundary_v1_run, file_substantial_layout_v1_layout]);
 
 /**
  * A workflow a worker serves: runs of one of versions, and runs without a version if unversioned.
@@ -44,7 +44,8 @@ export type Served = Message<"substantial.boundary.v1.Served"> & {
   unversioned?: boolean | undefined;
 
   /**
-   * The workflow's own retention; absent, the worker's (settings.retention).
+   * The workflow's own retention; absent, the worker's (settings.retention). A worker on an S3
+   * store checks that the bucket has an expiration rule for every retention it may write (I-26).
    *
    * @generated from field: substantial.boundary.v1.Retention retention = 4;
    */
@@ -85,6 +86,8 @@ export type AgentConfig = Message<"substantial.boundary.v1.AgentConfig"> & {
   concurrency: number;
 
   /**
+   * A lease's ttl in a chain's head, and the skew a reader allows another worker's lease.
+   *
    * @generated from field: uint64 claim_ttl_ms = 6;
    */
   claimTtlMs: bigint;
@@ -108,11 +111,6 @@ export type AgentConfig = Message<"substantial.boundary.v1.AgentConfig"> & {
    * @generated from field: uint32 due_pages = 10;
    */
   duePages: number;
-
-  /**
-   * @generated from field: uint64 snapshot_every = 11;
-   */
-  snapshotEvery: bigint;
 
   /**
    * @generated from field: uint32 op_retries = 12;
@@ -147,25 +145,23 @@ export type AgentConfig = Message<"substantial.boundary.v1.AgentConfig"> & {
   waitSeconds: number;
 
   /**
-   * How long a collected run's id stays taken (7 days in both presets).
+   * A blocked run is tried again after blocked_initial_ms, the wait multiplied by blocked_multiplier
+   * at each block in a row at the same segment, at most blocked_max_ms. Required: initial positive
+   * and at most max, multiplier at least 1.
    *
-   * @generated from field: uint64 tombstone_ms = 17;
+   * @generated from field: uint64 blocked_initial_ms = 20;
    */
-  tombstoneMs: bigint;
+  blockedInitialMs: bigint;
 
   /**
-   * The least retention a worker or a workflow may set (1 hour in both presets).
-   *
-   * @generated from field: uint64 retention_min_ms = 18;
+   * @generated from field: uint64 blocked_max_ms = 21;
    */
-  retentionMinMs: bigint;
+  blockedMaxMs: bigint;
 
   /**
-   * How long a collection that cannot go on yet waits before it checks again (1 day in both presets).
-   *
-   * @generated from field: uint64 recheck_ms = 19;
+   * @generated from field: double blocked_multiplier = 22;
    */
-  recheckMs: bigint;
+  blockedMultiplier: number;
 };
 
 /**
@@ -194,6 +190,15 @@ export type ReplayEnd = Message<"substantial.boundary.v1.ReplayEnd"> & {
      */
     value: Empty;
     case: "dropped";
+  } | {
+    /**
+     * The code raised an error that is no end, or diverged (Next.blocked): nothing more is
+     * recorded, and the run is blocked with this error, tried again after a backoff.
+     *
+     * @generated from field: substantial.layout.v1.Failure blocked = 3;
+     */
+    value: Failure;
+    case: "blocked";
   } | { case: undefined; value?: undefined };
 };
 
@@ -267,6 +272,15 @@ export type AgentRequest = Message<"substantial.boundary.v1.AgentRequest"> & {
      */
     value: Time;
     case: "drain";
+  } | {
+    /**
+     * Next.claim of the replay: the agent writes its lease into the chain's head, then answers
+     * AgentCommand.claimed, or stop_replay if the head changed since it read it.
+     *
+     * @generated from field: string claim = 9;
+     */
+    value: string;
+    case: "claim";
   } | { case: undefined; value?: undefined };
 };
 
@@ -395,6 +409,20 @@ export type AgentCommand = Message<"substantial.boundary.v1.AgentCommand"> & {
      */
     value: AgentCommand_Scanned;
     case: "scanned";
+  } | {
+    /**
+     * @generated from field: substantial.boundary.v1.AgentCommand.Skewed skewed = 8;
+     */
+    value: AgentCommand_Skewed;
+    case: "skewed";
+  } | {
+    /**
+     * The lease AgentRequest.claim asked for is held: the replay goes on (RunRequest.claimed).
+     *
+     * @generated from field: string claimed = 9;
+     */
+    value: string;
+    case: "claimed";
   } | { case: undefined; value?: undefined };
 };
 
@@ -406,6 +434,11 @@ export const AgentCommandSchema: GenMessage<AgentCommand> = /*@__PURE__*/
   messageDesc(file_substantial_boundary_v1_agent, 4);
 
 /**
+ * A store operation. Several may be in flight together, of one run too: the agent sends at once
+ * only operations whose order no crash depends on, so the host performs each as it comes,
+ * concurrently, in any order, and feeds each answer as it lands; it never waits for one before
+ * sending another.
+ *
  * @generated from message substantial.boundary.v1.AgentCommand.Store
  */
 export type AgentCommand_Store = Message<"substantial.boundary.v1.AgentCommand.Store"> & {
@@ -432,6 +465,10 @@ export const AgentCommand_StoreSchema: GenMessage<AgentCommand_Store> = /*@__PUR
  */
 export type AgentCommand_Replay = Message<"substantial.boundary.v1.AgentCommand.Replay"> & {
   /**
+   * The chain the replay is of, which every request and command about it names (commit,
+   * replay_ended, claim, committed, stop_replay, claimed, skewed); input.run is the chain's current
+   * run, which a continuation replaced in place gives a new Replay of the same chain.
+   *
    * @generated from field: string run = 1;
    */
   run: string;
@@ -442,7 +479,8 @@ export type AgentCommand_Replay = Message<"substantial.boundary.v1.AgentCommand.
   input?: RunInput | undefined;
 
   /**
-   * The earliest due entry the replay serves, absent when it serves none.
+   * The earliest due entry the replay serves, or the earliest send time of the messages it is
+   * handed; absent when it serves none.
    *
    * @generated from field: substantial.layout.v1.Time due_at = 3;
    */
@@ -500,6 +538,45 @@ export const AgentCommand_CommittedSchema: GenMessage<AgentCommand_Committed> = 
   messageDesc(file_substantial_boundary_v1_agent, 4, 2);
 
 /**
+ * The worker's clock is behind the time of the run's last segment by more than claim_skew: the
+ * chain is left alone, its wakeups kept, for a worker whose clock is right.
+ *
+ * @generated from message substantial.boundary.v1.AgentCommand.Skewed
+ */
+export type AgentCommand_Skewed = Message<"substantial.boundary.v1.AgentCommand.Skewed"> & {
+  /**
+   * The chain, as every command about a replay names it.
+   *
+   * @generated from field: string run = 1;
+   */
+  run: string;
+
+  /**
+   * @generated from field: substantial.layout.v1.Time segment_at = 2;
+   */
+  segmentAt?: Time | undefined;
+
+  /**
+   * @generated from field: substantial.layout.v1.Time now = 3;
+   */
+  now?: Time | undefined;
+
+  /**
+   * The chain's current run, the one the skew hit.
+   *
+   * @generated from field: string current = 4;
+   */
+  current: string;
+};
+
+/**
+ * Describes the message substantial.boundary.v1.AgentCommand.Skewed.
+ * Use `create(AgentCommand_SkewedSchema)` to create a new message.
+ */
+export const AgentCommand_SkewedSchema: GenMessage<AgentCommand_Skewed> = /*@__PURE__*/
+  messageDesc(file_substantial_boundary_v1_agent, 4, 3);
+
+/**
  * A scan listed the due entries of a workflow: how many of those it listed were due.
  *
  * @generated from message substantial.boundary.v1.AgentCommand.Scanned
@@ -521,7 +598,7 @@ export type AgentCommand_Scanned = Message<"substantial.boundary.v1.AgentCommand
  * Use `create(AgentCommand_ScannedSchema)` to create a new message.
  */
 export const AgentCommand_ScannedSchema: GenMessage<AgentCommand_Scanned> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_agent, 4, 3);
+  messageDesc(file_substantial_boundary_v1_agent, 4, 4);
 
 /**
  * @generated from message substantial.boundary.v1.AgentResponse

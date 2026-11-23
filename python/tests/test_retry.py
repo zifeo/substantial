@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 
-from substantial.stores import StoreFailure
+from substantial.stores import Created, Object, StoreFailure, Written
 from substantial.stores import retry as r
 from substantial.stores.attempts import measured
 from substantial.stores.retry import Ambiguous, Permanent, StoreRetry, Transient
@@ -41,7 +41,7 @@ async def test_permanent_failures_are_not_retried() -> None:
         await r.with_retry(POLICY, script([Permanent("bad key"), 1]))
 
 
-async def resolve(creates: list[object], gets: list[object]) -> str:
+async def resolve(creates: list[object], gets: list[object]) -> object:
     return await r.create(POLICY, b"mine", script(creates), script(gets))
 
 
@@ -49,24 +49,48 @@ async def test_ambiguous_creates_are_resolved_with_a_get() -> None:
     def lost() -> Ambiguous:
         return Ambiguous("timeout")
 
-    assert await resolve([lost()], [b"mine"]) == "created"
-    assert await resolve([lost()], [b"theirs"]) == "exists"
-    assert await resolve([lost(), "created"], [None]) == "created"
-    assert await resolve([lost(), "exists"], [None, b"mine"]) == "created", "landed late"
-    assert await resolve([lost()], [Transient("get"), b"mine"]) == "created"
+    def found(data: bytes, etag: str) -> Object:
+        return Object(data, etag)
+
+    assert await resolve([lost()], [found(b"mine", "e1")]) == Created("e1")
+    assert await resolve([lost()], [found(b"theirs", "e2")]) == "exists"
+    assert await resolve([lost(), Created("e3")], [None]) == Created("e3")
+    landed = await resolve([lost(), "exists"], [None, found(b"mine", "e4")])
+    assert landed == Created("e4"), "landed late"
+    assert await resolve([lost()], [Transient("get"), found(b"mine", "e5")]) == Created("e5")
     with pytest.raises(StoreFailure):
         await resolve([lost(), lost()], [None, Transient("x")])
     assert await resolve(["exists"], []) == "exists", "no ambiguity, no get"
-    assert await resolve([Transient("409"), "created"], []) == "created"
+    assert await resolve([Transient("409"), Created("e6")], []) == Created("e6")
+
+
+async def resolve_cas(writes: list[object], gets: list[object]) -> object:
+    return await r.cas(POLICY, b"mine", "e0", script(writes), script(gets))
+
+
+async def test_ambiguous_compare_and_sets_are_resolved_with_a_get() -> None:
+    def lost() -> Ambiguous:
+        return Ambiguous("timeout")
+
+    assert await resolve_cas([lost()], [Object(b"mine", "e1")]) == Written("e1")
+    assert await resolve_cas([lost()], [Object(b"theirs", "e2")]) == "mismatch"
+    assert await resolve_cas([lost()], [None]) == "mismatch"
+    again = await resolve_cas([lost(), Written("e3")], [Object(b"before", "e0")])
+    assert again == Written("e3"), "the ETag named still current: sent again"
+    late = await resolve_cas([lost(), "mismatch"], [Object(b"before", "e0"), Object(b"mine", "e4")])
+    assert late == Written("e4"), "the first attempt landed after the read-back"
+    flaky = [Transient("get"), Object(b"mine", "e5")]
+    assert await resolve_cas([lost()], flaky) == Written("e5")
+    assert await resolve_cas(["mismatch"], []) == "mismatch", "no ambiguity, no get"
 
 
 async def test_every_request_is_counted_the_read_back_too() -> None:
-    # § czph3f9yv.a@ka9h6
+    # § czph3f9yv.a@gmn1k
     with measured() as sent:
         assert await r.with_retry(POLICY, script([Transient("a"), 7])) == 7
     assert sent.n == 2
     with measured() as sent:
-        assert await resolve([Ambiguous("timeout")], [b"mine"]) == "created"
+        assert await resolve([Ambiguous("timeout")], [Object(b"mine", "e")]) == Created("e")
     assert sent.n == 2
     with pytest.raises(StoreFailure), measured() as sent:
         await r.with_retry(POLICY, script([Transient("down")] * 3))

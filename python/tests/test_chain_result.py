@@ -33,7 +33,7 @@ async def waiter(c: s.Context) -> str:
 
 @s.workflow
 async def doomed(c: s.Context) -> None:
-    raise ValueError(await c.receive("go"))
+    raise s.Fail("ValueError", await c.receive("go"))
 
 
 @s.workflow
@@ -52,7 +52,7 @@ async def watcher(c: s.Context, chain: str) -> dict[str, Any]:
     except s.RunFailed as e:
         return {"status": e.status, "error": e.error.message}
     except s.RunNotFound as e:
-        return {"not_found": str(e), "collected": e.collected}
+        return {"not_found": str(e)}
 
 
 ALL = [quick, waiter, doomed, relay, watcher]
@@ -106,21 +106,19 @@ async def test_a_chain_that_continued_is_awaited_to_its_last_run(env: s.testing.
         assert await run.result() == {"value": "second"}
 
 
-async def test_a_collected_chain_raises_run_not_found_collected(env: s.testing.Env) -> None:
+async def test_a_removed_chain_raises_run_not_found(env: s.testing.Env) -> None:
     async with env.worker(ALL, preset="service"):
         target = await env.start(quick, id="q")
         assert await target.result() == 1
         await env.advance(s.days(31))
         run = await env.start(watcher, {"chain": "q"})
-        result = await run.result()
-        assert result["collected"] is True
-        assert result["not_found"].startswith("no chain q")
+        assert await run.result() == {"not_found": "no chain q"}
 
 
 async def test_a_missing_chain_raises_run_not_found(env: s.testing.Env) -> None:
     async with env.worker(ALL, preset="service"):
         run = await env.start(watcher, {"chain": "nobody"})
-        assert await run.result() == {"not_found": "no chain nobody", "collected": False}
+        assert await run.result() == {"not_found": "no chain nobody"}
 
 
 @s.workflow
@@ -189,7 +187,7 @@ async def test_the_outcome_replays(env: s.testing.Env) -> None:
         await env.settle()
         await target.send("go", "kept")
         await env.settle()
-        # The watched chain is collected: a result read again would raise RunNotFound.
+        # The watched chain is removed: a result read again would raise RunNotFound.
         await env.advance(s.days(31))
         with pytest.raises(s.RunNotFound):
             await target.status()

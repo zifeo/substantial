@@ -26,12 +26,18 @@ import {
   parseJson,
   plan,
 } from "./proto.ts";
-import { RETENTION_MIN } from "./settings.ts";
-import { resultCreated } from "./stores/s3.ts";
+import { listingChanged } from "./stores/s3.ts";
 import { type Store, StoreFailure } from "./stores/store.ts";
 import type { AnyWorkflow } from "./workflow.ts";
 
-export type RunStatus = "pending" | "running" | "suspended" | "completed" | "failed" | "cancelled";
+export type RunStatus =
+  | "pending"
+  | "running"
+  | "suspended"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 const ENDS = new Map<layout.Status, RunStatus>([
   [layout.Status.COMPLETED, "completed"],
@@ -47,6 +53,8 @@ const STATUSES: (RunStatus | undefined)[] = [
   "completed",
   "failed",
   "cancelled",
+  undefined,
+  "blocked",
 ];
 
 /** An event of a run's history, as its replay reads it. */
@@ -57,7 +65,8 @@ export interface HistoryEvent {
   /** When its segment was committed. */
   readonly at: Date;
   /** `step`, `step_retry`, `step_failed`, `timer`, `fired`, `message`, `child`, `sent`,
-   * `published`, `budget_exceeded`, `completed`, `failed`, `cancelled` or `continued`. */
+   * `published`, `budget_exceeded`, `patched`, `completed`, `failed`, `cancelled` or
+   * `continued`. */
   readonly kind: string;
   /** Its fields: times in RFC 3339, failures as `{type, message, retryable, details}`, values as
    * the code gave them, raw bytes as `{$bytes: <base64>}`. */
@@ -87,25 +96,15 @@ export interface Namespace {
   ulid(ms: number): string;
 }
 
-/** A wait follows its chain from the first run again this often, as polling one run's `result`
- * never sees that run collected (I-17). */
-// § one y025f8qen.c@9hnr2
-const REFOLLOW_MS = RETENTION_MIN.ms / 2;
-
-/** When a run was collected, from a `NoChain` or a `RunExists`. */
-export function collectedUntil(t: layout.Time | undefined): Date | undefined {
-  return t === undefined ? undefined : new Date(Number(t.ms));
-}
-
-/** `resultCreated` until `deadline` or `signal`, its failure the caller's `StoreError`. */
-async function created(
+/** `listingChanged` until `signal`, its failure the caller's `StoreError`. */
+async function changed(
   store: Store,
   key: string,
-  deadline: number,
+  etag: string | undefined,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<string> {
   try {
-    await resultCreated(store, key, deadline, signal);
+    return await listingChanged(store, key, etag, signal);
   } catch (e) {
     if (e instanceof ObserverRaised) throw e.error;
     throw e instanceof StoreFailure ? new StoreError(e.message) : e;
@@ -118,8 +117,11 @@ export interface SendOptions {
 }
 
 export interface RetryOptions {
-  /** The retry's budget; the failed run's when not given. */
+  /** The retry's budget; the ended run's when not given. */
   readonly budget?: Budget;
+  /** A reset: how many events of the last run's `history()` the new run replays, from the
+   * first, for a run ended completed, failed or cancelled. */
+  readonly keep?: number;
 }
 
 export interface ResultOptions {
@@ -145,18 +147,38 @@ function text(value: unknown, what: string): string {
   return value;
 }
 
+/** A send's outcome to `chain`: the workers serving its run woken when it was accepted, else its
+ * error thrown. */
+export function sentOutcome(
+  outcome: plan.Sent,
+  chain: string,
+  wake: (workflow: string) => void,
+): void {
+  const sent = outcome.sent;
+  switch (sent.case) {
+    case "accepted":
+      wake(sent.value.workflow);
+      return;
+    case "refused": {
+      const how = ENDS.get(sent.value.status);
+      if (how === undefined) throw new ProtocolError(`send refused by a run ${sent.value.status}`);
+      throw new RunEnded(`run ${sent.value.run} has ended, ${how}`);
+    }
+    case "noChain":
+      throw new RunNotFound(chain);
+    case "failed":
+      throw new StoreError(sent.value.message);
+    default:
+      throw new ProtocolError("empty send outcome");
+  }
+}
+
 /** The chain's end, or its last run while it has none. */
 export type Ended =
   | { done: false; run: string; resultKey: string }
   | { done: true; value: unknown };
 
 let endedOf: (run: Run, last: string | undefined) => Promise<Ended>;
-let refollowOf: (run: Run, ms: number) => void;
-
-/** Has `run`'s `result` waits follow the chain again every `ms`: for tests. */
-export function refollow(run: Run, ms: number): void {
-  refollowOf(run, ms);
-}
 
 /** The chain's end, or its last run while it has none, read once. */
 export function ended(run: Run, last?: string): Promise<Ended> {
@@ -168,7 +190,6 @@ export class Run<O = unknown> {
   readonly workflow: AnyWorkflow;
   readonly chain: string;
   readonly #ns: Namespace;
-  #refollow = REFOLLOW_MS;
 
   constructor(ns: Namespace, workflow: AnyWorkflow, chain: string) {
     this.#ns = ns;
@@ -178,17 +199,14 @@ export class Run<O = unknown> {
 
   static {
     endedOf = (run, last) => run.#ended(last);
-    refollowOf = (run, ms) => {
-      run.#refollow = ms;
-    };
   }
 
   toString(): string {
     return `run ${this.chain} of ${this.workflow.name}`;
   }
 
-  #notFound(noChain: plan.NoChain): RunNotFound {
-    return new RunNotFound(this.chain, collectedUntil(noChain.collectedUntil));
+  #notFound(): RunNotFound {
+    return new RunNotFound(this.chain);
   }
 
   /** Sends a message, delivered once per `id`. */
@@ -203,7 +221,7 @@ export class Run<O = unknown> {
       prefix: "",
       chain,
       name: checkSentName(name),
-      // § one h8wg39cct.a@6ne1r
+      // § one h8wg39cct.a@mjvy8
       value: jsonValue(encodeJson(value, "the message")),
       // § one wtwx1e769.a@wm9p6
       id: id ?? ord,
@@ -234,24 +252,8 @@ export class Run<O = unknown> {
   }
 
   async #sent(input: plan.PlanInput): Promise<void> {
-    const sent = outcomeOf("send", await this.#ns.plan(input), "sent").sent;
-    switch (sent.case) {
-      case "accepted":
-        this.#ns.wake(sent.value.workflow);
-        return;
-      case "refused": {
-        const how = ENDS.get(sent.value.status);
-        if (how === undefined)
-          throw new ProtocolError(`send refused by a run ${sent.value.status}`);
-        throw new RunEnded(`run ${sent.value.run} has ended, ${how}`);
-      }
-      case "noChain":
-        throw this.#notFound(sent.value);
-      case "failed":
-        throw new StoreError(sent.value.message);
-      default:
-        throw new ProtocolError("empty send outcome");
-    }
+    const sent = outcomeOf("send", await this.#ns.plan(input), "sent");
+    sentOutcome(sent, this.chain, (workflow) => this.#ns.wake(workflow));
   }
 
   async status(): Promise<RunStatus> {
@@ -262,7 +264,7 @@ export class Run<O = unknown> {
     };
     const input = create(plan.PlanInputSchema, { plan: { case: "status", value } });
     const state = outcomeOf("status", await this.#ns.plan(input), "status").state;
-    if (state.case === "noChain") throw this.#notFound(state.value);
+    if (state.case === "noChain") throw this.#notFound();
     if (state.case === "failed") throw new StoreError(state.value.message);
     const status = state.case === "status" ? STATUSES[state.value.status] : undefined;
     if (status === undefined) throw new ProtocolError("unspecified run status");
@@ -290,7 +292,7 @@ export class Run<O = unknown> {
     const value = { prefix: "", chain: checkKey("run id", this.chain) };
     const input = create(plan.PlanInputSchema, { plan: { case: "history", value } });
     const history = outcomeOf("history", await this.#ns.plan(input), "history").history;
-    if (history.case === "noChain") throw this.#notFound(history.value);
+    if (history.case === "noChain") throw this.#notFound();
     if (history.case === "failed") throw new StoreError(history.value.message);
     if (history.case !== "events") throw new ProtocolError("empty history outcome");
     return history.value.events.map(historyEvent);
@@ -301,12 +303,17 @@ export class Run<O = unknown> {
    * the failed run's budget and its cost so far, unless `budget` gives another; a second retry of
    * the same failed run with another budget is `InvalidArgument`. */
   async retry(options: RetryOptions = {}): Promise<void> {
-    onlyOptions(options, ["budget"], "retry");
+    onlyOptions(options, ["budget", "keep"], "retry");
+    const { keep } = options;
+    if (keep !== undefined && !(Number.isSafeInteger(keep) && keep >= 0)) {
+      throw new InvalidArgument(`keep is a non-negative integer, not ${keep}`);
+    }
     const value = {
       prefix: "",
       chain: checkKey("run id", this.chain),
       now: this.#ns.now(),
       ...(options.budget === undefined ? {} : { budget: budgetProto(options.budget) }),
+      ...(keep === undefined ? {} : { keep: BigInt(keep) }),
     };
     const input = create(plan.PlanInputSchema, { plan: { case: "retry", value } });
     const retried = outcomeOf("retry", await this.#ns.plan(input), "retried").retried;
@@ -318,7 +325,7 @@ export class Run<O = unknown> {
       case "notRetryable":
         throw new InvalidArgument(retried.value.message);
       case "noChain":
-        throw this.#notFound(retried.value);
+        throw this.#notFound();
       case "failed":
         throw new StoreError(retried.value.message);
       default:
@@ -342,15 +349,10 @@ export class Run<O = unknown> {
     let wait = Math.min(10, cap);
     // § end y025f8qen
     let last: string | undefined;
-    let followed = performance.now();
+    let etag: string | undefined;
     for (;;) {
-      // § y025f8qen@bkh1y
-      // § one y025f8qen.c@pbaay
-      if (performance.now() - followed >= this.#refollow) {
-        last = undefined;
-        followed = performance.now();
-      }
-      // § y025f8qen.b@q31d5
+      // § y025f8qen@w5ah6
+      // § y025f8qen.b@0gd9w
       const ended = await this.#ended(last);
       if (ended.done) return ended.value as O;
       // § end y025f8qen.b
@@ -358,18 +360,23 @@ export class Run<O = unknown> {
       const left = deadline === undefined ? Number.POSITIVE_INFINITY : deadline - performance.now();
       if (left <= 0) throw new WaitTimeout(`run ${this.chain} did not end within ${timeout}`);
       const { store } = this.#ns;
-      // § y025f8qen.d@j2dnc
-      const held = Math.min(left, followed + this.#refollow - performance.now());
-      // § end y025f8qen.d
-      // § y025f8qen.a@v93c0
-      const pause = delay(store.capabilities.wait ? held : Math.min(wait, left));
+      // § y025f8qen.e@sf3xe
+      const pause = delay(store.capabilities.wait ? left : Math.min(wait, left));
       // Ends the waiting listings once the race is settled, as Python cancels them.
       const settled = new AbortController();
-      const ends = [pause.promise, died];
-      if (store.capabilities.wait)
-        ends.push(created(store, ended.resultKey, performance.now() + held, settled.signal));
-      else wait = Math.min(wait * 2, cap);
-      // § end y025f8qen.a
+      const ends: Promise<unknown>[] = [pause.promise, died];
+      if (store.capabilities.wait) {
+        // The first listing waits for nothing: it takes the etag the next one waits on, and the
+        // read after it sees any commit that landed before it.
+        // § one hnjtggsx7.a@t0qnf
+        const listed = changed(store, ended.resultKey, etag, settled.signal);
+        ends.push(
+          listed.then((next) => {
+            etag = next;
+          }),
+        );
+      } else wait = Math.min(wait * 2, cap);
+      // § end y025f8qen.e
       try {
         await Promise.race(ends);
       } finally {
@@ -392,8 +399,9 @@ export class Run<O = unknown> {
     switch (result.case) {
       case "notEnded":
         return { done: false, run: result.value.run, resultKey: result.value.resultKey };
+      // § one hnjtggsx7.a@035gr
       case "noChain":
-        throw this.#notFound(result.value);
+        throw this.#notFound();
       case "failed":
         throw new StoreError(result.value.message);
       case "ended":

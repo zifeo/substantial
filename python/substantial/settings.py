@@ -4,11 +4,13 @@ overrides only the public ones; the others keep their preset value."""
 from __future__ import annotations
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
 from substantial.errors import ConfigError
+from substantial.stores.base import EXPIRY_MAX_DAYS
 
 KIB = 1024
 MIB = 1024 * KIB
@@ -24,29 +26,17 @@ PUBLIC = (
     "retention",
 )
 # § end yxy5pzfkp
-# The least retention of the presets; a `result` wait follows its chain again within half of it.
-# § one y025f8qen.c@x5cy6
-RETENTION_MIN = timedelta(hours=1)
-# The longest retention, 100 years. A collection's due key names its year in 4 digits, which far
-# longer retentions would pass.
-# § one pn928919v@genfj
-RETENTION_MAX = timedelta(days=36_500)
+# The longest retention, 100 years of days, the longest expiry a store write carries.
+# § one pnctq6tx8@0npxx
+RETENTION_MAX_DAYS = EXPIRY_MAX_DAYS
 
 
-def check_retention(retention: object, minimum: timedelta, what: str) -> None:
-    # § pn928919v@bfmpy
-    if not isinstance(retention, timedelta):
-        raise ConfigError(f"{what} must be a timedelta, not {retention!r}")
-    if retention < minimum:
-        raise ConfigError(
-            f"{what} must be at least {minimum // timedelta(milliseconds=1)} ms, "
-            f"not {retention // timedelta(milliseconds=1)} ms"
-        )
-    if retention > RETENTION_MAX:
-        raise ConfigError(
-            f"{what} must be at most {RETENTION_MAX // timedelta(milliseconds=1)} ms, "
-            f"not {retention // timedelta(milliseconds=1)} ms"
-        )
+def check_retention(days: object, what: str) -> None:
+    """Refuses a retention, how many whole days an ended run is kept (I-16), under 1 or over
+    36,500."""
+    # § pnctq6tx8@2j3nt
+    if not _is_int(days) or not 1 <= days <= RETENTION_MAX_DAYS:
+        raise ConfigError(f"{what} must be whole days from 1 to {RETENTION_MAX_DAYS}, not {days!r}")
 
 
 def _is_int(value: object) -> bool:
@@ -77,14 +67,19 @@ class Settings:
     wait: timedelta
     due_page: int
     due_pages: int
-    snapshot_every: int
     continue_as_new_after: ContinueAsNewAfter
     dedup_window: timedelta
     step_timeout: timedelta
-    retention: timedelta
-    tombstone: timedelta
-    retention_min: timedelta
-    recheck: timedelta
+    # Whole days.
+    retention: int
+    blocked_initial: timedelta
+    blocked_max: timedelta
+    blocked_multiplier: float
+    max_history_bytes: int
+    max_history_events: int
+    max_replay_inbox: int
+    max_seen: int
+    history_warn_percent: int
 
     @staticmethod
     def preset(preset: str, *, waiting_store: bool) -> Settings:
@@ -102,23 +97,33 @@ class Settings:
             commit_every=timedelta(0),
             shutdown_grace=timedelta(seconds=25 if service else 5),
             claim_ttl=timedelta(seconds=30),
-            # § one ry26kkc7v.b@q7q8g
+            # § one ry26kkc7v.b@px706
             claim_skew=timedelta(seconds=5),
             max_idle=max_idle,
             wait=timedelta(seconds=20),
             # § one ry26kkc7v.e@5h1jf
             due_page=1000,
             due_pages=10,
-            snapshot_every=64,
             continue_as_new_after=ContinueAsNewAfter(segments=1000, bytes=8 * MIB),
-            # § one ry26kkc7v.c@vz2tr
+            # § one ry26kkc7v.c@0zaax
             dedup_window=timedelta(days=7),
             step_timeout=timedelta(minutes=5),
-            retention=timedelta(days=30),
-            # § one ry26kkc7v.d@shggd
-            tombstone=timedelta(days=7),
-            retention_min=RETENTION_MIN,
-            recheck=timedelta(days=1),
+            retention=30,
+            # § ksmvx2mfk@bsjhy
+            blocked_initial=timedelta(seconds=10 if service else 1),
+            blocked_max=timedelta(minutes=10 if service else 1),
+            blocked_multiplier=2.0,
+            # § end ksmvx2mfk
+            # § one ry26kkc7v.f@zxs2g
+            max_history_bytes=128 * MIB,
+            # § one ry26kkc7v.g@fhr48
+            max_history_events=100_000,
+            # § one ry26kkc7v.h@sz1ag
+            max_replay_inbox=10_000,
+            # § one ry26kkc7v.i@mvxr4
+            max_seen=100_000,
+            # § one ry26kkc7v.j@fh0n8
+            history_warn_percent=80,
         )
 
     def override(self, **settings: Any) -> Settings:
@@ -126,10 +131,10 @@ class Settings:
         refused.
 
         `continue_as_new_after` takes a `ContinueAsNewAfter`, or `0` to compress at every
-        boundary; `retention` a `timedelta`.
+        boundary; `retention` whole days, an `int`.
         """
         unknown = sorted(set(settings) - set(PUBLIC))
-        # § one yxy5pzfkp.a@skspq, yxy5pzfkp.b@c3vrg
+        # § one yxy5pzfkp.a@944qs, yxy5pzfkp.b@02f8w
         if unknown:
             raise ConfigError(f"unknown settings {unknown}")
         if settings.get("continue_as_new_after") == 0 and _is_int(
@@ -141,6 +146,7 @@ class Settings:
         return replaced
 
     def validate(self) -> None:
+        check_retention(self.retention, "retention")
         for f in dataclasses.fields(self):
             value = getattr(self, f.name)
             expected = {"int": int, "timedelta": timedelta}.get(str(f.type))
@@ -150,7 +156,15 @@ class Settings:
                 raise ConfigError(f"{f.name} must be a timedelta, not {value!r}")
             if expected is not None and value < expected(0):
                 raise ConfigError(f"{f.name} must not be negative: {value!r}")
-        for name in ("concurrency", "due_page", "due_pages", "snapshot_every"):
+        for name in (
+            "concurrency",
+            "due_page",
+            "due_pages",
+            "max_history_bytes",
+            "max_history_events",
+            "max_replay_inbox",
+            "max_seen",
+        ):
             if getattr(self, name) == 0:
                 raise ConfigError(f"{name} must be positive")
         if self.due_page > 1000:
@@ -159,12 +173,18 @@ class Settings:
             "claim_ttl",
             "max_idle",
             "step_timeout",
-            "tombstone",
-            "retention_min",
-            "recheck",
+            "blocked_initial",
         ):
             if getattr(self, name) == timedelta(0):
                 raise ConfigError(f"{name} must be positive")
+        if self.blocked_max < self.blocked_initial:
+            raise ConfigError(f"blocked_max must be at least blocked_initial: {self.blocked_max!r}")
+        m = self.blocked_multiplier
+        if isinstance(m, bool) or not isinstance(m, int | float) or not math.isfinite(m) or m < 1:
+            raise ConfigError(f"blocked_multiplier must be a number of at least 1, not {m!r}")
+        p = self.history_warn_percent
+        if not _is_int(p) or not 1 <= p <= 100:
+            raise ConfigError(f"history_warn_percent must be an int from 1 to 100, not {p!r}")
         if not timedelta(seconds=1) <= self.wait <= timedelta(seconds=20) or self.wait % timedelta(
             seconds=1
         ):
@@ -172,4 +192,3 @@ class Settings:
         c = self.continue_as_new_after
         if not isinstance(c, ContinueAsNewAfter):
             raise ConfigError(f"continue_as_new_after must be a ContinueAsNewAfter or 0, not {c!r}")
-        check_retention(self.retention, self.retention_min, "retention")

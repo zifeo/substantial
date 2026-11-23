@@ -61,6 +61,10 @@ class Replayed {
     return e?.kind.case === "completed" ? decodeValue(e.kind.value.value) : undefined;
   }
 
+  blocked(): layout.Failure | undefined {
+    return this.end.end.case === "blocked" ? this.end.end.value : undefined;
+  }
+
   failed(): layout.Failure | undefined {
     const e = this.#events().find((e) => e.kind.case === "failed");
     return e?.kind.case === "failed" ? e.kind.value.error : undefined;
@@ -112,7 +116,12 @@ class Harness {
         continueAsNewAfterSegments: 1000n,
         continueAsNewAfterBytes: 8n << 20n,
         dedupWindowMs: 86_400_000n,
-        retention: { ms: 30n * 86_400_000n },
+        retention: { days: 30 },
+        maxHistoryBytes: 128n << 20n,
+        maxHistoryEvents: 100_000n,
+        maxReplayInbox: 10_000n,
+        maxSeen: 100_000n,
+        historyWarnPercent: 80,
       },
     });
   }
@@ -128,6 +137,10 @@ class Harness {
         return;
       }
       if (event.kind === "died") throw event.error;
+      if (event.kind === "claim") {
+        channel.claimed();
+        return;
+      }
       const c = event.commit;
       // As the agent does: the chain's cost after a progress commit won.
       const progress = won && c.kind === run.CommitKind.PROGRESS;
@@ -144,7 +157,7 @@ class Harness {
     const metering = new Metering(undefined, undefined);
     const host = { store: this.store, stepTimeout: minutes(5), metering };
     const input = this.runInput();
-    await replay(core, this.workflow, input, undefined, fixed(now), emit, channel, host);
+    await replay(core, this.workflow, "run-1", input, undefined, fixed(now), emit, channel, host);
     return new Replayed(commits, await ended.promise);
   }
 }
@@ -280,7 +293,7 @@ test("parallel steps replay the same", async () => {
   assert.equal(a.runs.length + b.runs.length, 2);
 });
 
-test("other calls than the history fail the run", async () => {
+test("other calls than the history block the run", async () => {
   const { counted: renamed } = counting("renamed", 1);
   const h = new Harness(workflow("changed", async () => await renamed()));
   const recorded = {
@@ -291,7 +304,8 @@ test("other calls than the history fail the run", async () => {
   };
   h.history.push(create(layout.EventSchema, { kind: { case: "step", value: recorded } }));
   h.nextN = 1n;
-  assert.equal((await h.replay(1_000)).failed()?.type, "NonDeterminism");
+  assert.equal((await h.replay(1_000)).blocked()?.type, "NonDeterminism");
+  assert.deepEqual(h.history.slice(1), [], "a blocked run records nothing");
 });
 
 test("a divergence ends the replay without another attempt", async () => {
@@ -318,7 +332,7 @@ test("a divergence ends the replay without another attempt", async () => {
   });
   const h2 = Object.assign(new Harness(v2), { history: h.history, nextN: h.nextN });
   const started = Date.now();
-  assert.equal((await h2.replay(12_000)).failed()?.type, "NonDeterminism");
+  assert.equal((await h2.replay(12_000)).blocked()?.type, "NonDeterminism");
   assert.ok(Date.now() - started < 1_000, "the replay waited on the attempt");
   // The core executes an attempt only once the replay walked its history, and a call that walk
   // does not answer is the divergence: the retry due never started.
@@ -335,7 +349,7 @@ test("a lost commit drops the replay", async () => {
 });
 
 test("a store failing the read of a workflow's send drops the replay", async () => {
-  // § t916k65mb@6m0t3
+  // § t916k65mb@8yqwx
   const h = new Harness(workflow("sender", async (c: Context) => c.send("other", "note", 1)));
   const failing = new Recording(new MemoryStore(`replay-${token()}`));
   failing.failing = true;
@@ -364,7 +378,7 @@ test("inputs and errors of the code", async () => {
     h.input = data;
     const replayed = await h.replay(1_000);
     if (failure === undefined) assert.equal(replayed.completed(), 42);
-    else assert.equal(replayed.failed()?.type, failure, data);
+    else assert.equal(replayed.blocked()?.type, failure, data);
   }
 });
 

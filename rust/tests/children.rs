@@ -92,7 +92,7 @@ struct Floats {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_state_that_is_not_json_fails_a_compression_not_compressible() {
+async fn a_state_that_is_not_json_blocks_a_compression_not_compressible() {
     let opaque = Workflow::without_input("opaque", |c| async move {
         c.iterate(Floats { x: Vec::new() }, |c, mut s| async move {
             c.step("tick", || async { Ok::<_, Error>(()) }).await?;
@@ -109,10 +109,8 @@ async fn a_state_that_is_not_json_fails_a_compression_not_compressible() {
         .start()
         .unwrap();
     let run = sub.start(&opaque, ()).await.unwrap();
-    match run.result().timeout(LONG).await {
-        Err(Error::RunFailed { error, .. }) => assert_eq!(error.kind, "NotCompressible", "{error}"),
-        other => panic!("{other:?}"),
-    }
+    let error = common::blocked(&sub, &opaque, run.chain()).await;
+    assert_eq!(error.kind, "NotCompressible", "{error}");
     worker.shutdown().await.unwrap();
 }
 
@@ -161,7 +159,7 @@ async fn a_loop_compresses_at_every_boundary() {
         assert_eq!(keys[0], "counter-1/tick/0");
         let mut runs: Vec<&str> = keys.iter().map(|k| k.split('/').next().unwrap()).collect();
         runs.dedup();
-        // § one deycjjrap@xknrj
+        // § one db0mrbxkk@4cnc0
         assert_eq!(runs.len(), 4, "{}: a run per iteration: {keys:?}", ns.name);
         assert!(keys.iter().all(|k| k.ends_with("/tick/0")), "{keys:?}");
         worker.shutdown().await.unwrap();
@@ -180,10 +178,10 @@ async fn continue_as_new_by_hand() {
         let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &countdown).start().unwrap();
         let run = sub.start(&countdown, N { n: 3 }).await.unwrap();
-        // § ng8x15zmr@cejj3
+        // § ng8x15zmr@7f7bc
         let value: String = run.result().timeout(LONG).await.unwrap();
         assert_eq!(value, "liftoff", "{}", ns.name);
-        // § one gt35c42xy.a@1jdah
+        // § one f91jrjyjy.a@n8xb9
         assert_eq!(run.status().await.unwrap(), RunStatus::Completed);
         worker.shutdown().await.unwrap();
     }
@@ -208,7 +206,7 @@ async fn a_parent_waits_until_a_child_is_done() {
         let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (waiter(), double())).start().unwrap();
         let run = sub.start(&waiter(), ()).await.unwrap();
-        // § yb61qtt3s.c@fryz0
+        // § yb61qtt3s.c@np72k
         let done = run.result().timeout(LONG).await.unwrap();
         assert_eq!(done, (false, true, 4), "{}", ns.name);
         worker.shutdown().await.unwrap();
@@ -227,7 +225,7 @@ async fn a_loop_state_is_an_object() {
         let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &scalar).start().unwrap();
         let run = sub.start(&scalar, ()).await.unwrap();
-        // § ev8h2ngd8@h65kh
+        // § ev8h2ngd8@28jwr
         assert!(run.result().timeout(LONG).await.unwrap(), "{}", ns.name);
         worker.shutdown().await.unwrap();
     }
@@ -252,7 +250,7 @@ async fn a_child_id_taken_by_another_run_fails_the_child() {
         let taken = sub.start(&double(), N { n: 1 }).id("taken").await.unwrap();
         assert_eq!(taken.result().timeout(LONG).await.unwrap(), 2);
         let run = sub.start(&w, ()).await.unwrap();
-        // § yb61qtt3s.a@1b7j2
+        // § yb61qtt3s.d@wgsst
         let kind = run.result().timeout(LONG).await.unwrap();
         assert_eq!(kind, "RunExists", "{}", ns.name);
         worker.shutdown().await.unwrap();
@@ -271,7 +269,7 @@ async fn two_children_with_one_id_from_one_run_raise_invalid_argument() {
         let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (twins.clone(), double())).start().unwrap();
         let run = sub.start(&twins, ()).await.unwrap();
-        // § yb61qtt3s.b@bc5yx
+        // § yb61qtt3s.b@j0f4g
         let (refused, value) = run.result().timeout(LONG).await.unwrap();
         assert!(refused, "{}", ns.name);
         assert_eq!(value, 42, "{}: the first child stands", ns.name);
@@ -301,12 +299,13 @@ async fn a_message_reaching_a_run_as_it_continues_goes_to_the_next_run() {
     let run = env.start(&looping, N { n: 0 }).id("l").await.unwrap();
     env.settle().await.unwrap();
     assert_eq!(hold.held(), 1);
-    // § vcgwgaf4n.a@7f1kg
+    // § dnxwdv0ac.a@tyvdw
     run.send("m", "hello").await.unwrap();
     assert_eq!(
-        env.__keys("runs/l/inbox/").len(),
+        env.__keys("queues/looping/due/19700101t000000000z~l~m")
+            .len(),
         1,
-        "in the continuing run's inbox"
+        "among the chain's messages, whatever its run"
     );
     hold.release();
     assert_eq!(run.result().await.unwrap(), "hello");
@@ -317,8 +316,11 @@ async fn a_message_reaching_a_run_as_it_continues_goes_to_the_next_run() {
         .collect();
     assert_eq!(received.len(), 1, "{history:?}");
     assert_ne!(received[0], "l", "{history:?}");
-    assert!(env.__keys("runs/l/inbox/").is_empty());
-    // § end vcgwgaf4n.a
+    assert!(
+        env.__keys("queues/looping/due/19700101t000000000z~l~m")
+            .is_empty()
+    );
+    // § end dnxwdv0ac.a
     worker.shutdown().await.unwrap();
     env.check().await.unwrap();
     env.close().await;
@@ -347,7 +349,7 @@ async fn a_run_knows_its_chain_through_its_continuations() {
         let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, (named(), naming())).start().unwrap();
         let run = sub.start(&named(), N { n: 2 }).await.unwrap();
-        // § ng8x15zmr.a@h0ehf
+        // § ng8x15zmr.a@bzg10
         assert_eq!(run.result().timeout(LONG).await.unwrap(), run.chain());
         let run = sub.start(&naming(), ()).id("naming-1").await.unwrap();
         let (own, child, theirs) = run.result().timeout(LONG).await.unwrap();

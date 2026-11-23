@@ -1,10 +1,11 @@
 """What the S3 adapter does beyond the shared contract; all but URL parsing and the fake h3 server
-run only when `SUBSTANTIAL_S3_URL` is set (see `dev/rustfs.compose.yaml`)."""
+on the RustFS `SUBSTANTIAL_S3_URL` names (see `dev/compose.yaml`)."""
 
 import asyncio
 import base64
 import contextlib
 import hashlib
+import json
 import os
 import ssl
 import sys
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import pytest
 from botocore.httpsession import get_cert_path
-from conftest import LONG, require_s3, script
+from conftest import LONG, kind, require_s3, script, value
 from fake_h3 import BUCKET, CREDENTIALS, Answer, FakeH3, error
 
 from substantial import (
@@ -65,6 +66,8 @@ def test_urls_need_every_part() -> None:
         "s3://h:port/b/ns?region=r",
         "s3+https://h/b/ns?region=r",
         "gs://h/b/ns?region=r",
+        "s3://s3express-use1-az4.us-east-1.amazonaws.com/b--use1-az4--x-s3/ns?region=us-east-1",
+        "h3://h/b--x-s3/ns?region=r",
     ]:
         with pytest.raises(ConfigError):
             S3Location.parse(url)
@@ -84,10 +87,10 @@ def test_s3_urls_without_the_extra_name_it(monkeypatch: pytest.MonkeyPatch) -> N
 async def test_each_operation_is_one_request() -> None:
     async with FakeH3() as h3:
         store = open_store(h3.url("ns"), CREDENTIALS)
-        assert await store.create("q/a", b"a") == "created"
-        assert await store.create("q/a", b"b") == "exists"
-        assert await store.get("q/a") == b"a"
-        assert await store.get("q/b") is None
+        assert kind(await store.create("q/a", b"a", expiry=None)) == "created"
+        assert await store.create("q/a", b"b", expiry=None) == "exists"
+        assert await value(store, "q/a") == b"a"
+        assert await value(store, "q/b") is None
         assert (await store.list("q/", start_after=None, max_keys=10, wait=None)).keys == ["q/a"]
         await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0))
         await store.delete("q/a")
@@ -133,9 +136,9 @@ async def test_create_answers(answer: tuple[int, str], outcome: object, methods:
         h3.inject["PUT"] = [error(*answer)]
         if outcome is StoreFailure:
             with pytest.raises(StoreFailure, match=rf"create q/a: HTTP {answer[0]} {answer[1]}$"):
-                await store.create("q/a", b"a")
+                await store.create("q/a", b"a", expiry=None)
         else:
-            assert await store.create("q/a", b"a") == outcome
+            assert kind(await store.create("q/a", b"a", expiry=None)) == outcome
         assert [m for m, _ in h3.requests] == methods
         await store.close()
 
@@ -144,10 +147,10 @@ async def test_an_ambiguous_create_that_landed_is_created() -> None:
     async with FakeH3() as h3:
         store = open_store(h3.url("ns"), CREDENTIALS)
         h3.inject["PUT"] = [error(500, "InternalError", applied=True)]
-        assert await store.create("q/a", b"a") == "created"
+        assert kind(await store.create("q/a", b"a", expiry=None)) == "created"
         h3.inject["PUT"] = [error(503, "SlowDown", applied=True)]
-        assert await store.create("q/b", b"b") == "created"
-        assert await store.create("q/b", b"c") == "exists"
+        assert kind(await store.create("q/b", b"b", expiry=None)) == "created"
+        assert await store.create("q/b", b"c", expiry=None) == "exists"
         assert [m for m, _ in h3.requests] == ["PUT", "GET", "PUT", "GET", "PUT"]
         await store.close()
 
@@ -159,14 +162,14 @@ async def test_get_delete_and_list_answers(
 ) -> None:
     async with FakeH3() as h3:
         store = open_store(h3.url("ns"), CREDENTIALS)
-        await store.create("q/a", b"a")
+        await store.create("q/a", b"a", expiry=None)
         method = {"get": "GET", "delete": "DELETE", "list": "GET"}[operation]
         h3.inject[method] = [error(*answer)]
         before = len(h3.requests)
 
         async def call() -> object:
             if operation == "get":
-                return await store.get("q/a")
+                return await value(store, "q/a")
             if operation == "delete":
                 return await store.delete("q/a")
             return (await store.list("q/", start_after=None, max_keys=10, wait=None)).keys
@@ -188,15 +191,15 @@ async def test_an_error_answer_without_an_s3_error_is_named_by_its_status() -> N
         store = open_store(h3.url("ns"), CREDENTIALS)
         h3.inject["GET"] = [Answer(403, b"<html>no</html")]
         with pytest.raises(StoreFailure, match=r"get q/a: HTTP 403 403: Forbidden$"):
-            await store.get("q/a")
+            await value(store, "q/a")
         await store.close()
 
 
 async def test_requests_sign_their_body_and_carry_no_checksum() -> None:
     async with FakeH3() as h3:
         store = open_store(h3.url("ns"), CREDENTIALS)
-        await store.create("q/a", b"abc")
-        await store.get("q/a")
+        await store.create("q/a", b"abc", expiry=None)
+        await value(store, "q/a")
         put, get = h3.headers
         assert put["x-amz-content-sha256"] == hashlib.sha256(b"abc").hexdigest()
         assert get["x-amz-content-sha256"] == hashlib.sha256(b"").hexdigest()
@@ -229,7 +232,7 @@ async def test_a_session_token_is_signed() -> None:
     async with FakeH3() as h3:
         keys = Credentials("fake", "fake-secret", session_token="token")
         store = open_store(h3.url("ns"), keys)
-        await store.get("q/a")
+        await value(store, "q/a")
         (headers,) = h3.headers
         assert headers["x-amz-security-token"] == "token"
         assert "x-amz-security-token" in headers["authorization"]
@@ -249,7 +252,7 @@ async def test_the_endpoint_is_reached_through_the_proxy_the_environment_names(
         port = proxy.url("ns").split(":")[2].split("/")[0]
         monkeypatch.setenv("HTTP_PROXY", f"http://user:p%40ss@127.0.0.1:{port}")
         store = open_store(f"s3+http://substantial.invalid:9/{BUCKET}/ns?region=r", CREDENTIALS)
-        assert await store.create("q/a", b"a") == "created"
+        assert kind(await store.create("q/a", b"a", expiry=None)) == "created"
         await store.close()
         assert proxy.requests == [("PUT", f"http://substantial.invalid:9/{BUCKET}/ns/q/a")]
         (headers,) = proxy.headers
@@ -259,7 +262,7 @@ async def test_the_endpoint_is_reached_through_the_proxy_the_environment_names(
         monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
         monkeypatch.setenv("NO_PROXY", "127.0.0.1")
         direct = open_store(proxy.url("ns"), CREDENTIALS)
-        assert await direct.get("q/a") == b"a"
+        assert await value(direct, "q/a") == b"a"
         await direct.close()
 
 
@@ -267,15 +270,15 @@ async def test_keys_with_reserved_characters_round_trip() -> None:
     store = open_store(require_s3(), "env")
     keys = sorted(["q/a b", "q/a+b", "q/a%2Bb", "q/a&b=c?d", "q/é~:@,;", "q/a#b"])
     for key in keys:
-        assert await store.create(key, key.encode()) == "created"
-        assert await store.get(key) == key.encode()
+        assert kind(await store.create(key, key.encode(), expiry=None)) == "created"
+        assert await value(store, key) == key.encode()
     listed = await store.list("q/", start_after=None, max_keys=10, wait=None)
     assert listed.keys == sorted(keys, key=str.encode)
     after = await store.list("q/", start_after=listed.keys[0], max_keys=10, wait=None)
     assert after.keys == listed.keys[1:]
     for key in keys:
         await store.delete(key)
-        assert await store.get(key) is None
+        assert await value(store, key) is None
     await store.close()
 
 
@@ -306,7 +309,7 @@ async def test_a_body_cut_short_is_retried_as_transient() -> None:
     async with raw_server(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nabc") as (url, methods):
         store = open_store(url, CREDENTIALS)
         with pytest.raises(StoreFailure, match=r"\(after 5 attempts\)"):
-            await store.get("k")
+            await value(store, "k")
         assert methods == ["GET"] * 5
         await store.close()
 
@@ -341,12 +344,12 @@ async def test_the_aws_environment_and_files_are_not_read(
 ) -> None:
     config = tmp_path / "config"
     config.write_text("[default]\ns3 =\n  use_accelerate_endpoint = true\n")
-    for name, value in ambient.items():
-        monkeypatch.setenv(name, str(config) if value == "accelerate" else value)
+    for name, setting in ambient.items():
+        monkeypatch.setenv(name, str(config) if setting == "accelerate" else setting)
     async with FakeH3() as h3:
         store = open_store(h3.url("ambient"), CREDENTIALS)
-        assert await store.create("q/a", b"a") == "created"
-        assert await store.get("q/a") == b"a"
+        assert kind(await store.create("q/a", b"a", expiry=None)) == "created"
+        assert await value(store, "q/a") == b"a"
         await store.close()
 
 
@@ -359,8 +362,9 @@ async def test_create_and_open_run_the_probe() -> None:
     await created.close()
     await opened.close()
     store = open_store(url, "env")
+    # § mgfgmd25p.e@x3bb4
     probes = await store.list("probe/", start_after=None, max_keys=10, wait=None)
-    assert probes.keys == ["probe/exclusive"], "one probe key, kept"
+    assert probes.keys == [], "the probe keys, deleted after the probes"
     await store.close()
 
 
@@ -378,7 +382,7 @@ async def test_a_missing_bucket_is_a_store_error_not_a_missing_key() -> None:
     _, _, ns = path.partition("/")
     store = open_store(f"{scheme}://{endpoint}/substantial-no-such-bucket/{ns}", "env")
     with pytest.raises(StoreFailure):
-        await store.get("runs/a/start")
+        await value(store, "runs/a/start")
     with pytest.raises(StoreFailure):
         await store.delete("runs/a/start")
     await store.close()
@@ -391,9 +395,9 @@ async def test_listings_go_past_one_page() -> None:
 
     async def create(key: str) -> str:
         async with gate:
-            return await store.create(key, b"")
+            return await store.create(key, b"", expiry=None)
 
-    assert set(await asyncio.gather(*(create(k) for k in keys))) == {"created"}
+    assert {kind(c) for c in await asyncio.gather(*(create(k) for k in keys))} == {"created"}
     listed = await store.list("due/", start_after=None, max_keys=2000, wait=None)
     assert listed.keys == keys
     after = await store.list("due/", start_after="due/00002", max_keys=1001, wait=None)
@@ -405,9 +409,9 @@ async def test_listings_go_past_one_page() -> None:
 async def test_h3_needs_the_listing_etag_of_a_waiting_listing() -> None:
     store = open_store(require_s3("h3"), "env")
     assert store.capabilities.wait
-    await store.create("q/a", b"a")
+    await store.create("q/a", b"a", expiry=None)
     assert (await store.list("q/", start_after=None, max_keys=10, wait=None)).keys == ["q/a"]
-    with pytest.raises(StoreFailure, match="x-substantial-listing-etag"):
+    with pytest.raises(StoreFailure, match="x-herald-listing-etag"):
         await store.list("q/", start_after=None, max_keys=10, wait=ListWait(seconds=1))
     await store.close()
 
@@ -415,20 +419,20 @@ async def test_h3_needs_the_listing_etag_of_a_waiting_listing() -> None:
 async def test_waiting_listings_send_and_answer_the_wait_headers() -> None:
     async with FakeH3() as h3:
         store = open_store(h3.url("ns"), CREDENTIALS)
-        await store.create("q/a&b", b"x")
+        await store.create("q/a&b", b"x", expiry=None)
         first = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(5))
         assert first.keys == ["q/a&b"]
         assert first.etag is not None
-        assert "x-substantial-wait-etag" not in h3.listed[-1].headers
+        assert "x-herald-wait-etag" not in h3.listed[-1].headers
         listing = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0, "e1"))
         assert listing == first
         headers = h3.listed[-1].headers
-        assert (headers["x-substantial-wait-seconds"], headers["x-substantial-wait-etag"]) == (
+        assert (headers["x-herald-wait-seconds"], headers["x-herald-wait-etag"]) == (
             "0",
             "e1",
         )
         signed = headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
-        assert {"x-substantial-wait-seconds", "x-substantial-wait-etag"} <= set(signed)
+        assert {"x-herald-wait-seconds", "x-herald-wait-etag"} <= set(signed)
         sent = len(h3.requests)
         for bad in [ListWait(21), ListWait(5, "e\n1")]:
             with pytest.raises(StoreFailure):
@@ -441,7 +445,7 @@ async def test_waiting_listings_send_and_answer_the_wait_headers() -> None:
             await s3.list("q/", start_after=None, max_keys=10, wait=ListWait(5))
         await store.close()
         with pytest.raises(StoreFailure, match="closed"):
-            await store.get("q/a&b")
+            await value(store, "q/a&b")
         await s3.close()
 
 
@@ -465,9 +469,9 @@ async def test_a_provider_is_asked_again_near_the_expiry_of_its_keys() -> None:
 
     store = open_store(url, wrong_then_right)
     with pytest.raises(StoreFailure, match="SignatureDoesNotMatch"):
-        await store.get("runs/a/start")
-    assert await store.get("runs/a/start") is None
-    assert await store.create("runs/a/start", b"x") == "created"
+        await value(store, "runs/a/start")
+    assert await value(store, "runs/a/start") is None
+    assert kind(await store.create("runs/a/start", b"x", expiry=None)) == "created"
     assert len(calls) == 3, "once per request"
     await store.close()
 
@@ -507,8 +511,8 @@ async def test_a_provider_that_raises_fails_the_request_and_is_asked_again() -> 
 
     store = open_store(url, flaky)
     with pytest.raises(StoreFailure, match="credentials provider: RuntimeError: metadata"):
-        await store.get("runs/a/start")
-    assert await store.get("runs/a/start") is None
+        await value(store, "runs/a/start")
+    assert await value(store, "runs/a/start") is None
     assert len(calls) == 2
     await store.close()
 
@@ -526,7 +530,7 @@ async def test_a_provider_that_never_answers_fails_each_attempt_within_its_timeo
 
     store = open_store("s3+http://127.0.0.1:1/b/ns?region=r", hung)
     with pytest.raises(StoreFailure, match=r"TimeoutError.*\(after 5 attempts\)"):
-        await store.get("k")
+        await value(store, "k")
     assert len(calls) == 5, "asked again at each attempt"
     await store.close()
 
@@ -540,5 +544,37 @@ async def test_providers_and_their_keys_are_checked() -> None:
         open_store(s3, Credentials("id", "s", expires_at=later))
     store = open_store(s3, lambda: ("id", "s"))  # type: ignore[arg-type, return-value]
     with pytest.raises(StoreFailure, match="returns Credentials, not"):
-        await store.get("k")
+        await value(store, "k")
     await store.close()
+
+
+@workflow
+async def one(c: Context) -> int:
+    return 1
+
+
+async def test_a_worker_checks_a_lifecycle_rule_expires_each_retention_at_start() -> None:
+    url = require_s3()
+    ns = S3Location.parse(url).namespace
+    async with Substantial.create(url, credentials="env") as sub:
+        unexpired = script(sub, [one], retention=7)
+        with pytest.raises(ConfigError) as refused:
+            await unexpired.drain(within=timedelta(0))
+        rule = {
+            "Expiration": {"Days": 7},
+            "Filter": {
+                "And": {
+                    "Prefix": f"{ns}/",
+                    "Tags": [{"Key": "substantial-retention", "Value": "7d"}],
+                }
+            },
+            "ID": "substantial-expire-7d",
+            "Status": "Enabled",
+        }
+        message = str(refused.value)
+        assert json.dumps(rule, separators=(",", ":")) in message, message
+        assert "s3:PutLifecycleConfiguration" in message, message
+        assert not unexpired.alive and isinstance(unexpired.error, ConfigError)
+        async with script(sub, [one], retention=30):
+            run = await sub.start(one)
+            assert await run.result(timeout=LONG) == 1

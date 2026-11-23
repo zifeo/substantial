@@ -74,7 +74,7 @@ impl Context {
         SendFromWorkflow {
             run: run.to_owned(),
             name: name.to_owned(),
-            // § one .:ea0fw6qrw.a@ez8bk
+            // § one .:ea0fw6qrw.b@wfnn1
             value: to_text(&value)
                 .map_err(|e| Error::InvalidArgument(format!("the message is not JSON: {e}"))),
             id: None,
@@ -83,10 +83,17 @@ impl Context {
 
     /// Makes `value` the last one published under `key` by the chain.
     pub fn publish(&self, key: &str, value: impl Serialize) -> Result<()> {
-        // § one .:ea0fw6qrw.a@9jjeq
+        // § one .:ea0fw6qrw.b@m6t8b
         let value = to_text(&value)
             .map_err(|e| Error::InvalidArgument(format!("the published value is not JSON: {e}")))?;
         wit::publish(key, &value).map_err(Error::from)
+    }
+
+    /// Whether the code takes the branch of the change `id`: true when the run first reaches this
+    /// call live, and at every replay of a history that recorded it; false at a replay of a
+    /// history recorded before the code asked.
+    pub fn patched(&self, id: &str) -> Result<bool> {
+        wit::patched(id).map_err(Error::from)
     }
 
     /// Ends the run cancelled, once returned as the workflow's error: `return Err(c.cancel(..).await)`.
@@ -238,6 +245,13 @@ impl<T: DeserializeOwned + 'static> IntoFuture for Step<T> {
     type IntoFuture = LocalFuture<Result<T>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        if self.retry.is_some_and(|r| r.deadline.is_some()) {
+            return Box::pin(async {
+                Err(Error::InvalidArgument(
+                    "a Wasm workflow's step has no retry deadline".into(),
+                ))
+            });
+        }
         let options = wit::StepOptions {
             retry: self.retry.map(|r| wit::Retry {
                 max_attempts: r.max_attempts,

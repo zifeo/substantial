@@ -5,7 +5,7 @@
 //! The cron arithmetic is the library's own, the same in every host: a local time a clock change
 //! skips fires at the end of the gap, and a local time it repeats fires at its first occurrence.
 
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +14,7 @@ use chrono::{
     DateTime, Datelike, NaiveDate, NaiveDateTime, Offset, TimeDelta, TimeZone, Timelike, Utc,
 };
 use chrono_tz::Tz;
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -477,7 +478,7 @@ fn published(st: &State) -> Value {
 }
 
 fn received(value: &Value) -> Result<(u64, Option<Cron>, u64)> {
-    // § ey8zhz0kq.c@3jf60
+    // § ey8zhz0kq.g@pq2jh
     let refused = || {
         Error::InvalidArgument(format!(
             "a schedule message is a config of sub.schedule, not {value}"
@@ -524,8 +525,21 @@ impl Context {
     /// Calls `body` at each fire time of the schedule `Substantial::schedule` configures, the
     /// workflow's one loop, until it breaks; fires missed while no worker ran come oldest first,
     /// at most `backfill` of them. As in `iterate`, the error it returns ends the run (a
-    /// continuation at a boundary past the threshold), so propagate it.
-    pub async fn schedule<F, Fut>(&self, mut body: F) -> Result<()>
+    /// continuation at a boundary past the threshold), so propagate it, and `.upgrade()` moves
+    /// the loop at a boundary into the highest version of the workflow the worker serves.
+    pub fn schedule<F, Fut>(&self, body: F) -> Schedule<'_, F>
+    where
+        F: FnMut(Context, DateTime<Utc>) -> Fut,
+        Fut: Future<Output = Result<ControlFlow<()>>>,
+    {
+        Schedule {
+            c: self,
+            body,
+            upgrade: false,
+        }
+    }
+
+    async fn scheduled<F, Fut>(&self, mut body: F, upgrade: bool) -> Result<()>
     where
         F: FnMut(Context, DateTime<Utc>) -> Fut,
         Fut: Future<Output = Result<ControlFlow<()>>>,
@@ -545,7 +559,7 @@ impl Context {
                     move || !lock(&c).is_empty()
                 };
                 let Some(cron) = st.cron.clone() else {
-                    // § vnykycs34.c@h7fc2
+                    // § vnykycs34.c@x712e
                     self.wait_until(any(&configs)).await?;
                     continue;
                 };
@@ -556,7 +570,7 @@ impl Context {
                         "a schedule state with a cron and without its tz, after or backfill".into(),
                     ));
                 };
-                // § vnykycs34.a@5eb4c
+                // § vnykycs34.a@m2f3v
                 let now = self.now().await?.timestamp_millis();
                 let fires: Plan = self
                     .step(RESERVED_STEP, move || {
@@ -582,7 +596,7 @@ impl Context {
                 let changed = st.next.as_ref() != Some(&fires.next);
                 st.next = Some(fires.next);
                 if st.pending.is_empty() {
-                    // § ey8zhz0kq.d@r5j4k
+                    // § ey8zhz0kq.d@5b02t
                     if changed {
                         self.publish(MESSAGE, published(&st))?;
                     }
@@ -593,10 +607,10 @@ impl Context {
                     self.wait_until(any(&configs)).timeout(wait).await?;
                 }
             }
-            // § vnykycs34@sfdew
+            // § vnykycs34@33h40
             let at = st.pending.remove(0);
             st.last = Some(at.clone());
-            // § ey8zhz0kq.d@8z2qf
+            // § ey8zhz0kq.d@a9pya
             st.recent.push(at.clone());
             let over = st.recent.len().saturating_sub(RECENT);
             st.recent.drain(..over);
@@ -609,7 +623,7 @@ impl Context {
             if !lock(&configs).is_empty() {
                 self.apply(&mut st, &configs).await?;
             }
-            self.boundary(&st)?;
+            self.boundary(&st, upgrade)?;
         }
     }
 
@@ -625,7 +639,7 @@ impl Context {
             }
         }
         // § end ey8zhz0kq.e
-        // § ey8zhz0kq.f@x25nt
+        // § ey8zhz0kq.h@rawxn
         let mut known = std::collections::HashMap::new();
         if st.revision > 0 {
             known.insert(
@@ -649,7 +663,7 @@ impl Context {
             }
             known.insert(*r, text);
         }
-        // § end ey8zhz0kq.f
+        // § end ey8zhz0kq.h
         let Some((revision, cron, backfill)) = highest.cloned() else {
             return Ok(());
         };
@@ -677,6 +691,36 @@ impl Context {
             }
         }
         self.publish(MESSAGE, published(st))
+    }
+}
+
+/// The loop of `Context::schedule`, run when awaited.
+#[must_use = "a schedule does nothing until awaited"]
+pub struct Schedule<'a, F> {
+    c: &'a Context,
+    body: F,
+    upgrade: bool,
+}
+
+impl<F> Schedule<'_, F> {
+    /// Continues at a boundary into the highest version of the workflow the worker serves, once
+    /// it is higher than the run's: the version `Substantial::schedule` moves the schedule to.
+    pub fn upgrade(mut self) -> Self {
+        self.upgrade = true;
+        self
+    }
+}
+
+impl<'a, F, Fut> IntoFuture for Schedule<'a, F>
+where
+    F: FnMut(Context, DateTime<Utc>) -> Fut + Send + 'a,
+    Fut: Future<Output = Result<ControlFlow<()>>> + Send + 'a,
+{
+    type Output = Result<()>;
+    type IntoFuture = BoxFuture<'a, Result<()>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.c.scheduled(self.body, self.upgrade))
     }
 }
 

@@ -46,6 +46,7 @@ impl Replayed {
         match &self.end {
             replay_end::End::Idle(idle) => idle.next_wake.as_ref().map(|t| t.ms),
             replay_end::End::Dropped(_) => panic!("dropped"),
+            replay_end::End::Blocked(f) => panic!("blocked: {f:?}"),
         }
     }
 }
@@ -92,6 +93,7 @@ impl Harness {
             history_bytes: 0,
             next_n: self.next_n,
             inbox: self.inbox.clone(),
+            claim: false,
             now: Some(Time { ms: now }),
             seed: vec![42; 32],
             prefix: String::new(),
@@ -101,12 +103,16 @@ impl Harness {
                 continue_as_new_after_segments: 1000,
                 continue_as_new_after_bytes: 8 << 20,
                 dedup_window_ms: 86_400_000,
-                retention: Some(b::Retention {
-                    ms: 30 * 86_400_000,
-                }),
+                retention: Some(b::Retention { days: 30 }),
                 prices: None,
+                max_history_bytes: 128 << 20,
+                max_history_events: 100_000,
+                max_replay_inbox: 10_000,
+                max_seen: 100_000,
+                history_warn_percent: 80,
             }),
             cost: Some(layout::Cost::default()),
+            highest_version: None,
         }
     }
 
@@ -124,6 +130,7 @@ impl Harness {
         };
         tokio::spawn(replay(
             host,
+            input.run.clone(),
             self.workflow.clone(),
             crate::time::minutes(5),
             input,
@@ -144,7 +151,7 @@ impl Harness {
                         n: segment.n,
                         won,
                         inbox: Vec::new(),
-                        cost: progress.then(|| segment.cost.clone().unwrap_or_default()),
+                        cost: progress.then(|| Box::new(segment.cost.clone().unwrap_or_default())),
                     });
                     if won {
                         self.history.extend(segment.events);
@@ -179,6 +186,17 @@ pub(super) fn failed(r: &Replayed) -> Option<layout::Failure> {
         Kind::Failed(f) => f.error,
         _ => None,
     })
+}
+
+/// The error a replay blocked with, which recorded nothing.
+pub(super) fn blocked(r: &Replayed) -> Option<layout::Failure> {
+    match &r.end {
+        replay_end::End::Blocked(f) => {
+            assert!(r.commits.is_empty(), "a blocked replay records nothing");
+            Some(f.clone())
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn counter() -> Arc<AtomicU32> {

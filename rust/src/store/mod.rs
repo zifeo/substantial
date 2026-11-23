@@ -19,7 +19,7 @@ use futures::future::BoxFuture;
 
 pub use credentials::{Credentials, Keys, Password};
 pub use fs::FsStore;
-pub use memory::MemoryStore;
+pub use memory::{Clock, MemoryStore};
 #[cfg(feature = "redis")]
 pub use redis::RedisStore;
 pub use redis::{RedisLocation, Topology};
@@ -34,11 +34,34 @@ pub struct Capabilities {
     pub wait: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Create {
-    Created,
+    /// With the ETag of the value written, which a later `cas` names.
+    Created {
+        etag: String,
+    },
     Exists,
 }
+
+/// A key's value and its ETag, which a later `cas` names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Object {
+    pub bytes: Bytes,
+    pub etag: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Cas {
+    Written {
+        etag: String,
+    },
+    /// The key's value is not the one named, or there is none.
+    Mismatch,
+}
+
+/// The longest expiry a write may carry, 100 years of days.
+pub const EXPIRY_MAX_DAYS: u32 = 36_500;
+pub const DAY_MS: u64 = 86_400_000;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Listing {
@@ -69,20 +92,34 @@ impl StoreFailure {
 
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreFailure>> + Send + 'a>>;
 
-/// The four operations of the store contract, the only ones Substantial performs on a store.
+/// The six operations of the store contract, the only ones Substantial performs on a store: the
+/// expiry in whole days is part of every write.
 ///
 /// The futures are boxed so that a store can be chosen at run time (`Arc<dyn Store>`), which
 /// `async fn` in a trait does not allow.
 pub trait Store: Send + Sync {
-    // § w89qkqkaj@662gx
+    // § karttrcdb@qndag
     fn capabilities(&self) -> Capabilities;
     /// Connects, failing with `ConfigError` on a store the adapter cannot use; the operations
     /// connect too when it was not called.
     fn open(&self) -> BoxFuture<'_, Result<()>>;
     /// Atomic and exclusive: of concurrent creates of a key, exactly one gets `Created`.
-    // § one kwvhb7ehw@dchmx
-    fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create>;
-    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>>;
+    fn create<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Create>;
+    /// Replaces the value whose ETag is `etag`, atomically with every other operation on `key`.
+    // § one kkad6aqxp@a2dxw
+    fn cas<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        etag: &'a str,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Cas>;
+    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Object>>;
     /// Keys under `prefix` and after `start_after`, in byte order of the full key, at most `max_keys`.
     fn list<'a>(
         &'a self,
@@ -93,11 +130,38 @@ pub trait Store: Send + Sync {
     ) -> StoreFuture<'a, Listing>;
     /// Removes a key; deleting a missing key succeeds.
     fn delete<'a>(&'a self, key: &'a str) -> StoreFuture<'a, ()>;
+    /// Fails with `ConfigError` unless the store expires a key written with each of `days`.
+    fn check_expiry<'a>(&'a self, days: &'a [u32]) -> BoxFuture<'a, Result<()>>;
+}
+
+/// Refuses an expiry outside 1 to `EXPIRY_MAX_DAYS` days, which no store could keep.
+pub(crate) fn check_days(expiry: Option<u32>) -> Result<(), String> {
+    // § r4rsq6spn.c@gvmsq
+    match expiry {
+        Some(d) if d == 0 || d > EXPIRY_MAX_DAYS => Err(format!(
+            "an expiry of {d} days is outside 1 to {EXPIRY_MAX_DAYS}"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// `check_days` for every expiry of `days`, as `ConfigError`.
+pub(crate) fn check_all_days(days: &[u32]) -> Result<()> {
+    days.iter()
+        .try_for_each(|d| check_days(Some(*d)))
+        .map_err(Error::ConfigError)
+}
+
+/// The ETag of the stores that make their own: the hex of the first 16 bytes of the SHA-256 of
+/// the value.
+pub(crate) fn digest_etag(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(&Sha256::digest(bytes)[..16])
 }
 
 /// Opens the adapter a URL names (I-16); the scheme alone picks it, nothing is detected.
 pub fn open(url: &str, credentials: &Credentials, retry: StoreRetry) -> Result<Arc<dyn Store>> {
-    // § e9ern38bz@mhpw4
+    // § e9ern38bz@zwz1t
     retry.validate()?;
     if let Some(ns) = url.strip_prefix("memory://") {
         refuse_query(url, ns)?;
@@ -158,7 +222,7 @@ fn refuse_query(url: &str, rest: &str) -> Result<()> {
 
 /// Performs one `StoreOp` of the core and answers with its `OpResult`.
 pub(crate) async fn perform(store: &dyn Store, op: b::StoreOp) -> b::OpResult {
-    // § zemxe46k3.a@envxm
+    // § zemxe46k3.a@hxm5h
     let (result, attempts) = attempts::measured(perform_once(store, op)).await;
     b::OpResult {
         result: Some(result),
@@ -171,13 +235,32 @@ async fn perform_once(store: &dyn Store, op: b::StoreOp) -> op_result::Result {
         |e: StoreFailure| op_result::Result::Failed(b::StoreFailure { message: e.message });
     let empty = b::Empty {};
     match op.op {
-        Some(store_op::Op::Create(c)) => match store.create(&c.key, c.bytes.into()).await {
-            Ok(Create::Created) => op_result::Result::Created(empty),
-            Ok(Create::Exists) => op_result::Result::Exists(empty),
-            Err(e) => failed(e),
-        },
+        Some(store_op::Op::Create(c)) => {
+            match store.create(&c.key, c.bytes.into(), c.expiry_days).await {
+                Ok(Create::Created { etag }) => {
+                    op_result::Result::Created(op_result::Written { etag })
+                }
+                Ok(Create::Exists) => op_result::Result::Exists(empty),
+                Err(e) => failed(e),
+            }
+        }
+        Some(store_op::Op::Cas(c)) => {
+            match store
+                .cas(&c.key, c.bytes.into(), &c.etag, c.expiry_days)
+                .await
+            {
+                Ok(Cas::Written { etag }) => {
+                    op_result::Result::Written(op_result::Written { etag })
+                }
+                Ok(Cas::Mismatch) => op_result::Result::Mismatch(empty),
+                Err(e) => failed(e),
+            }
+        }
         Some(store_op::Op::Get(key)) => match store.get(&key).await {
-            Ok(Some(bytes)) => op_result::Result::Bytes(bytes.to_vec()),
+            Ok(Some(object)) => op_result::Result::Object(op_result::Object {
+                bytes: object.bytes.to_vec(),
+                etag: object.etag,
+            }),
             Ok(None) => op_result::Result::Missing(empty),
             Err(e) => failed(e),
         },

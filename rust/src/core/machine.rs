@@ -120,6 +120,11 @@ impl RunMachine {
         }))
     }
 
+    /// The answer to `Next::Claim` once the agent holds the run's claim.
+    pub fn claimed(&self) -> Result<()> {
+        self.done(run_request::Request::Claimed(b::Empty {}))
+    }
+
     /// The answer to `Next::Store`, an operation of a workflow's send or result.
     pub fn stored(&self, result: b::OpResult) -> Result<()> {
         self.done(run_request::Request::Stored(result))
@@ -178,6 +183,10 @@ impl AgentMachine {
             run,
             commit: Some(commit),
         }))
+    }
+
+    pub fn claim(&self, run: String) -> Result<()> {
+        self.done(agent_request::Request::Claim(run))
     }
 
     pub fn replay_ended(&self, run: String, end: b::replay_end::End) -> Result<()> {

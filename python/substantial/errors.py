@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -48,7 +47,7 @@ def _object(type_: str, details: Any) -> dict[str, Any] | None:
     raise ProtocolError(f"{type_} with details {details!r}, not an object")
 
 
-# § rabbgjpb2@0tat7
+# § rabbgjpb2@q81kc
 class SubstantialError(Exception):
     """The base of every error Substantial raises, control flow excepted."""
 
@@ -75,7 +74,33 @@ class Failed(SubstantialError):
         self.failure = failure
 
 
-# § b7wsejcvb.a@w838p
+class Fail(SubstantialError):
+    """The workflow's own failure, raised on purpose: the run ends failed with this type and
+    message."""
+
+    def __init__(self, type: str, message: str) -> None:
+        if not isinstance(type, str) or not isinstance(message, str):
+            raise InvalidArgument(
+                f"Fail takes a type and a message, strings: {type!r}, {message!r}"
+            )
+        super().__init__(f"{type}: {message}")
+        self.failure = Failure(type, message)
+
+
+class HistoryTooLarge(SubstantialError):
+    """The run passed a limit of its history: the core ended it failed with this type."""
+
+
+class Blocking(Exception):
+    """An error of the code that blocks its run with `failure`, recording nothing: a value of the
+    code that does not encode, a handler that cannot take a message."""
+
+    def __init__(self, failure: Failure) -> None:
+        super().__init__(str(failure))
+        self.failure = failure
+
+
+# § b7wsejcvb.a@4fayn
 class Control(BaseException):
     """Control flow of Substantial: catch it by name only, never with a bare `except:`."""
 
@@ -105,12 +130,15 @@ class ContinuedAsNew(Control):
         version: int | None,
         input: bytes,
         state: bytes | None = None,
+        highest: bool = False,
     ) -> None:
         super().__init__("continued as new")
         self.workflow = workflow
         self.version = version
         self.input = input
         self.state = state
+        # Into the highest version of its workflow the worker serves, for a loop that upgrades.
+        self.highest = highest
         # § end b7wsejcvb.a
 
 
@@ -168,22 +196,10 @@ class NotInWorkflow(SubstantialError):
     pass
 
 
-def _rfc3339(t: datetime) -> str:
-    return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
 class RunExists(SubstantialError):
-    """`collected` when the id is taken by a run collected, `until` then."""
-
-    def __init__(self, id: str, *, until: datetime | None) -> None:
-        by = (
-            "another workflow, version or input"
-            if until is None
-            else f"a run collected, until {_rfc3339(until)}"
-        )
-        super().__init__(f"id {id} is taken by {by}")
-        self.collected = until is not None
-        self.until = until
+    def __init__(self, id: str) -> None:
+        super().__init__(f"id {id} is taken by another workflow, version or input")
+        self.id = id
 
 
 class InvalidArgument(SubstantialError):
@@ -195,17 +211,11 @@ class RunEnded(SubstantialError):
 
 
 class RunNotFound(SubstantialError):
-    """`collected` when the chain's first run was collected, its id taken `until` then."""
+    """No such chain: it never existed, or it ended and its retention passed."""
 
-    def __init__(self, chain: str, *, until: datetime | None) -> None:
-        collected = (
-            ""
-            if until is None
-            else f": it was collected, and its id is taken until {_rfc3339(until)}"
-        )
-        super().__init__(f"no chain {chain}{collected}")
-        self.collected = until is not None
-        self.until = until
+    def __init__(self, chain: str) -> None:
+        super().__init__(f"no chain {chain}")
+        self.chain = chain
 
 
 class WaitTimeout(SubstantialError):
@@ -295,13 +305,9 @@ def _details(f: layout_pb2.Failure) -> dict[str, Any] | None:
 
 def _run_not_found(f: layout_pb2.Failure) -> SubstantialError:
     d = _details(f) or {}
-    run, until = d.get("run"), d.get("until")
-    if not isinstance(run, str) or not isinstance(until, str | None):
+    if d.keys() != {"run"} or not isinstance(d["run"], str):
         return ProtocolError(f"RunNotFound with details {f.details}")
-    try:
-        return RunNotFound(run, until=None if until is None else datetime.fromisoformat(until))
-    except ValueError:
-        return ProtocolError(f"RunNotFound with details {f.details}")
+    return RunNotFound(d["run"])
 
 
 def _wrapped(details: Any) -> Failure | None:
@@ -353,10 +359,10 @@ def _run_failed(f: layout_pb2.Failure) -> SubstantialError:
 
 
 def failure_of(e: BaseException) -> Failure:
-    """The failure an error of the code ends its run with."""
-    if isinstance(e, StepFailed | Failed):
+    """The failure an error of the code ends or blocks its run with."""
+    if isinstance(e, StepFailed | Failed | Fail | Blocking):
         return e.failure
     if isinstance(e, RolledBack):
         return Failure("RolledBack", e.reason)
-    # § one r3sd261h4.c@bmxhk
+    # § one r3sd261h4.c@76wte
     return Failure(type(e).__name__, str(e))

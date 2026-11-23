@@ -97,9 +97,20 @@ impl Context {
         done(self.shared.call(Call::Publish(published))?)
     }
 
+    /// Whether the code takes the branch of the change `id`: true when the run first reaches this
+    /// call live, and at every replay of a history that recorded it; false at a replay of a
+    /// history recorded before the code asked, so code changed under a running run keeps its
+    /// history. `id` is a label: `[A-Za-z0-9._-]{1,128}`, not starting with `substantial.`.
+    pub fn patched(&self, id: &str) -> Result<bool> {
+        match self.shared.call(Call::Patched(id.to_owned()))? {
+            Called::Value(v) => decode(Some(v)),
+            other => Err(Error::Protocol(format!("patched answered {other:?}"))),
+        }
+    }
+
     /// Ends the run cancelled, once returned as the workflow's error: `return Err(c.cancel(..).await)`.
     pub async fn cancel(&self, reason: &str) -> Error {
-        // § g039jvy6k.c@vfy5j
+        // § dxgjekysz.c@qe0nd
         Error::Cancelled(reason.to_owned())
     }
 

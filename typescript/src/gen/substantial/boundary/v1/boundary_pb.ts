@@ -35,7 +35,7 @@ import type { Message, UnknownEnum } from "@bufbuild/protobuf";
  * Describes the file substantial/boundary/v1/boundary.proto.
  */
 export const file_substantial_boundary_v1_boundary: GenFile = /*@__PURE__*/
-  fileDesc("CiZzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9ib3VuZGFyeS5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiBwoFRW1wdHkiTgoJQ29yZUVycm9yEjAKBGtpbmQYASABKA4yIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FcnJvcktpbmQSDwoHbWVzc2FnZRgCIAEoCSLOAgoHU3RvcmVPcBI5CgZjcmVhdGUYASABKAsyJy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkNyZWF0ZUgAEg0KA2dldBgCIAEoCUgAEjUKBGxpc3QYAyABKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkxpc3RIABIQCgZkZWxldGUYBCABKAlIABokCgZDcmVhdGUSCwoDa2V5GAEgASgJEg0KBWJ5dGVzGAIgASgMGoMBCgRMaXN0Eg4KBnByZWZpeBgBIAEoCRIYCgtzdGFydF9hZnRlchgCIAEoCUgAiAEBEhAKCG1heF9rZXlzGAMgASgNEi8KBHdhaXQYBCABKAsyIS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5MaXN0V2FpdEIOCgxfc3RhcnRfYWZ0ZXJCBAoCb3AiNwoITGlzdFdhaXQSEQoEZXRhZxgBIAEoCUgAiAEBEg8KB3NlY29uZHMYAiABKA1CBwoFX2V0YWciHwoMU3RvcmVGYWlsdXJlEg8KB21lc3NhZ2UYASABKAkirgMKCE9wUmVzdWx0EjEKB2NyZWF0ZWQYASABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjAKBmV4aXN0cxgCIAEoCzIeLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLkVtcHR5SAASDwoFYnl0ZXMYAyABKAxIABIxCgdtaXNzaW5nGAQgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABI8CgdsaXN0aW5nGAUgASgLMikuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuT3BSZXN1bHQuTGlzdGluZ0gAEjEKB2RlbGV0ZWQYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjcKBmZhaWxlZBgHIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlN0b3JlRmFpbHVyZUgAEhAKCGF0dGVtcHRzGAggASgNGjMKB0xpc3RpbmcSDAoEa2V5cxgBIAMoCRIRCgRldGFnGAIgASgJSACIAQFCBwoFX2V0YWdCCAoGcmVzdWx0KnAKC01hY2hpbmVLaW5kEhwKGE1BQ0hJTkVfS0lORF9VTlNQRUNJRklFRBAAEhQKEE1BQ0hJTkVfS0lORF9SVU4QARIWChJNQUNISU5FX0tJTkRfQUdFTlQQAhIVChFNQUNISU5FX0tJTkRfUExBThADKsQBCglFcnJvcktpbmQSGgoWRVJST1JfS0lORF9VTlNQRUNJRklFRBAAEh4KGkVSUk9SX0tJTkRfTk9OX0RFVEVSTUlOSVNNEAESFgoSRVJST1JfS0lORF9JTlZBTElEEAISFAoQRVJST1JfS0lORF9FTkRFRBADEhYKEkVSUk9SX0tJTkRfQ09SUlVQVBAEEhUKEUVSUk9SX0tJTkRfTEFZT1VUEAUSHgoaRVJST1JfS0lORF9WQUxVRV9UT09fTEFSR0UQBmIGcHJvdG8z");
+  fileDesc("CiZzdWJzdGFudGlhbC9ib3VuZGFyeS92MS9ib3VuZGFyeS5wcm90bxIXc3Vic3RhbnRpYWwuYm91bmRhcnkudjEiBwoFRW1wdHkiTgoJQ29yZUVycm9yEjAKBGtpbmQYASABKA4yIi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FcnJvcktpbmQSDwoHbWVzc2FnZRgCIAEoCSKIBAoHU3RvcmVPcBI5CgZjcmVhdGUYASABKAsyJy5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkNyZWF0ZUgAEg0KA2dldBgCIAEoCUgAEjUKBGxpc3QYAyABKAsyJS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkxpc3RIABIQCgZkZWxldGUYBCABKAlIABIzCgNjYXMYBSABKAsyJC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5TdG9yZU9wLkNhc0gAGk4KBkNyZWF0ZRILCgNrZXkYASABKAkSDQoFYnl0ZXMYAiABKAwSGAoLZXhwaXJ5X2RheXMYAyABKA1IAIgBAUIOCgxfZXhwaXJ5X2RheXMaWQoDQ2FzEgsKA2tleRgBIAEoCRINCgVieXRlcxgCIAEoDBIMCgRldGFnGAMgASgJEhgKC2V4cGlyeV9kYXlzGAQgASgNSACIAQFCDgoMX2V4cGlyeV9kYXlzGoMBCgRMaXN0Eg4KBnByZWZpeBgBIAEoCRIYCgtzdGFydF9hZnRlchgCIAEoCUgAiAEBEhAKCG1heF9rZXlzGAMgASgNEi8KBHdhaXQYBCABKAsyIS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5MaXN0V2FpdEIOCgxfc3RhcnRfYWZ0ZXJCBAoCb3AiNwoITGlzdFdhaXQSEQoEZXRhZxgBIAEoCUgAiAEBEg8KB3NlY29uZHMYAiABKA1CBwoFX2V0YWciHwoMU3RvcmVGYWlsdXJlEg8KB21lc3NhZ2UYASABKAkiowUKCE9wUmVzdWx0EjwKB2NyZWF0ZWQYASABKAsyKS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5PcFJlc3VsdC5Xcml0dGVuSAASMAoGZXhpc3RzGAIgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABI6CgZvYmplY3QYCyABKAsyKC5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5PcFJlc3VsdC5PYmplY3RIABIxCgdtaXNzaW5nGAQgASgLMh4uc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuRW1wdHlIABI8CgdsaXN0aW5nGAUgASgLMikuc3Vic3RhbnRpYWwuYm91bmRhcnkudjEuT3BSZXN1bHQuTGlzdGluZ0gAEjEKB2RlbGV0ZWQYBiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEjcKBmZhaWxlZBgHIAEoCzIlLnN1YnN0YW50aWFsLmJvdW5kYXJ5LnYxLlN0b3JlRmFpbHVyZUgAEjwKB3dyaXR0ZW4YCSABKAsyKS5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5PcFJlc3VsdC5Xcml0dGVuSAASMgoIbWlzbWF0Y2gYCiABKAsyHi5zdWJzdGFudGlhbC5ib3VuZGFyeS52MS5FbXB0eUgAEhAKCGF0dGVtcHRzGAggASgNGjMKB0xpc3RpbmcSDAoEa2V5cxgBIAMoCRIRCgRldGFnGAIgASgJSACIAQFCBwoFX2V0YWcaFwoHV3JpdHRlbhIMCgRldGFnGAEgASgJGiUKBk9iamVjdBINCgVieXRlcxgBIAEoDBIMCgRldGFnGAIgASgJQggKBnJlc3VsdEoECAMQBFIFYnl0ZXMqcAoLTWFjaGluZUtpbmQSHAoYTUFDSElORV9LSU5EX1VOU1BFQ0lGSUVEEAASFAoQTUFDSElORV9LSU5EX1JVThABEhYKEk1BQ0hJTkVfS0lORF9BR0VOVBACEhUKEU1BQ0hJTkVfS0lORF9QTEFOEAMqxAEKCUVycm9yS2luZBIaChZFUlJPUl9LSU5EX1VOU1BFQ0lGSUVEEAASHgoaRVJST1JfS0lORF9OT05fREVURVJNSU5JU00QARIWChJFUlJPUl9LSU5EX0lOVkFMSUQQAhIUChBFUlJPUl9LSU5EX0VOREVEEAMSFgoSRVJST1JfS0lORF9DT1JSVVBUEAQSFQoRRVJST1JfS0lORF9MQVlPVVQQBRIeChpFUlJPUl9LSU5EX1ZBTFVFX1RPT19MQVJHRRAGYgZwcm90bzM");
 
 /**
  * @generated from message substantial.boundary.v1.Empty
@@ -73,7 +73,24 @@ export const CoreErrorSchema: GenMessage<CoreError> = /*@__PURE__*/
   messageDesc(file_substantial_boundary_v1_boundary, 1);
 
 /**
- * The store contract's four operations (I-26).
+ * The store contract's six operations (I-26): create, cas, get, list and delete, and an expiry
+ * in whole days that every write carries.
+ *
+ * Expiry: a write with expiry_days sets its key to expire that many days after the write lands,
+ * 1 to 36,500; a write without it clears any expiry the key had. The key reads as written until at
+ * least the write plus expiry_days, and is removed, get answering missing and create writing, at
+ * the latest 2 days after that; between the two it may read either way, but once removed it stays
+ * removed until a new write. A key past its expiry and not yet removed may still be listed: the
+ * core lists no key it writes with an expiry.
+ *
+ * ETags are opaque: an etag changes whenever the bytes change, and may change on a write of equal
+ * bytes too. The core never compares them, it only names one in a cas.
+ *
+ * An ambiguous answer (a timeout, a dropped connection) is resolved by the adapter with one get,
+ * counted in attempts. For a create: equal bytes mean it landed (created, with that etag), missing
+ * means it is sent again, other bytes mean exists. For a cas: equal bytes mean it landed (written,
+ * with that etag), the etag named still current means it is sent again with the same bytes,
+ * anything else means mismatch. No bucket versioning is needed for either.
  *
  * @generated from message substantial.boundary.v1.StoreOp
  */
@@ -105,6 +122,12 @@ export type StoreOp = Message<"substantial.boundary.v1.StoreOp"> & {
      */
     value: string;
     case: "delete";
+  } | {
+    /**
+     * @generated from field: substantial.boundary.v1.StoreOp.Cas cas = 5;
+     */
+    value: StoreOp_Cas;
+    case: "cas";
   } | { case: undefined; value?: undefined };
 };
 
@@ -128,6 +151,11 @@ export type StoreOp_Create = Message<"substantial.boundary.v1.StoreOp.Create"> &
    * @generated from field: bytes bytes = 2;
    */
   bytes: Uint8Array;
+
+  /**
+   * @generated from field: optional uint32 expiry_days = 3;
+   */
+  expiryDays?: number | undefined;
 };
 
 /**
@@ -136,6 +164,41 @@ export type StoreOp_Create = Message<"substantial.boundary.v1.StoreOp.Create"> &
  */
 export const StoreOp_CreateSchema: GenMessage<StoreOp_Create> = /*@__PURE__*/
   messageDesc(file_substantial_boundary_v1_boundary, 2, 0);
+
+/**
+ * Writes bytes only if the key's current value has the etag, atomically with every other
+ * operation on the key; a missing key answers mismatch.
+ *
+ * @generated from message substantial.boundary.v1.StoreOp.Cas
+ */
+export type StoreOp_Cas = Message<"substantial.boundary.v1.StoreOp.Cas"> & {
+  /**
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * @generated from field: bytes bytes = 2;
+   */
+  bytes: Uint8Array;
+
+  /**
+   * @generated from field: string etag = 3;
+   */
+  etag: string;
+
+  /**
+   * @generated from field: optional uint32 expiry_days = 4;
+   */
+  expiryDays?: number | undefined;
+};
+
+/**
+ * Describes the message substantial.boundary.v1.StoreOp.Cas.
+ * Use `create(StoreOp_CasSchema)` to create a new message.
+ */
+export const StoreOp_CasSchema: GenMessage<StoreOp_Cas> = /*@__PURE__*/
+  messageDesc(file_substantial_boundary_v1_boundary, 2, 1);
 
 /**
  * @generated from message substantial.boundary.v1.StoreOp.List
@@ -167,7 +230,7 @@ export type StoreOp_List = Message<"substantial.boundary.v1.StoreOp.List"> & {
  * Use `create(StoreOp_ListSchema)` to create a new message.
  */
 export const StoreOp_ListSchema: GenMessage<StoreOp_List> = /*@__PURE__*/
-  messageDesc(file_substantial_boundary_v1_boundary, 2, 1);
+  messageDesc(file_substantial_boundary_v1_boundary, 2, 2);
 
 /**
  * @generated from message substantial.boundary.v1.ListWait
@@ -219,22 +282,26 @@ export type OpResult = Message<"substantial.boundary.v1.OpResult"> & {
    */
   result: {
     /**
-     * @generated from field: substantial.boundary.v1.Empty created = 1;
+     * A create that wrote.
+     *
+     * @generated from field: substantial.boundary.v1.OpResult.Written created = 1;
      */
-    value: Empty;
+    value: OpResult_Written;
     case: "created";
   } | {
     /**
+     * A create that found the key.
+     *
      * @generated from field: substantial.boundary.v1.Empty exists = 2;
      */
     value: Empty;
     case: "exists";
   } | {
     /**
-     * @generated from field: bytes bytes = 3;
+     * @generated from field: substantial.boundary.v1.OpResult.Object object = 11;
      */
-    value: Uint8Array;
-    case: "bytes";
+    value: OpResult_Object;
+    case: "object";
   } | {
     /**
      * @generated from field: substantial.boundary.v1.Empty missing = 4;
@@ -259,6 +326,22 @@ export type OpResult = Message<"substantial.boundary.v1.OpResult"> & {
      */
     value: StoreFailure;
     case: "failed";
+  } | {
+    /**
+     * A cas that wrote.
+     *
+     * @generated from field: substantial.boundary.v1.OpResult.Written written = 9;
+     */
+    value: OpResult_Written;
+    case: "written";
+  } | {
+    /**
+     * A cas whose etag is not the key's current one, or whose key is missing.
+     *
+     * @generated from field: substantial.boundary.v1.Empty mismatch = 10;
+     */
+    value: Empty;
+    case: "mismatch";
   } | { case: undefined; value?: undefined };
 
   /**
@@ -298,6 +381,49 @@ export type OpResult_Listing = Message<"substantial.boundary.v1.OpResult.Listing
  */
 export const OpResult_ListingSchema: GenMessage<OpResult_Listing> = /*@__PURE__*/
   messageDesc(file_substantial_boundary_v1_boundary, 5, 0);
+
+/**
+ * A write that landed: the etag of the value written, for a later cas.
+ *
+ * @generated from message substantial.boundary.v1.OpResult.Written
+ */
+export type OpResult_Written = Message<"substantial.boundary.v1.OpResult.Written"> & {
+  /**
+   * @generated from field: string etag = 1;
+   */
+  etag: string;
+};
+
+/**
+ * Describes the message substantial.boundary.v1.OpResult.Written.
+ * Use `create(OpResult_WrittenSchema)` to create a new message.
+ */
+export const OpResult_WrittenSchema: GenMessage<OpResult_Written> = /*@__PURE__*/
+  messageDesc(file_substantial_boundary_v1_boundary, 5, 1);
+
+/**
+ * A get: the key's value and its etag.
+ *
+ * @generated from message substantial.boundary.v1.OpResult.Object
+ */
+export type OpResult_Object = Message<"substantial.boundary.v1.OpResult.Object"> & {
+  /**
+   * @generated from field: bytes bytes = 1;
+   */
+  bytes: Uint8Array;
+
+  /**
+   * @generated from field: string etag = 2;
+   */
+  etag: string;
+};
+
+/**
+ * Describes the message substantial.boundary.v1.OpResult.Object.
+ * Use `create(OpResult_ObjectSchema)` to create a new message.
+ */
+export const OpResult_ObjectSchema: GenMessage<OpResult_Object> = /*@__PURE__*/
+  messageDesc(file_substantial_boundary_v1_boundary, 5, 2);
 
 /**
  * @generated from enum substantial.boundary.v1.MachineKind

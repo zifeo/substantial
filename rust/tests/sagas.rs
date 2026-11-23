@@ -64,7 +64,7 @@ async fn a_rollback_undoes_every_step_most_recent_first() {
             (error.kind.as_str(), error.message.as_str()),
             ("RolledBack", "why")
         );
-        // § ej5k8q6w5@0gse6
+        // § ej5k8q6w5@46tyt
         assert_eq!(*log.lock().unwrap(), ["c", "a"], "{}", ns.name);
     }
 }
@@ -101,7 +101,7 @@ async fn a_rollback_leaves_the_earlier_runs_of_the_chain() {
             "{}: {result:?}",
             ns.name
         );
-        // § one ej5k8q6w5.a@0pxgz
+        // § one ej5k8q6w5.a@rrqs8
         assert_eq!(*log.lock().unwrap(), ["current"], "{}", ns.name);
     }
 }
@@ -138,7 +138,7 @@ async fn a_saga_undoes_its_own_steps_then_raises_again() {
         let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}", ns.name);
-        // § sft633bnn@6nb24
+        // § sft633bnn@gdwza
         assert_eq!(*log.lock().unwrap(), ["c", "b", "a"], "{}", ns.name);
     }
 }
@@ -155,7 +155,7 @@ async fn an_undo_without_attempts_left_fails_the_run() {
         let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "UndoFailed", "{}: {error}", ns.name);
-        // § dzbz2dz7v@xae3t
+        // § dzbz2dz7v@wwrxp
         assert!(
             error.message.contains("charge.undo"),
             "{}: {error}",
@@ -189,7 +189,7 @@ async fn a_saga_that_succeeds_leaves_its_steps_to_a_rollback() {
         let sub = internal::create(ns.store).await.unwrap();
         let error = rolled_back(&sub, &w).await;
         assert_eq!(error.kind, "RolledBack", "{}: {error}", ns.name);
-        // § sft633bnn.a@f5bq2
+        // § sft633bnn.a@pjrk5
         assert_eq!(*log.lock().unwrap(), ["b", "a"], "{}", ns.name);
     }
 }
@@ -280,6 +280,7 @@ async fn a_step_waiting_for_its_retry_raises_cancelled_and_its_undos_run() {
                 initial: Duration::from_secs(600),
                 max: Duration::from_secs(600),
                 multiplier: 1.0,
+                deadline: None,
             };
             let waited = c
                 .step("down", || async {
@@ -298,7 +299,7 @@ async fn a_step_waiting_for_its_retry_raises_cancelled_and_its_undos_run() {
         let sub = internal::create(ns.store).await.unwrap();
         let worker = script(&sub, &w).start().unwrap();
         let run = sub.start(&w, ()).await.unwrap();
-        // § vmk2ydwta.b@xywc4
+        // § vmk2ydwta.b@32kvr
         eventually("the step waits for its retry", async || {
             run.status().await.unwrap() == RunStatus::Suspended
         })

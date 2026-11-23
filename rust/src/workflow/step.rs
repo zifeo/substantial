@@ -2,6 +2,7 @@
 
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,25 +14,37 @@ use super::context::{Context, value};
 use super::schedule::RESERVED_STEP;
 use super::scheduler::{CallFuture, StepBody, StepSpec, Undo};
 use super::{Permanent, Retry, decode};
+use crate::clock::Clock;
 use crate::error::{Error, Failure, Result};
 use crate::names::check_step_name;
 use crate::proto::boundary::v1::{self as b, call::Call};
 use crate::proto::layout::v1::Amount;
 use crate::time::call_millis;
 
-/// The step attempt running: its step key, and what it charged so far.
+/// The step attempt running: its step key, what it charged so far, and its last heartbeat.
 #[derive(Clone)]
 pub(crate) struct LiveAttempt {
     key: String,
     charges: Arc<Mutex<Vec<Amount>>>,
+    clock: Clock,
+    /// The clock's `elapsed` at the last heartbeat, or at the attempt's start.
+    beat: Arc<AtomicI64>,
 }
 
 impl LiveAttempt {
-    pub(crate) fn new(key: String) -> Self {
+    pub(crate) fn new(key: String, clock: Clock) -> Self {
+        let beat = Arc::new(AtomicI64::new(clock.elapsed()));
         Self {
             key,
             charges: Arc::default(),
+            clock,
+            beat,
         }
+    }
+
+    /// The clock's `elapsed` at the attempt's last heartbeat, or at its start.
+    pub(crate) fn beats(&self) -> Arc<AtomicI64> {
+        self.beat.clone()
     }
 
     /// What the attempt charged, in call order.
@@ -53,6 +66,20 @@ pub fn step_key() -> String {
     ATTEMPT
         .try_with(|a| a.key.clone())
         .expect("step_key is called inside a step")
+}
+
+/// Tells the worker that the step attempt running is alive: a step with a `heartbeat_timeout`
+/// fails its attempt with a retryable `StepTimeout` once that long passed without one.
+///
+/// # Panics
+///
+/// Outside a step attempt, as `step_key`.
+pub fn heartbeat() {
+    // § vvp37rp40.a@xjk63
+    let beat = |a: &LiveAttempt| a.beat.store(a.clock.elapsed(), Ordering::SeqCst);
+    ATTEMPT
+        .try_with(beat)
+        .expect("heartbeat is called inside a step");
 }
 
 /// Adds `nano` nano-units of `currency` to the charges of the step attempt running, recorded with
@@ -142,6 +169,7 @@ impl Context {
             name: name.to_owned(),
             retry: None,
             timeout: None,
+            heartbeat_timeout: None,
             body,
             undo: None,
             reserved: false,
@@ -162,7 +190,7 @@ impl Context {
         self.step(name, move || {
             let f = f.clone();
             async move {
-                // § v4n6ja42e.b@yavew
+                // § v4n6ja42e.b@pmdc6
                 #[cfg(feature = "testing")]
                 crate::testing::threaded();
                 // The thread runs outside the attempt's task: it takes the attempt along, for
@@ -191,6 +219,7 @@ impl Context {
             name: name.to_owned(),
             retry: None,
             timeout: None,
+            heartbeat_timeout: None,
             body,
             undo: None,
             reserved: false,
@@ -206,6 +235,7 @@ pub struct Step<T> {
     name: String,
     retry: Option<Retry>,
     timeout: Option<Duration>,
+    heartbeat_timeout: Option<Duration>,
     body: StepBody,
     undo: Option<Undo>,
     /// Whether it may take the name `Context::schedule` records its fires under.
@@ -223,6 +253,14 @@ impl<T> Step<T> {
     /// a late attempt counts as failed, a retryable `StepTimeout`, and its result is discarded.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// The longest an attempt may go without `s::heartbeat()`, instead of its workflow's
+    /// `heartbeat_timeout`: an attempt silent for longer fails with a retryable `StepTimeout`.
+    /// `InvalidArgument` at the step's call when zero.
+    pub fn heartbeat_timeout(mut self, timeout: Duration) -> Self {
+        self.heartbeat_timeout = Some(timeout);
         self
     }
 
@@ -283,10 +321,23 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
             initial_ms: call_millis(r.initial),
             max_ms: call_millis(r.max),
             multiplier: r.multiplier,
+            deadline_ms: r.deadline.map(call_millis),
         });
-        // § aym52h8ch@9h2g0
+        // § aym52h8ch@yty9w
         let timeout = call_millis(self.timeout.unwrap_or(self.ctx.shared.step_timeout()));
         // § end aym52h8ch
+        // § vvp37rp40@1bepz
+        let heartbeat = self
+            .heartbeat_timeout
+            .or(self.ctx.shared.heartbeat_timeout());
+        // § end vvp37rp40
+        if heartbeat.is_some_and(|h| h.is_zero()) {
+            return Box::pin(async {
+                Err(Error::InvalidArgument(
+                    "a step's heartbeat_timeout must be positive".into(),
+                ))
+            });
+        }
         let options = b::StepOptions {
             retry,
             timeout_ms: Some(timeout),
@@ -300,9 +351,11 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for Step<T> {
         });
         let spec = StepSpec {
             body: self.body,
-            undo: self.undo.map(|u| (u, retry, timeout)),
+            heartbeat,
+            // § one vvp37rp40.b@7dh2b
+            undo: self.undo.map(|u| (u, retry, timeout, heartbeat)),
         };
-        // § vjy5p3exq@ykcs0
+        // § vjy5p3exq@61pn4
         let future = CallFuture::new(self.ctx.shared.clone(), call, Some(spec));
         Box::pin(async move { decode(value(future.await?)?) })
         // § end vjy5p3exq

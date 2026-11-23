@@ -53,7 +53,7 @@ where
     let ran = serde_json::from_str::<I>(&input)
         .map_err(Error::from)
         .and_then(|input| block_on(f(Context::new(), input)));
-    // § one .:ea0fw6qrw.a@y4v0y
+    // § one .:ea0fw6qrw.b@1m4xr
     let text = ran.and_then(|output| {
         to_text(&output).map_err(|e| Error::Json(format!("the result is not JSON: {e}")))
     });
@@ -72,7 +72,7 @@ where
 
 /// The JSON of a step's arguments, an array of them in order.
 pub fn encode_arguments<T: Serialize>(args: &T) -> Result<String> {
-    // § one .:ea0fw6qrw.a@r7fw3
+    // § one .:ea0fw6qrw.b@t113d
     to_text(args)
         .map_err(|e| Error::InvalidArgument(format!("the step's arguments are not JSON: {e}")))
 }

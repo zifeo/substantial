@@ -7,11 +7,13 @@ import type { MemoryStore } from "../stores/memory.ts";
 import { Ambiguous, create, Transient, withRetry } from "../stores/retry.ts";
 import {
   type Capabilities,
+  type Cas,
   type Create,
   type Listing,
   type ListOptions,
   refuseWait,
   type Store,
+  type StoreObject,
 } from "../stores/store.ts";
 import { never } from "./time.ts";
 import type { WorkerClock } from "./workers.ts";
@@ -85,12 +87,12 @@ export class FaultStore implements Store {
       if (clock.dead) return never();
     }
     if (world.time.ms < world.outageUntil) throw new Transient("the store is out");
-    // § one hz0ve24df.b@09n0a
+    // § one hz0ve24df.b@xttyj
     if (clock !== undefined && world.draw(kind, key, clock)) {
       const n = clock.tries.get(`${kind} ${key}`) ?? 0;
       const applied = kind === "create" && unit(world.seed, "applied", key, clock.id, n) < 0.5;
       // A create that found its key applied nothing: it counts as failed.
-      if (applied && (await apply()) === "created") {
+      if (applied && !["exists", "mismatch"].includes((await apply()) as string)) {
         world.counts.ambiguous += 1;
         throw new Ambiguous("chaos: a create applied, its answer lost");
       }
@@ -104,26 +106,42 @@ export class FaultStore implements Store {
     return withRetry(STORE_RETRY, () => this.#try(kind, key, apply), this.#sleep);
   }
 
-  async #create(key: string, data: Uint8Array): Promise<Create> {
-    const created = await this.#memory.create(key, data);
-    if (created === "created") {
+  async #create(key: string, data: Uint8Array, expiry: number | undefined): Promise<Create> {
+    const created = await this.#memory.create(key, data, expiry);
+    if (created !== "exists") {
       this.#world.writes += 1;
       this.#world.written(key, data);
     }
     return created;
   }
 
-  create(key: string, data: Uint8Array): Promise<Create> {
+  create(key: string, data: Uint8Array, expiry: number | undefined): Promise<Create> {
     return create(
       STORE_RETRY,
       data,
-      () => this.#try("create", key, () => this.#create(key, data)),
+      () => this.#try("create", key, () => this.#create(key, data, expiry)),
       () => this.#try("get", key, () => this.#memory.get(key)),
       this.#sleep,
     );
   }
 
-  get(key: string): Promise<Uint8Array | undefined> {
+  /** Chaos faults a compare-and-set as it does a get: it fails, never applied. */
+  cas(key: string, data: Uint8Array, etag: string, expiry: number | undefined): Promise<Cas> {
+    return this.#retry("cas", key, async () => {
+      const written = await this.#memory.cas(key, data, etag, expiry);
+      if (written !== "mismatch") {
+        this.#world.writes += 1;
+        this.#world.written(key, data);
+      }
+      return written;
+    });
+  }
+
+  checkExpiry(days: readonly number[]): Promise<void> {
+    return this.#memory.checkExpiry(days);
+  }
+
+  get(key: string): Promise<StoreObject | undefined> {
     return this.#retry("get", key, () => this.#memory.get(key));
   }
 

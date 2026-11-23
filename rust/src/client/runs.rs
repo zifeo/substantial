@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use super::{Substantial, datetime};
 use crate::core::PlanMachine;
-use crate::error::{Error, Result};
+use crate::error::{Error, Failure, Result};
 use crate::names::check_key;
 use crate::plan;
 use crate::proto::boundary::v1::{self as b, plan_input::Plan, plan_step::Step, runs};
@@ -18,6 +18,8 @@ pub enum WaitingOn {
     Inbox,
     /// Idle until a message comes, with no timer.
     Message,
+    /// Blocked by an error of its code, tried again at `due_at` (`RunInfo::error`).
+    Blocked,
 }
 
 impl std::fmt::Display for WaitingOn {
@@ -27,6 +29,7 @@ impl std::fmt::Display for WaitingOn {
             WaitingOn::Time => "time",
             WaitingOn::Inbox => "inbox",
             WaitingOn::Message => "message",
+            WaitingOn::Blocked => "blocked",
         })
     }
 }
@@ -40,6 +43,7 @@ impl TryFrom<b::Waiting> for WaitingOn {
             b::Waiting::Time => WaitingOn::Time,
             b::Waiting::Inbox => WaitingOn::Inbox,
             b::Waiting::Message => WaitingOn::Message,
+            b::Waiting::Blocked => WaitingOn::Blocked,
             b::Waiting::Unspecified => {
                 return Err(Error::Protocol("unspecified waiting".into()));
             }
@@ -56,14 +60,22 @@ pub struct RunInfo {
     /// When it is due next; `None` when it waits on messages alone.
     pub due_at: Option<chrono::DateTime<chrono::Utc>>,
     pub waiting_on: WaitingOn,
+    /// For a blocked run, the error of its latest block.
+    pub error: Option<Failure>,
 }
 
 impl TryFrom<b::RunInfo> for RunInfo {
     type Error = Error;
 
     fn try_from(info: b::RunInfo) -> Result<Self> {
+        let waiting_on = info.waiting().try_into()?;
+        let error = match info.blocked.and_then(|b| b.error) {
+            Some(error) => Some(Failure::try_from(error)?),
+            None => None,
+        };
         Ok(RunInfo {
-            waiting_on: info.waiting().try_into()?,
+            waiting_on,
+            error,
             chain: info.chain,
             run: info.run,
             version: info.version,

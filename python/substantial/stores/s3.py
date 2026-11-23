@@ -16,14 +16,20 @@ PAGE = 1000
 CONNECT_TIMEOUT = 5.0
 ATTEMPT_TIMEOUT = 60.0
 # § end gvqb04830.b
-WAIT_SECONDS = "x-substantial-wait-seconds"
-WAIT_ETAG = "x-substantial-wait-etag"
-LISTING_ETAG = "x-substantial-listing-etag"
+WAIT_SECONDS = "x-herald-wait-seconds"
+WAIT_ETAG = "x-herald-wait-etag"
+LISTING_ETAG = "x-herald-listing-etag"
 MAX_WAIT_SECONDS = 20
 # A region as AWS names them, a DNS label of lowercase letters, digits and hyphens.
 _REGION = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 _REGION_RULE = (
     "1 to 63 lowercase letters, digits and hyphens, neither starting nor ending with a hyphen"
+)
+# The suffix of an S3 directory bucket's name.
+DIRECTORY_BUCKET = "--x-s3"
+DIRECTORY_REFUSED = (
+    "names an S3 directory bucket, whose listings are not in byte order of the key as the store"
+    " contract requires: use a general purpose bucket"
 )
 _SCHEMES = {
     "s3": (False, "https"),
@@ -46,7 +52,7 @@ class S3Location:
 
     @staticmethod
     def parse(url: str) -> S3Location:
-        # § e9ern38bz.b@6k4dm
+        # § e9ern38bz.b@e84ge
         def invalid(why: str) -> ConfigError:
             return ConfigError(f"{url!r}: {why}")
 
@@ -70,6 +76,10 @@ class S3Location:
         bucket, _, namespace = parts.path.removeprefix("/").partition("/")
         if not bucket:
             raise invalid("names no bucket")
+        # § h1b3afst6@9tmbj
+        if bucket.endswith(DIRECTORY_BUCKET):
+            raise invalid(DIRECTORY_REFUSED)
+        # § end h1b3afst6
         if any(c == "" for c in namespace.split("/")):
             raise invalid("names no namespace, or one with an empty component")
         query: dict[str, str] = {}
@@ -103,22 +113,20 @@ def wait_headers(wait: ListWait | None, max_keys: int) -> dict[str, str]:
     )
     if not graphic:
         raise Permanent(f"the listing etag {wait.etag!r} cannot be sent in {WAIT_ETAG}")
-    # § gvqb04830.c@3z5aq
+    # § gvqb04830.d@tfqdz
     headers = {WAIT_SECONDS: str(wait.seconds)}
     if wait.etag is not None:
         headers[WAIT_ETAG] = wait.etag
     return headers
 
 
-async def result_created(store: Store, key: str) -> None:
-    """Returns once the `result` at `key` exists, holding waiting listings that take its key as
-    their prefix: a result waited on is seen as soon as it is created, in one request per
+async def listing_changed(store: Store, key: str, etag: str | None) -> str:
+    """The etag of a listing of `key` alone, waited on until it differs from `etag` or for
+    `MAX_WAIT_SECONDS`, and answered at once without one. A rewrite of the key changes the etag,
+    so a wait on a chain's head sees each commit as it lands, in one request per
     `MAX_WAIT_SECONDS` meanwhile."""
-    wait = ListWait(0)
-    while True:
-        page = await store.list(key, start_after=None, max_keys=1, wait=wait)
-        if key in page.keys:
-            return
-        if page.etag is None:
-            raise StoreFailure(f"a waiting listing answered without {LISTING_ETAG}")
-        wait = ListWait(MAX_WAIT_SECONDS, page.etag)
+    seconds = 0 if etag is None else MAX_WAIT_SECONDS
+    page = await store.list(key, start_after=None, max_keys=1, wait=ListWait(seconds, etag))
+    if page.etag is None:
+        raise StoreFailure(f"a waiting listing answered without {LISTING_ETAG}")
+    return page.etag

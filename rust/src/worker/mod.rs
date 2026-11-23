@@ -49,7 +49,7 @@ impl Worker {
         clock: Clock,
     ) -> Result<Self> {
         settings.validate()?;
-        let workflows = Workflows::new(workflows, settings.retention_min)?;
+        let workflows = Workflows::new(workflows)?;
         let running = Launch {
             store,
             workflows: &workflows,

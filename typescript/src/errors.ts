@@ -22,7 +22,7 @@ export function makeFailure(
   return { type, message, retryable, details: details as Record<string, unknown> };
 }
 
-// § rabbgjpb2@kmwya
+// § rabbgjpb2@z2tc8
 /** The base of every error Substantial raises, control flow excepted. */
 export class SubstantialError extends Error {
   constructor(message: string) {
@@ -31,7 +31,7 @@ export class SubstantialError extends Error {
   }
 }
 
-// § b7wsejcvb.b@bpv15
+// § b7wsejcvb.b@ae69b
 /** Control flow of Substantial: workflow code rethrows it, `isControl(e)`. */
 export class Control extends Error {
   constructor(message: string) {
@@ -70,17 +70,21 @@ export class ContinuedAsNew extends Control {
   /** JSON bytes. */
   readonly input: Uint8Array;
   readonly state: Uint8Array | undefined;
+  /** Into the highest version of its workflow the worker serves: a loop with `upgrade`. */
+  readonly highest: boolean;
   constructor(
     workflow: string | undefined,
     version: number | undefined,
     input: Uint8Array,
     state?: Uint8Array,
+    highest = false,
   ) {
     super("continued as new");
     this.workflow = workflow;
     this.version = version;
     this.input = input;
     this.state = state;
+    this.highest = highest;
   }
 }
 // § end b7wsejcvb.b
@@ -106,6 +110,22 @@ export class Failed extends SubstantialError {
     this.failure = failure;
   }
 }
+
+/** A failure the workflow's code raises on purpose: the run ends failed with exactly this type
+ * and message. */
+export class Fail extends SubstantialError {
+  readonly failure: Failure;
+  constructor(type: string, message: string) {
+    if (typeof type !== "string" || typeof message !== "string") {
+      throw new InvalidArgument(`Fail takes a type and a message, strings: ${type}, ${message}`);
+    }
+    super(`${type}: ${message}`);
+    this.failure = { type, message, retryable: false };
+  }
+}
+
+/** The run passed a limit of its history: the core ends it failed with this type. */
+export class HistoryTooLarge extends SubstantialError {}
 
 /** An undo had no attempt left; `step` is the undo's step, `<step>.undo`. */
 export class UndoFailed extends SubstantialError {
@@ -186,34 +206,17 @@ export function runFailedCause(type: string, details: unknown): Failure | undefi
 
 export class NonDeterminism extends SubstantialError {}
 export class NotInWorkflow extends SubstantialError {}
-/** `collected` when the id is taken by a run collected, `until` then. */
 export class RunExists extends SubstantialError {
-  readonly collected: boolean;
-  readonly until: Date | undefined;
-  constructor(id: string, until: Date | undefined) {
-    const by =
-      until === undefined
-        ? "another workflow, version or input"
-        : `a run collected, until ${until.toISOString()}`;
-    super(`id ${id} is taken by ${by}`);
-    this.collected = until !== undefined;
-    this.until = until;
+  constructor(id: string) {
+    super(`id ${id} is taken by another workflow, version or input`);
   }
 }
 export class InvalidArgument extends SubstantialError {}
 export class RunEnded extends SubstantialError {}
-/** `collected` when the chain's first run was collected, its id taken `until` then. */
+/** No such chain: it never existed, or it ended and its retention passed. */
 export class RunNotFound extends SubstantialError {
-  readonly collected: boolean;
-  readonly until: Date | undefined;
-  constructor(chain: string, until: Date | undefined) {
-    const collected =
-      until === undefined
-        ? ""
-        : `: it was collected, and its id is taken until ${until.toISOString()}`;
-    super(`no chain ${chain}${collected}`);
-    this.collected = until !== undefined;
-    this.until = until;
+  constructor(chain: string) {
+    super(`no chain ${chain}`);
   }
 }
 export class WaitTimeout extends SubstantialError {}
@@ -271,10 +274,29 @@ export function messageOf(e: unknown): string {
 
 /** The failure an error of the code ends its run with. */
 export function failureOf(e: unknown): Failure {
-  if (e instanceof StepFailed || e instanceof Failed) {
+  if (e instanceof StepFailed || e instanceof Failed || e instanceof Fail) {
     return e.failure;
   }
   if (e instanceof RolledBack) return { type: "RolledBack", message: e.reason, retryable: false };
-  // § one r3sd261h4.c@zdyf8
+  // § one r3sd261h4.c@4349e
   return { type: typeName(e), message: messageOf(e), retryable: false };
+}
+
+/** Whether an error the code lets out ends its run failed: a recorded outcome of a verb, the same
+ * at every replay. Any other error blocks the run. */
+export function endsRun(e: unknown): boolean {
+  // § dxgjekysz.d@mpdas
+  return (
+    e instanceof Fail ||
+    e instanceof StepFailed ||
+    e instanceof BudgetExceeded ||
+    e instanceof RolledBack ||
+    e instanceof UndoFailed ||
+    e instanceof HistoryTooLarge ||
+    e instanceof RunFailed ||
+    e instanceof WaitTimeout ||
+    e instanceof RunNotFound ||
+    e instanceof RunEnded ||
+    e instanceof Failed
+  );
 }

@@ -27,8 +27,36 @@ pub(super) fn decode<M: Message + Default>(world: &World, key: &str) -> Result<M
     M::decode(bytes).map_err(|e| Error::Protocol(format!("{key}: {e}")))
 }
 
-pub(super) fn start(world: &World, run: &str) -> Result<layout::Start> {
-    decode(world, &format!("runs/{run}/start"))
+/// The head of a run, its chain's through the pointer of a later run.
+pub(super) fn head(world: &World, id: &str) -> Result<layout::Head> {
+    let found: layout::Run = decode(world, &format!("runs/{id}"))?;
+    match found.kind {
+        Some(layout::run::Kind::Head(head)) => Ok(head),
+        Some(layout::run::Kind::Pointer(p)) => {
+            match decode::<layout::Run>(world, &format!("runs/{}", p.chain))?.kind {
+                Some(layout::run::Kind::Head(head)) => Ok(head),
+                _ => Err(Error::Protocol(format!("runs/{}: no head", p.chain))),
+            }
+        }
+        None => Err(Error::Protocol(format!(
+            "runs/{id}: neither head nor pointer"
+        ))),
+    }
+}
+
+/// Whether a head's run ended: its last segment holds an end.
+pub(super) fn ended(head: &layout::Head) -> bool {
+    use layout::event::Kind;
+    head.segments.last().is_some_and(|s| {
+        s.events.iter().any(|e| {
+            matches!(
+                e.kind,
+                Some(
+                    Kind::Completed(_) | Kind::Failed(_) | Kind::Cancelled(_) | Kind::Continued(_)
+                )
+            )
+        })
+    })
 }
 
 /// A `Substantial` of an environment: its clock, its ids and its workers are the environment's.
@@ -68,11 +96,7 @@ impl Attached {
     pub(crate) fn worker(&self, workflows: Vec<Untyped>, settings: Settings) -> Result<Worker> {
         self.world.check_runtime()?;
         settings.validate()?;
-        let worker = EnvWorker::start(
-            &self.world,
-            Workflows::new(workflows, settings.retention_min)?,
-            settings,
-        )?;
+        let worker = EnvWorker::start(&self.world, Workflows::new(workflows)?, settings)?;
         Ok(Worker(Kind::Env(worker)))
     }
 
@@ -114,12 +138,20 @@ fn named(start: &layout::Start) -> String {
 }
 
 fn waits_on(world: &World, run: &str) -> Result<String> {
-    let begun = start(world, run)?;
+    let current = head(world, run)?;
+    let begun = current.start.clone().unwrap_or_default();
     let mut what = Vec::new();
     if !serves(world, &begun) {
         what.push(format!(
             "workflow {}, which no worker serves",
             named(&begun)
+        ));
+    }
+    if let Some(block) = current.blocked {
+        let error = block.error.unwrap_or_default();
+        what.push(format!(
+            "a fix of its code, blocked by {}: {}",
+            error.r#type, error.message
         ));
     }
     for hold in lock(&world.holds).iter() {
@@ -128,7 +160,10 @@ fn waits_on(world: &World, run: &str) -> Result<String> {
     }
     for key in world.keys(&format!("queues/{}/due/", begun.workflow)) {
         let entry = key.rsplit('/').next().unwrap_or_default();
-        if entry.split('~').nth(1) == Some(run) {
+        let mut parts = entry.split('~').skip(1);
+        let (chain, tag) = (parts.next(), parts.next().unwrap_or_default());
+        // A message's entry, at the epoch, is no timer.
+        if chain == Some(begun.chain.as_str()) && tag.starts_with('s') {
             let at = DateTime::from_timestamp_millis(due_ms(entry)).expect("a time in range");
             what.push(format!("a timer due at {}", at.to_rfc3339()));
         }
@@ -137,10 +172,9 @@ fn waits_on(world: &World, run: &str) -> Result<String> {
         what.push("a message, or the end of a run it started".into());
     }
     let mut unserved = Vec::new();
-    for other in pending(world).iter().filter(|other| *other != run) {
-        let begun = start(world, other)?;
-        if !serves(world, &begun) {
-            unserved.push(format!("{other} ({})", named(&begun)));
+    for (other, begun) in pending(world)?.iter().filter(|(other, _)| other != run) {
+        if !serves(world, begun) {
+            unserved.push(format!("{other} ({})", named(begun)));
         }
     }
     if !unserved.is_empty() {
@@ -152,13 +186,17 @@ fn waits_on(world: &World, run: &str) -> Result<String> {
     Ok(what.join("; "))
 }
 
-/// The runs started and not ended.
-fn pending(world: &World) -> Vec<String> {
-    let keys = world.keys("runs/");
-    let ended = |run: &str| keys.contains(&format!("runs/{run}/result"));
-    (keys.iter())
-        .filter_map(|k| k.strip_prefix("runs/")?.strip_suffix("/start"))
-        .filter(|run| !run.contains('/') && !ended(run))
-        .map(str::to_owned)
-        .collect()
+/// The current runs of the chains not ended, with their start.
+fn pending(world: &World) -> Result<Vec<(String, layout::Start)>> {
+    let mut found = Vec::new();
+    for key in world.keys("runs/") {
+        let run: layout::Run = decode(world, &key)?;
+        if let Some(layout::run::Kind::Head(head)) = run.kind {
+            let start = head.start.clone().unwrap_or_default();
+            if key == format!("runs/{}", start.chain) && !ended(&head) {
+                found.push((head.run, start));
+            }
+        }
+    }
+    Ok(found)
 }

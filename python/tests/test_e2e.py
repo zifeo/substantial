@@ -8,7 +8,7 @@ import re
 from datetime import timedelta
 
 import pytest
-from conftest import KEYED_BY_NAME, LONG, eventually, script
+from conftest import KEYED_BY_NAME, LONG, blocked_with, eventually, script
 
 from substantial import (
     Context,
@@ -232,7 +232,7 @@ async def test_ids_of_a_hundred_bytes_work_end_to_end(store: Store) -> None:
         assert await run.result(timeout=LONG) == "hi"
 
 
-async def test_a_step_name_outside_the_rules_fails_the_run(store: Store) -> None:
+async def test_a_step_name_outside_the_rules_blocks_the_run(store: Store) -> None:
     @workflow(name="bad-step")
     async def bad(c: Context) -> int:
         return await c.step("a step", lambda: 1)
@@ -240,13 +240,10 @@ async def test_a_step_name_outside_the_rules_fails_the_run(store: Store) -> None
     sub = await Substantial._create(store)
     async with script(sub, [bad]):
         run = await sub.start(bad)
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-        assert failed.value.status == RunStatus.FAILED
-        assert failed.value.error.type == "InvalidArgument"
+        assert (await blocked_with(sub, run)).type == "InvalidArgument"
 
 
-async def test_a_message_no_handler_can_decode_fails_the_run(store: Store) -> None:
+async def test_a_message_no_handler_can_decode_blocks_the_run(store: Store) -> None:
     @workflow
     async def typed(c: Context) -> None:
         seen: list[int] = []
@@ -262,13 +259,10 @@ async def test_a_message_no_handler_can_decode_fails_the_run(store: Store) -> No
         run = await sub.start(typed)
         await run.send("n", 1)
         await run.send("n", "not a number")
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-        assert failed.value.status == RunStatus.FAILED
-        assert failed.value.error.type == "MessageDecode", failed.value
+        assert (await blocked_with(sub, run)).type == "MessageDecode"
 
 
-async def test_a_handler_that_raises_fails_the_run(store: Store) -> None:
+async def test_a_handler_that_raises_blocks_the_run(store: Store) -> None:
     @workflow
     async def refusing(c: Context) -> None:
         def take(n: int) -> None:
@@ -282,13 +276,12 @@ async def test_a_handler_that_raises_fails_the_run(store: Store) -> None:
     async with script(sub, [refusing]):
         run = await sub.start(refusing)
         await run.send("n", 99)
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-        assert failed.value.error.type == "MessageDecode", failed.value
-        assert "99 is too large" in failed.value.error.message
+        error = await blocked_with(sub, run)
+        assert error.type == "MessageDecode", error
+        assert "99 is too large" in error.message
 
 
-async def test_a_handler_that_returns_an_awaitable_fails_the_run(store: Store) -> None:
+async def test_a_handler_that_returns_an_awaitable_blocks_the_run(store: Store) -> None:
     async def later() -> None: ...
 
     @workflow
@@ -300,10 +293,9 @@ async def test_a_handler_that_returns_an_awaitable_fails_the_run(store: Store) -
     async with script(sub, [deferring]):
         run = await sub.start(deferring)
         await run.send("n", 1)
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-        assert failed.value.error.type == "MessageDecode", failed.value
-        assert "a handler returned an awaitable" in failed.value.error.message
+        error = await blocked_with(sub, run)
+        assert error.type == "MessageDecode", error
+        assert "a handler returned an awaitable" in error.message
 
 
 CHARGES: list[str] = []

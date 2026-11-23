@@ -136,8 +136,8 @@ test(
     assert.equal(await together.result(), 2);
     assert.equal(await apart.result(), 2);
     // One replay took both messages, in one segment; the other run woke for each.
-    assert.equal(worldOf(env).keys("runs/together/log/").length, 1);
-    assert.equal(worldOf(env).keys("runs/apart/log/").length, 2);
+    const segments = (chain: string) => worldOf(env).head(chain).segments.length;
+    assert.deepEqual([segments("together"), segments("apart")], [1, 2]);
   }),
 );
 

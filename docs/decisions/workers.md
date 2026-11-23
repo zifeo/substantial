@@ -1,6 +1,6 @@
 # Workers
 
-A worker serves the workflows it is given: it scans their queues, claims runs, replays them and runs their steps (I-18). What it scans and claims, and when, is the core's agent ([lifecycle](core/lifecycle.md)); the host owns its settings, its signals and grace, its health, and the values every worker of a namespace must agree on.
+A worker serves the workflows it is given: it scans their queues, leases runs, replays them and runs their steps (I-18). What it scans and claims, and when, is the core's agent ([lifecycle](core/lifecycle.md)); the host owns its settings, its signals and grace, its health, and the values every worker of a namespace must agree on.
 
 ## Presets
 
@@ -17,18 +17,31 @@ Implicit defaults were rejected: a preset names every value, `script` for a proc
 **§ <a id="ry26kkc7v">ry26kkc7v</a> Every worker of every host gives the core the same fixed values:**
 
 | (a) | `commit_every` | 0 s: each step is committed as it returns |
-| (b) | `claim_skew` | 5 s, added to a claim's expiry for the clocks of two workers |
+| (b) | `claim_skew` | 5 s, added to a lease's expiry for the clocks of two workers |
 | (c) | `dedup_window` | 7 days |
-| (d) | `tombstone` | 7 days |
+| (d) | ~~`tombstone`~~ | ~~7 days~~ |
 | (e) | `due_page` | 1,000 entries, an S3 page, and never more |
+| (f) | `max_history_bytes` | 128 MiB of a run's history |
+| (g) | `max_history_events` | 100,000 events of a run's history |
+| (h) | `max_replay_inbox` | 10,000 messages consumed in one replay |
+| (i) | `max_seen` | 100,000 message ids a continuation carries |
+| (j) | `history_warn_percent` | 80, the share of a limit past which a commit warns |
 
-`commit_every` 0 is what makes a crash lose only the steps running at that moment (I-1). The 7 days of `dedup_window` and `tombstone` are the stall the tombstone covers: "while no client or worker stalls more than 7 days between reading an id and writing under it" (I-16), and a redelivery "Long after" its run was collected raises `RunExists` for those 7 days ([Integration](../integration.md#webhooks-applied-once)).
+`commit_every` 0 is what makes a crash lose only the steps running at that moment (I-1). The 7 days of `dedup_window` are how long a consumed message id is remembered: a sender that retries within them delivers once, and a workflow's send redone after a crash delivers once while workers serve due entries within them ([b7g8bsqaq](core/messages.md#b7g8bsqaq)). The id of a run is refused for as long as the run is kept, its retention, so no setting of its own bounds it. The history limits bound what one replay reads and holds, so one run that grows without end fails alone instead of exhausting its worker ([vkpvtd54g](values.md#vkpvtd54g)): 128 MiB and 100,000 events are far past what a loop keeps before it continues, 1,000 segments or 8 MiB, and 10,000 messages a replay and 100,000 carried ids far past an actor's inbox, so only a run that never compresses meets them, and the warning at 80 % leaves time to fix it.
 
-**§ <a id="pn928919v">pn928919v</a> A `retention`, a worker's or a workflow's, is at least `retention_min` and at most 100 years, 36,500 days, and any other raises `ConfigError`.**
+A blocked run waits for a deploy, so trying it often buys nothing: a script, which runs and exits, tries it again soon, and a service, which waits for the next deploy, rarely.
+
+**§ <a id="ksmvx2mfk">ksmvx2mfk</a> A blocked run is tried again after a backoff that starts at 1 s in `script` and 10 s in `service` and doubles at each block in a row, up to 1 min in `script` and 10 min in `service`.**
+
+**§ <a id="pn928919v">pn928919v</a> ~~A `retention`, a worker's or a workflow's, is at least `retention_min` and at most 100 years, 36,500 days, and any other raises `ConfigError`.~~**
+
+- (a) ~~A workflow's `retention` overrides the worker's, and versions of one name that give one worker different retentions raise `ConfigError`.~~
+
+The store removes an ended run by the expiry its end writes, in whole days, as S3 lifecycle rules count them, so a retention is whole days, from the least expiry a store keeps to the most every store takes ([r4rsq6spn.c](store.md#r4rsq6spn)). Each retention in use on S3 needs its lifecycle rule ([cfdckf61n](adapters.md#cfdckf61n)), so a handful of values serve best.
+
+**§ <a id="pnctq6tx8">pnctq6tx8</a> A `retention`, a worker's or a workflow's, is a whole number of days from 1 to 36,500, and any other raises `ConfigError`.**
 
 - (a) A workflow's `retention` overrides the worker's, and versions of one name that give one worker different retentions raise `ConfigError`.
-
-The upper bound has a reason beyond taste: a collection's time is written in its due key with a four-digit year, and every host's clock must hold it (I-18).
 
 ## Leaving and dying
 
@@ -45,6 +58,10 @@ The upper bound has a reason beyond taste: a collection's time is written in its
 - (a) `alive` is whether its loop runs, and `error` the error that killed it, else none.
 
 - (b) A store that fails never stops a worker: a failed operation drops the replay and the run is tried again.
+
+Two workers' clocks may differ by up to `claim_skew` ([ry26kkc7v.b](#ry26kkc7v)). A worker whose clock is further behind would decide timers, timeouts and claims against a past that the run's history has already passed, so it leaves the run to a worker whose clock is right, rather than take it over.
+
+**§ <a id="kr6b4hm8k">kr6b4hm8k</a> A worker whose clock is behind the time of a run's last segment by more than `claim_skew` leaves the run alone, its wakeups kept for another worker, and never takes it over.**
 
 ## Waking
 

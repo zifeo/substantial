@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from substantial._proto import layout
 from substantial.clock import Clock
-from substantial.errors import InvalidArgument
+from substantial.errors import InvalidArgument, ProtocolError
 from substantial.observe import Metering
 from substantial.plan import Ulids
 from substantial.stores.memory import _NAMESPACES, MemoryStore
@@ -50,19 +50,48 @@ def _loop(loop: asyncio.AbstractEventLoop) -> str:
 
 class Due(NamedTuple):
     """The earliest due entries of a workflow: of any kind, and of those that wake a run, a
-    timer or a message; a collection entry sets no worker's timer, the next scan serves it."""
+    timer or a message, which every due entry is."""
 
     any: int
     wake: int | None
 
 
 def due_ms(entry: str) -> int:
-    """The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<run>~<tag>`."""
+    """The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<chain>~<tag>`."""
     t = entry.partition("~")[0]
     seconds = calendar.timegm(
         (int(t[0:4]), int(t[4:6]), int(t[6:8]), int(t[9:11]), int(t[11:13]), int(t[13:15]))
     )
     return seconds * 1000 + int(t[15:18])
+
+
+def head_of(world: World, id: str) -> layout.Head:
+    """The head of a run, its chain's through the pointer of a later run."""
+    found = layout.Run.FromString(_object(world, f"runs/{id}"))
+    if found.WhichOneof("kind") == "pointer":
+        found = layout.Run.FromString(_object(world, f"runs/{found.pointer.chain}"))
+    if found.WhichOneof("kind") != "head":
+        raise ProtocolError(f"runs/{id}: no head")
+    return found.head
+
+
+def _object(world: World, key: str) -> bytes:
+    data = world.memory.object(key)
+    if data is None:
+        raise ProtocolError(f"{key} is missing")
+    return data
+
+
+def last_events(head: layout.Head) -> list[layout.Event]:
+    return list(head.segments[-1].events) if head.segments else []
+
+
+_ENDS = ("completed", "failed", "cancelled", "continued")
+
+
+def ended(head: layout.Head) -> bool:
+    """Whether a head's run ended: its last segment holds an end."""
+    return any(e.WhichOneof("kind") in _ENDS for e in last_events(head))
 
 
 class World:
@@ -72,13 +101,13 @@ class World:
         self.loop = asyncio.get_running_loop()
         # The prices and the observer of the environment and its clients, which its workers take.
         self.metering = metering
-        self.memory = MemoryStore(ns)
         self.time = Time(ms)
+        self.memory = MemoryStore(ns, clock=lambda: self.time.ms)
         self.time.skip = self.skip_scans
         self.chaos = chaos
         self.seed = 0 if chaos is None else chaos.seed
         # One core seed for every worker: a run's random then depends on the run alone.
-        # § hz0ve24df@pnc9c
+        # § hz0ve24df@ca7c0
         self.core_seed = derive(self.seed, "core")
         self.ulids = Ulids(lambda ms: int.from_bytes(derive(self.seed, "ulid", ms)[:10]))
         # § end hz0ve24df
@@ -98,6 +127,9 @@ class World:
         # Off only in the test that compares a scenario with and without skipping.
         self.skipping = True
         self.skipped = 0
+        # For the replay tester: each run its replays checked against their history, with the
+        # divergence they met; `None` in every other environment, whose replays go on.
+        self.checks: dict[str, str | None] | None = None
 
     def check_loop(self) -> None:
         """Refuses a call from another event loop than the environment's, which would wait on
@@ -115,16 +147,20 @@ class World:
         return FaultStore(self, self.memory, clock)
 
     def written(self, key: str, data: bytes) -> None:
-        """Records a failed end as its result is written: retention may collect it before
+        """Records a failed end as its head is written: its expiry may remove it before
         `check`."""
-        parts = key.split("/")
-        if len(parts) != 3 or parts[0] != "runs" or parts[2] != "result":
+        id = key.removeprefix("runs/")
+        if id == key or "/" in id:
             return
-        result = layout.Result.FromString(data)
-        if result.status == layout.STATUS_FAILED:
-            run = parts[1]
-            chain = layout.Start.FromString(self.memory._objects[f"runs/{run}/start"]).chain
-            self.failed[run] = (chain, f"{run} ({result.error.type}: {result.error.message})")
+        found = layout.Run.FromString(data)
+        if found.WhichOneof("kind") != "head":
+            return
+        head = found.head
+        failed = [e.failed.error for e in last_events(head) if e.HasField("failed")]
+        if failed:
+            error = failed[0]
+            failure = f"{head.run} ({error.type}: {error.message})"
+            self.failed[head.run] = (head.start.chain, failure)
 
     def drop(self) -> None:
         _NAMESPACES.pop(self.ns, None)
@@ -168,7 +204,7 @@ class World:
         return None
 
     def keys(self, prefix: str) -> list[str]:
-        return sorted(k for k in self.memory._objects if k.startswith(prefix))
+        return self.memory.keys(prefix)
 
     def earliest_due(self) -> dict[str, Due]:
         """The earliest due entries of each workflow, as of the last write."""
@@ -180,9 +216,8 @@ class World:
                 if kind != "due":
                     continue
                 at = due_ms(entry)
-                wakes = not entry.endswith(("~c", "~g"))
                 was = due.get(workflow, Due(at, None))
-                wake = was.wake if not wakes else at if was.wake is None else min(was.wake, at)
+                wake = at if was.wake is None else min(was.wake, at)
                 due[workflow] = Due(min(was.any, at), wake)
             self._due = (self.writes, due)
         return self._due[1]

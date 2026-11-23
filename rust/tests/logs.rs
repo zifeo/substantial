@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use bytes::Bytes;
-use common::{LONG, script};
+use common::{Hidden, LONG, script};
 use substantial::__internal::{
-    self as internal, Capabilities, Create, ListWait, Listing, MemoryStore, Store, StoreFuture,
+    self as internal, Capabilities, Cas, Create, ListWait, Listing, MemoryStore, Object, Store,
+    StoreFuture,
 };
 use substantial::{Context, Error, Permanent, Result, Substantial, Workflow, step, workflow};
 use tracing::field::{Field, Visit};
@@ -94,7 +95,7 @@ async fn logs_are_muted_while_a_replay_walks_the_history() {
         .filter(|(target, ..)| target == "substantial::workflow::log")
         .map(|(.., message)| message)
         .collect();
-    // § twravbm6m.c@sbf78
+    // § rbwstdetg.c@j4k09
     assert_eq!(logged, ["before", "woke", "after 3"]);
 }
 
@@ -154,6 +155,64 @@ async fn a_failed_or_cancelled_run_logs_one_warning() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_blocked_run_logs_a_warning_at_each_block() {
+    lines();
+    let sub = Substantial::create("memory://logs-blocked").await.unwrap();
+    let broken = Workflow::without_input("broken", |_c| async move {
+        Err::<(), _>(anyhow::anyhow!("a bug").into())
+    });
+    let worker = script(&sub, &broken)
+        .hidden("blocked_initial", "50ms")
+        .start()
+        .unwrap();
+    let run = sub.start(&broken, ()).id("blocks").await.unwrap();
+    common::blocked(&sub, &broken, run.chain()).await;
+    worker.shutdown().await.unwrap();
+    let logged = about("blocks");
+    assert!(!logged.is_empty());
+    // § yp7fv5sa7.c@94p36
+    for line in logged {
+        assert_eq!(
+            line,
+            (Level::WARN, "run blocks blocked: Error: a bug".into())
+        );
+    }
+    // § end yp7fv5sa7.c
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_near_a_limit_of_its_history_logs_a_warning_once() {
+    lines();
+    let sub = Substantial::create("memory://logs-near").await.unwrap();
+    let clocking = Workflow::without_input("clocking", |c| async move {
+        for _ in 0..100 {
+            c.now().await?;
+        }
+        Ok(())
+    });
+    let worker = script(&sub, &clocking)
+        .hidden("max_history_events", 10)
+        .hidden("history_warn_percent", 50)
+        .start()
+        .unwrap();
+    let run = sub.start(&clocking, ()).id("near").await.unwrap();
+    assert!(run.result().timeout(LONG).await.is_err());
+    worker.shutdown().await.unwrap();
+    let near: Vec<_> = (about("near").into_iter())
+        .filter(|(_, m)| m.contains(" near its "))
+        .collect();
+    // § yp7fv5sa7.c@n8444
+    assert_eq!(
+        near,
+        [(
+            Level::WARN,
+            "run near near its history_events limit: 12 of 10".into()
+        )]
+    );
+    // § end yp7fv5sa7.c
+}
+
 /// A memory store whose listings of due entries panic once armed, as a bug in the worker would.
 struct Panicking {
     inner: MemoryStore,
@@ -167,10 +226,27 @@ impl Store for Panicking {
     fn open(&self) -> futures::future::BoxFuture<'_, Result<()>> {
         Store::open(&self.inner)
     }
-    fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
-        self.inner.create(key, bytes)
+    fn create<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Create> {
+        self.inner.create(key, bytes, expiry)
     }
-    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>> {
+    fn cas<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        etag: &'a str,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Cas> {
+        self.inner.cas(key, bytes, etag, expiry)
+    }
+    fn check_expiry<'a>(&'a self, days: &'a [u32]) -> futures::future::BoxFuture<'a, Result<()>> {
+        self.inner.check_expiry(days)
+    }
+    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Object>> {
         self.inner.get(key)
     }
     fn list<'a>(

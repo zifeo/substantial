@@ -6,6 +6,7 @@
  */
 
 export { Env, type EnvOptions, type HoldOptions, Unchecked } from "./env.ts";
+export { type Replayed, type ReplayOptions, replay } from "./replay.ts";
 export { Chaos, type Faults } from "./store.ts";
 export { Stuck } from "./time.ts";
 export type { EnvWorker, Hold } from "./workers.ts";

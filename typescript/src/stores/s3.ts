@@ -5,8 +5,17 @@ import { sent } from "./attempts.ts";
 import { type CredentialsArg, Keys } from "./credentials.ts";
 import * as retry from "./retry.ts";
 import { Ambiguous, Fault, Refused, Transient } from "./retry.ts";
-import type { Capabilities, Create, Listing, ListOptions, ListWait, Store } from "./store.ts";
-import { refuseWait, StoreFailure } from "./store.ts";
+import type {
+  Capabilities,
+  Cas,
+  Create,
+  Listing,
+  ListOptions,
+  ListWait,
+  Store,
+  StoreObject,
+} from "./store.ts";
+import { checkAllDays, checkDays, refuseWait, StoreFailure } from "./store.ts";
 
 /** `@aws-sdk/client-s3`, loaded when an S3 store is opened. */
 export type Sdk = typeof import("@aws-sdk/client-s3");
@@ -17,14 +26,19 @@ export const PAGE = 1000;
 const CONNECT_MS = 5_000;
 const ATTEMPT_MS = 60_000;
 // § end gvqb04830.b
-export const WAIT_SECONDS = "x-substantial-wait-seconds";
-export const WAIT_ETAG = "x-substantial-wait-etag";
-export const LISTING_ETAG = "x-substantial-listing-etag";
+export const WAIT_SECONDS = "x-herald-wait-seconds";
+export const WAIT_ETAG = "x-herald-wait-etag";
+export const LISTING_ETAG = "x-herald-listing-etag";
 const MAX_WAIT_SECONDS = 20;
 /** A region as AWS names them, a DNS label of lowercase letters, digits and hyphens. */
 const REGION = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const REGION_RULE =
   "1 to 63 lowercase letters, digits and hyphens, neither starting nor ending with a hyphen";
+/** The suffix of an S3 directory bucket's name. */
+const DIRECTORY_BUCKET = "--x-s3";
+const DIRECTORY_REFUSED =
+  "names an S3 directory bucket, whose listings are not in byte order of the key as the store " +
+  "contract requires: use a general purpose bucket";
 const SCHEMES: Record<string, { wait: boolean; protocol: "https" | "http" }> = {
   "s3:": { wait: false, protocol: "https" },
   "s3+http:": { wait: false, protocol: "http" },
@@ -43,7 +57,7 @@ export interface S3Location {
 }
 
 export function parseS3Url(url: string): S3Location {
-  // § e9ern38bz.b@e8ght
+  // § e9ern38bz.b@7v1pe
   const invalid = (why: string) => new ConfigError(`${url}: ${why}`);
   let parsed: URL;
   try {
@@ -63,6 +77,9 @@ export function parseS3Url(url: string): S3Location {
   const host = `${parsed.hostname}${port}`;
   const [bucket = "", ...rest] = parsed.pathname.replace(/^\//, "").split("/");
   if (bucket === "") throw invalid("names no bucket");
+  // § h1b3afst6@m7g81
+  if (bucket.endsWith(DIRECTORY_BUCKET)) throw invalid(DIRECTORY_REFUSED);
+  // § end h1b3afst6
   if (rest.length === 0 || rest.some((c) => c === "")) {
     throw invalid("names no namespace, or one with an empty component");
   }
@@ -101,10 +118,74 @@ export function waitHeaders(wait: ListWait | undefined, maxKeys: number): Record
   if (wait.etag !== undefined && !/^[\x21-\x7e]+$/.test(wait.etag)) {
     throw new Refused(`the listing etag ${JSON.stringify(wait.etag)} cannot be sent`);
   }
-  // § gvqb04830.c@ekjdr
+  // § gvqb04830.d@0fa6r
   const headers: Record<string, string> = { [WAIT_SECONDS]: String(wait.seconds) };
   if (wait.etag !== undefined) headers[WAIT_ETAG] = wait.etag;
   return headers;
+}
+
+const RETENTION_TAG = "substantial-retention";
+
+/** The tag of a write's expiry, which a lifecycle rule of the bucket expires. */
+function tagging(expiry: number | undefined): { Tagging?: string } {
+  // § c4fyc3wyk@k6r2p
+  return expiry === undefined ? {} : { Tagging: `${RETENTION_TAG}=${expiry}d` };
+}
+
+/** A lifecycle rule as the SDK answers it, the fields the check reads. */
+interface Rule {
+  Status?: string;
+  Expiration?: { Days?: number };
+  Filter?: {
+    Prefix?: string;
+    Tag?: { Key?: string; Value?: string };
+    ObjectSizeGreaterThan?: number;
+    ObjectSizeLessThan?: number;
+    And?: {
+      Prefix?: string;
+      Tags?: { Key?: string; Value?: string }[];
+      ObjectSizeGreaterThan?: number;
+      ObjectSizeLessThan?: number;
+    };
+  };
+}
+
+/** Whether `rule` expires, after `days`, the keys under `prefix` tagged with that expiry. */
+function expires(rule: Rule, prefix: string, days: number): boolean {
+  // § cfdckf61n@fkyxw
+  const value = `${days}d`;
+  const tagged = (tags: { Key?: string; Value?: string }[]) =>
+    tags.length === 1 && tags[0]?.Key === RETENTION_TAG && tags[0]?.Value === value;
+  const filter = rule.Filter;
+  let filtered = false;
+  if (filter?.And !== undefined && filter.Tag === undefined) {
+    const and = filter.And;
+    filtered =
+      and.ObjectSizeGreaterThan === undefined &&
+      and.ObjectSizeLessThan === undefined &&
+      prefix.startsWith(and.Prefix ?? "") &&
+      tagged(and.Tags ?? []);
+  } else if (filter?.And === undefined && filter?.Tag !== undefined) {
+    filtered = tagged([filter.Tag]);
+  }
+  return filtered && rule.Status === "Enabled" && rule.Expiration?.Days === days;
+}
+
+/** Why a store would never expire the keys of `missing` expiries, with the rules to add as JSON. */
+function missingRules(bucket: string, prefix: string, missing: number[]): string {
+  const rules = missing.map((d) => ({
+    Expiration: { Days: d },
+    Filter: { And: { Prefix: prefix, Tags: [{ Key: RETENTION_TAG, Value: `${d}d` }] } },
+    ID: `substantial-expire-${d}d`,
+    Status: "Enabled",
+  }));
+  const tags = missing.map((d) => `${d}d`).join(", ");
+  return (
+    `the bucket ${JSON.stringify(bucket)} has no lifecycle rule expiring the keys under ` +
+    `${JSON.stringify(prefix)} tagged ${RETENTION_TAG}=${tags} after as many days, so they would ` +
+    `never expire: add these rules to its lifecycle configuration, which needs the permission ` +
+    `s3:PutLifecycleConfiguration: ${JSON.stringify({ Rules: rules })}`
+  );
 }
 
 /** The S3 error answer `e` is; any other failure is thrown again. */
@@ -234,21 +315,23 @@ export class S3Store implements Store {
     }
   }
 
-  async #put(key: string, data: Uint8Array): Promise<Create> {
-    // § gvqb04830@mttyb
+  async #put(key: string, data: Uint8Array, expiry: number | undefined): Promise<Create> {
+    // § gvqb04830@mqpeq
     const what = `create ${key}`;
     const command = new this.#sdk.PutObjectCommand({
       Bucket: this.#bucket,
       Key: this.#full(key),
       Body: data,
       IfNoneMatch: "*",
+      ...tagging(expiry),
     });
+    let written: string | undefined;
     try {
-      await this.#send(
+      ({ ETag: written } = await this.#send(
         what,
         (m) => new Ambiguous(m),
         (o) => this.#client.send(command, o),
-      );
+      ));
     } catch (e) {
       const r = refusal(what, e);
       if (r.status === 412) return "exists";
@@ -257,31 +340,99 @@ export class S3Store implements Store {
       if (r.status >= 500 || r.status === 408) throw new Ambiguous(r.message);
       throw new Refused(r.message);
     }
-    return "created";
+    // An answer without its ETag is read back, as one lost.
+    if (written === undefined)
+      throw new Ambiguous(`${what}: created without an ETag in the answer`);
+    return { etag: written };
   }
 
-  async #read(key: string): Promise<Uint8Array | undefined> {
+  async #putIfMatch(
+    key: string,
+    data: Uint8Array,
+    etag: string,
+    expiry: number | undefined,
+  ): Promise<Cas> {
+    // § c4fyc3wyk@px2rs
+    const what = `cas ${key}`;
+    const command = new this.#sdk.PutObjectCommand({
+      Bucket: this.#bucket,
+      Key: this.#full(key),
+      Body: data,
+      IfMatch: etag,
+      ...tagging(expiry),
+    });
+    let written: string | undefined;
+    try {
+      ({ ETag: written } = await this.#send(
+        what,
+        (m) => new Ambiguous(m),
+        (o) => this.#client.send(command, o),
+      ));
+    } catch (e) {
+      const r = refusal(what, e);
+      // § c4fyc3wyk.a@76mf2
+      if (r.status === 412 || (r.status === 404 && r.code === "NoSuchKey")) return "mismatch";
+      if (r.status === 409 || r.status === 429) throw new Transient(r.message);
+      if (r.status >= 500 || r.status === 408) throw new Ambiguous(r.message);
+      throw new Refused(r.message);
+      // § end c4fyc3wyk.a
+    }
+    // § one c4fyc3wyk.b@9wxxt
+    if (written === undefined)
+      throw new Ambiguous(`${what}: written without an ETag in the answer`);
+    return { etag: written };
+  }
+
+  async #read(key: string): Promise<StoreObject | undefined> {
     const what = `get ${key}`;
     const command = new this.#sdk.GetObjectCommand({ Bucket: this.#bucket, Key: this.#full(key) });
     let body: { transformToByteArray(): Promise<Uint8Array> } | undefined;
+    let etag: string | undefined;
     try {
-      ({ Body: body } = await this.#send(what, transient, (o) => this.#client.send(command, o)));
+      ({ Body: body, ETag: etag } = await this.#send(what, transient, (o) =>
+        this.#client.send(command, o),
+      ));
     } catch (e) {
       const r = refusal(what, e);
-      // § one gvqb04830.a@x07cg
+      // § one gvqb04830.a@my2rp
       if (r.status === 404 && r.code === "NoSuchKey") return undefined;
       throw statusFault(r);
     }
     if (body === undefined) throw new Transient(`${what}: an answer without a body`);
+    let data: Uint8Array;
     try {
-      return await body.transformToByteArray();
+      data = await body.transformToByteArray();
     } catch (e) {
       throw new Transient(`${what}: ${messageOf(e)}`);
+    }
+    if (etag === undefined) throw new Refused(`${what}: answered without an ETag`);
+    return { data, etag };
+  }
+
+  /** The bucket's lifecycle rules, none when it has no configuration. */
+  async #lifecycle(): Promise<Rule[]> {
+    const what = `lifecycle of ${this.#bucket}`;
+    const command = new this.#sdk.GetBucketLifecycleConfigurationCommand({ Bucket: this.#bucket });
+    try {
+      const { Rules } = await this.#send(what, transient, (o) => this.#client.send(command, o));
+      return (Rules ?? []) as Rule[];
+    } catch (e) {
+      const r = refusal(what, e);
+      if (r.code === "NoSuchLifecycleConfiguration") return [];
+      // § cfdckf61n.a@ctkz4
+      if (r.status === 403) {
+        throw new Refused(
+          `reading the lifecycle rules of the bucket ${JSON.stringify(this.#bucket)} needs the ` +
+            `permission s3:GetLifecycleConfiguration: ${r.message}`,
+        );
+      }
+      // § end cfdckf61n.a
+      throw statusFault(r);
     }
   }
 
   async #listOnce(prefix: string, options: ListOptions): Promise<Listing> {
-    // § dfd6vt90h.c@hcw2j
+    // § dfd6vt90h.c@8m2y9
     const { startAfter, maxKeys, wait } = options;
     const keys: string[] = [];
     let etag: string | undefined;
@@ -332,7 +483,7 @@ export class S3Store implements Store {
       after = this.#full(keys[keys.length - 1] as string);
     }
     if (wait !== undefined && !etag) {
-      // § gvqb04830.c@vdrfj
+      // § gvqb04830.d@s3h2e
       throw new Refused(`a waiting listing of ${prefix} answered without ${LISTING_ETAG}`);
     }
     return etag === undefined
@@ -356,17 +507,47 @@ export class S3Store implements Store {
     }
   }
 
-  create(key: string, data: Uint8Array): Promise<Create> {
+  async create(key: string, data: Uint8Array, expiry: number | undefined): Promise<Create> {
+    checkDays(expiry);
     const bytes = data.slice();
     return retry.create(
       this.#retry,
       bytes,
-      () => this.#put(key, bytes),
+      () => this.#put(key, bytes, expiry),
       () => this.#read(key),
     );
   }
 
-  get(key: string): Promise<Uint8Array | undefined> {
+  async cas(key: string, data: Uint8Array, etag: string, expiry: number | undefined): Promise<Cas> {
+    checkDays(expiry);
+    const bytes = data.slice();
+    return retry.cas(
+      this.#retry,
+      bytes,
+      etag,
+      () => this.#putIfMatch(key, bytes, etag, expiry),
+      () => this.#read(key),
+    );
+  }
+
+  async checkExpiry(days: readonly number[]): Promise<void> {
+    checkAllDays(days);
+    let rules: Rule[];
+    try {
+      rules = await retry.withRetry(this.#retry, () => this.#lifecycle());
+    } catch (e) {
+      if (e instanceof StoreFailure) throw new ConfigError(e.message);
+      throw e;
+    }
+    const missing = [...new Set(days)]
+      .filter((d) => !rules.some((r) => expires(r, this.#prefix, d)))
+      .sort((a, b) => a - b);
+    if (missing.length > 0) {
+      throw new ConfigError(missingRules(this.#bucket, this.#prefix, missing));
+    }
+  }
+
+  get(key: string): Promise<StoreObject | undefined> {
     return retry.withRetry(this.#retry, () => this.#read(key));
   }
 
@@ -388,23 +569,20 @@ export class S3Store implements Store {
   }
 }
 
-/** Resolves once the `result` at `key` exists, holding waiting listings that take its key as
- * their prefix: a result waited on is seen as soon as it is created, in one request per
- * `MAX_WAIT_SECONDS` meanwhile; or once `deadline`, a `performance.now()`, has passed. `signal`
- * aborts the listing in flight and ends the wait. */
-export async function resultCreated(
+/** The etag of a listing of `key` alone, waited on until it differs from `etag` or for
+ * `MAX_WAIT_SECONDS`, and answered at once without one. A rewrite of the key changes the etag, so
+ * a wait on a chain's head sees each commit as it lands, in one request per `MAX_WAIT_SECONDS`
+ * meanwhile. `signal` aborts the listing in flight. */
+export async function listingChanged(
   store: Store,
   key: string,
-  deadline: number,
+  etag: string | undefined,
   signal: AbortSignal,
-): Promise<void> {
-  let wait: ListWait = { seconds: 0 };
-  while (performance.now() < deadline && !signal.aborted) {
-    const page = await store.list(key, { maxKeys: 1, wait, signal });
-    if (page.keys.includes(key)) return;
-    if (page.etag === undefined) {
-      throw new StoreFailure(`a waiting listing answered without ${LISTING_ETAG}`);
-    }
-    wait = { seconds: MAX_WAIT_SECONDS, etag: page.etag };
+): Promise<string> {
+  const wait: ListWait = etag === undefined ? { seconds: 0 } : { seconds: MAX_WAIT_SECONDS, etag };
+  const page = await store.list(key, { maxKeys: 1, wait, signal });
+  if (page.etag === undefined) {
+    throw new StoreFailure(`a waiting listing answered without ${LISTING_ETAG}`);
   }
+  return page.etag;
 }

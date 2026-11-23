@@ -1,4 +1,4 @@
-// § j67tqxstm@qdad0
+// § j67tqxstm@gc5r9
 // § j67tqxstm.a@efxfv
 package substantial:wasm@0.1.0;
 // § end j67tqxstm.a
@@ -62,6 +62,11 @@ interface context {
     random: func() -> call;
     uuid: func() -> call;
     publish: func(key: string, value: string) -> result<_, raised>;
+    /// Whether the code takes the branch of the change `id`: true when the run first reaches it
+    /// live, and at every replay of a history that recorded it; false at a replay of a history
+    /// recorded before the code asked. An `id` outside the rules of a step name, or reserved,
+    /// raises `InvalidArgument`.
+    patched: func(id: string) -> result<bool, raised>;
     chain: func() -> string;
 
     enum level {
@@ -94,7 +99,10 @@ interface workflow {
 
     /// How the code's run ends, when it does not return a value. A failure equal, field by field,
     /// details text included, to one a verb raised ends the run with the error the host raised,
-    /// such as a `StepFailed` with its cause; any other ends it failed with that failure.
+    /// such as a `StepFailed` with its cause, or blocks it, as a `NonDeterminism`; any other failure
+    /// of type `Json`, `InvalidArgument` or `NonDeterminism`, a bug the code's own checks found,
+    /// blocks the run, recording nothing; any other is the code's own failure, `Fail`, which ends
+    /// it failed with that failure.
     variant end {
         failed(failure),
         cancelled(string),

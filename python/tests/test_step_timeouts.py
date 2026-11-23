@@ -14,6 +14,7 @@ from test_replay import Harness
 
 from substantial import (
     Context,
+    Fail,
     Failure,
     InvalidArgument,
     Permanent,
@@ -116,7 +117,7 @@ async def test_a_failed_run_holds_the_cause_of_the_step_that_failed_it() -> None
 
     @workflow
     async def refusing(c: Context) -> None:
-        raise Declined("not today")
+        raise Fail("Declined", "not today")
 
     @workflow
     async def ordering(c: Context) -> list[object]:

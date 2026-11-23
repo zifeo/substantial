@@ -29,12 +29,13 @@ pub use as_workflow::{AsWorkflow, IntoWorkflows};
 pub(crate) use canonical::{argument_json, input_object, to_json};
 pub use child::{ChainResult, Child, SendFromWorkflow, StartChild};
 pub use context::{Context, Receive, WaitUntil};
+pub use iterate::Iterate;
 pub use log::Log;
 pub use messages::Handlers;
 pub use poll::Poll;
-pub use schedule::Cron;
+pub use schedule::{Cron, Schedule};
 pub(crate) use step::{LiveAttempt, with_attempt};
-pub use step::{Step, charge, step_key};
+pub use step::{Step, charge, heartbeat, step_key};
 pub use var::Var;
 
 use crate::cost::Budget;
@@ -69,7 +70,8 @@ pub struct Workflow<O> {
     name: String,
     version: Option<u32>,
     step_timeout: Option<Duration>,
-    retention: Option<Duration>,
+    heartbeat_timeout: Option<Duration>,
+    retention: Option<u32>,
     budget: Option<Budget>,
     run: Arc<Run>,
     output: PhantomData<fn() -> O>,
@@ -81,6 +83,7 @@ impl<O> Clone for Workflow<O> {
             name: self.name.clone(),
             version: self.version,
             step_timeout: self.step_timeout,
+            heartbeat_timeout: self.heartbeat_timeout,
             retention: self.retention,
             budget: self.budget.clone(),
             run: self.run.clone(),
@@ -102,7 +105,7 @@ impl<O: Serialize + Send + 'static> Workflow<O> {
             let f = f.clone();
             Box::pin(async move {
                 let input: I = serde_json::from_slice(&input)?;
-                // § one g039jvy6k.a@bpb7b
+                // § one dxgjekysz.a@7wyrn
                 Ok(to_json(&f(c, input).await?)?)
             })
         };
@@ -110,6 +113,7 @@ impl<O: Serialize + Send + 'static> Workflow<O> {
             name: name.to_owned(),
             version: None,
             step_timeout: None,
+            heartbeat_timeout: None,
             retention: None,
             budget: None,
             run: Arc::new(run),
@@ -149,11 +153,25 @@ impl<O> Workflow<O> {
         self
     }
 
-    /// How long its runs are kept after their chain ends, instead of the worker's `retention`:
-    /// a duration (`s::days(90)`); one under an hour or over 100 years is a
-    /// `ConfigError` when a worker starts with it.
-    pub fn with_retention(mut self, retention: Duration) -> Self {
-        self.retention = Some(retention);
+    /// The longest an attempt of its steps and undos that set none may go without
+    /// `s::heartbeat()`; none unless set.
+    /// # Panics
+    ///
+    /// If `timeout` is zero, as a declaration error.
+    pub fn with_heartbeat_timeout(mut self, timeout: Duration) -> Self {
+        assert!(
+            !timeout.is_zero(),
+            "workflow {:?}: heartbeat_timeout must be positive",
+            self.name
+        );
+        self.heartbeat_timeout = Some(timeout);
+        self
+    }
+
+    /// How many whole days its runs are kept after they end, instead of the worker's
+    /// `retention`; under 1 or over 36,500 is a `ConfigError` when a worker starts with it.
+    pub fn with_retention(mut self, days: u32) -> Self {
+        self.retention = Some(days);
         self
     }
 
@@ -176,7 +194,11 @@ impl<O> Workflow<O> {
         self.step_timeout
     }
 
-    pub fn retention(&self) -> Option<Duration> {
+    pub fn heartbeat_timeout(&self) -> Option<Duration> {
+        self.heartbeat_timeout
+    }
+
+    pub fn retention(&self) -> Option<u32> {
         self.retention
     }
 
@@ -190,6 +212,7 @@ impl<O> Workflow<O> {
             name: self.name.clone(),
             version: self.version,
             step_timeout: self.step_timeout,
+            heartbeat_timeout: self.heartbeat_timeout,
             retention: self.retention,
             budget: self.budget.clone(),
             run: self.run.clone(),
@@ -207,8 +230,7 @@ impl<O> Workflow<O> {
 pub(crate) struct Workflows(Arc<HashMap<(String, Option<u32>), Untyped>>);
 
 impl Workflows {
-    /// The workflows of a worker whose least retention is `retention_min`.
-    pub(crate) fn new(workflows: Vec<Untyped>, retention_min: Duration) -> Result<Self> {
+    pub(crate) fn new(workflows: Vec<Untyped>) -> Result<Self> {
         let mut map = HashMap::new();
         for w in workflows {
             let name = w.name.clone();
@@ -226,16 +248,12 @@ impl Workflows {
             ));
         }
         // The core keeps one retention per name.
-        let mut retentions: HashMap<&str, Option<Duration>> = HashMap::new();
+        let mut retentions: HashMap<&str, Option<u32>> = HashMap::new();
         for ((name, _), w) in &map {
             if let Some(r) = w.retention {
-                check_retention(
-                    r,
-                    retention_min,
-                    &format!("the retention of workflow {name:?}"),
-                )?;
+                check_retention(r, &format!("the retention of workflow {name:?}"))?;
             }
-            // § one pn928919v.a@gsy12
+            // § one pnctq6tx8.a@nrpqy
             if *retentions.entry(name).or_insert(w.retention) != w.retention {
                 return Err(Error::ConfigError(format!(
                     "the versions of workflow {name:?} give different retentions"
@@ -246,11 +264,16 @@ impl Workflows {
     }
 
     /// The retention the workflows of `name` give, the same for all its versions.
-    pub(crate) fn retention(&self, name: &str) -> Option<Duration> {
+    pub(crate) fn retention(&self, name: &str) -> Option<u32> {
         self.0
             .iter()
             .find(|((n, _), _)| n == name)
             .and_then(|(_, w)| w.retention)
+    }
+
+    /// The retentions the workflows give, those that give one.
+    pub(crate) fn retentions(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.values().filter_map(|w| w.retention)
     }
 
     // § one pjrbw31h4@srryr
@@ -272,6 +295,9 @@ pub struct Retry {
     pub initial: Duration,
     pub max: Duration,
     pub multiplier: f64,
+    /// From the start of the step's first attempt, no attempt starts past it, and each runs at
+    /// most until it; `None` for none.
+    pub deadline: Option<Duration>,
 }
 
 impl Retry {
@@ -294,6 +320,12 @@ impl Retry {
                 "multiplier must be at least 1: {}",
                 self.multiplier
             )));
+        }
+        if self.deadline.is_some_and(|d| d.is_zero()) {
+            // § s0a5x1qed.a@g45bm
+            return Err(Error::InvalidArgument(
+                "a retry's deadline must be positive".into(),
+            ));
         }
         Ok(())
     }
@@ -350,7 +382,9 @@ pub(crate) fn decode<T: DeserializeOwned>(v: Option<layout::Value>) -> Result<T>
 /// The failure a workflow's error ends its run with.
 pub(crate) fn failure_of(e: &Error) -> Failure {
     match e {
-        Error::Failed(f) | Error::StepFailed { error: f, .. } => f.clone(),
+        Error::Failed(f) | Error::Fail(f) | Error::Code(f) | Error::StepFailed { error: f, .. } => {
+            f.clone()
+        }
         Error::RolledBack(reason) => Failure {
             kind: "RolledBack".into(),
             message: reason.clone(),
@@ -369,6 +403,9 @@ pub(crate) fn failure_of(e: &Error) -> Failure {
 fn error_kind(e: &Error) -> &'static str {
     match e {
         Error::Failed(_) => "Failed",
+        Error::Fail(_) => "Fail",
+        Error::Code(_) => "Error",
+        Error::HistoryTooLarge(_) => "HistoryTooLarge",
         Error::StepFailed { .. } => "StepFailed",
         Error::Cancelled(_) => "Cancelled",
         Error::RolledBack(_) => "RolledBack",

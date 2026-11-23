@@ -9,7 +9,7 @@ import signal
 from datetime import timedelta
 
 import pytest
-from conftest import LONG, Recording, eventually, script
+from conftest import LONG, Recording, eventually, script, value
 
 from substantial import (
     ConfigError,
@@ -25,6 +25,8 @@ from substantial import (
     step,
     workflow,
 )
+from substantial._proto import layout
+from substantial.clock import Clock
 from substantial.errors import Trap
 from substantial.machines import AgentMachine
 from substantial.stores import Store
@@ -167,15 +169,22 @@ async def test_create_and_open_check_the_layout(store: Store) -> None:
     await Substantial._create(store)
     await Substantial._create(store)
     await Substantial._open(store)
-    assert await store.get("substantial.json") == b'{"layout":2,"encoding":"protobuf"}'
+    assert await value(store, "substantial.json") == b'{"layout":3,"encoding":"protobuf"}'
     # A namespace of the layout before, with its partitions: drained by the version that wrote
     # it, never opened by this one.
     old = MemoryStore("worker-layout-1")
-    await old.create("probe/exclusive", b"")
+    await old.create("probe/exclusive", b"", expiry=None)
     marker = b'{"layout":1,"encoding":"protobuf","partitions":4,"hash":"xxh3-64"}'
-    await old.create("substantial.json", marker)
+    await old.create("substantial.json", marker, expiry=None)
     for opened in (Substantial._open(old), Substantial._create(old)):
         with pytest.raises(LayoutError, match="has layout 1"):
+            await opened
+    # A namespace of Substantial 0.3, layout 2: never read, as nothing migrates it.
+    previous = MemoryStore("worker-layout-2")
+    await previous.create("probe/exclusive", b"", expiry=None)
+    await previous.create("substantial.json", b'{"layout":2,"encoding":"protobuf"}', expiry=None)
+    for opened in (Substantial._open(previous), Substantial._create(previous)):
+        with pytest.raises(ConfigError, match=r"has layout 2, written by Substantial 0\.3"):
             await opened
     with pytest.raises(ConfigError):
         await Substantial.open("s3://bucket/ns", credentials="env")
@@ -183,12 +192,45 @@ async def test_create_and_open_check_the_layout(store: Store) -> None:
 
 async def test_a_store_that_accepts_two_creates_fails_the_probe() -> None:
     class Overwriting(MemoryStore):
-        async def create(self, key: str, data: bytes) -> str:
+        async def create(self, key: str, data: bytes, *, expiry: int | None) -> str:
             await self.delete(key)
-            return await super().create(key, data)
+            return await super().create(key, data, expiry=expiry)
 
-    with pytest.raises(LayoutError):
+    with pytest.raises(ConfigError, match="its creates are not exclusive"):
         await Substantial._create(Overwriting("probe-overwrite"))
+
+
+async def test_openers_at_once_each_probe_keys_of_their_own() -> None:
+    store = Recording(MemoryStore("probe-own"))
+    await Substantial._create(store)
+    await asyncio.gather(*(Substantial._open(store) for _ in range(4)))
+    # § mgfgmd25p.e@b5w5q
+    probes = [(k, e) for k, e in store.writes if k.startswith("probe/")]
+    ids = {k.split("/")[1] for k, _ in probes}
+    assert len(ids) == 5, f"one id per opener: {probes}"
+    assert all(len(id) == 26 for id in ids), ids
+    left = await store.list("probe/", start_after=None, max_keys=10, wait=None)
+    assert left.keys == []
+    # § end mgfgmd25p.e
+    # § mgfgmd25p.g@zve3c
+    assert all(expiry == 1 for _, expiry in probes), probes
+    # § end mgfgmd25p.g
+
+
+async def test_a_worker_checks_the_rule_of_the_probe_keys_at_start() -> None:
+    @workflow
+    async def quick(c: Context) -> int:
+        return 1
+
+    store = Recording(MemoryStore("probe-rule"))
+    sub = await Substantial._create(store)
+    async with script(sub, [quick], retention=30):
+        run = await sub.start(quick)
+        assert await run.result(timeout=LONG) == 1
+    # § cfdckf61n.c@f62yg
+    [days] = store.checked
+    assert 30 in days and 1 in days, days
+    # § end cfdckf61n.c
 
 
 @pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
@@ -308,3 +350,33 @@ async def test_result_polls_up_to_max_interval() -> None:
         assert len(gets) > 20, len(gets)
         with pytest.raises(InvalidArgument, match="max_interval"):
             await run.result(max_interval=timedelta(0))
+
+
+class HourAhead(Clock):
+    """The real clock, an hour ahead."""
+
+    def now(self) -> layout.Time:
+        return layout.Time(ms=super().now().ms + 3_600_000)
+
+
+async def test_a_message_from_a_sender_whose_clock_is_ahead_is_consumed_at_once() -> None:
+    @workflow
+    async def waiting_for_go(c: Context) -> int:
+        return await c.receive("go")
+
+    @workflow
+    async def sending_go(c: Context, to: str) -> int:
+        await c.send(to, "go", 7)
+        return 0
+
+    async with Substantial.create("memory://sender-ahead") as sub, script(sub, [waiting_for_go]):
+        # An hour ahead: a message keyed by its sender's time would not be due for an hour.
+        ahead = script(sub, [sending_go])
+        ahead._clock = HourAhead()
+        async with ahead:
+            run = await sub.start(waiting_for_go)
+            sender = await sub.start(sending_go, {"to": run.chain})
+            await sender.result(timeout=LONG)
+            # § d9vmk6y6y.e@r3g2g
+            assert await run.result(timeout=LONG) == 7
+            # § end d9vmk6y6y.e

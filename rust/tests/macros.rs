@@ -20,6 +20,7 @@ const RETRY: Retry = Retry {
     initial: std::time::Duration::from_millis(10),
     max: std::time::Duration::from_millis(10),
     multiplier: 1.0,
+    deadline: None,
 };
 
 #[step(retry = RETRY)]
@@ -133,10 +134,10 @@ async fn declared_workflows_steps_and_handlers() {
     run.send("name", "ada").await.unwrap();
     run.send("up", 2).await.unwrap();
     let (attempt, total, up, names, refused) = run.result().timeout(LONG).await.unwrap();
-    // § one a03w2yqkz@99695
+    // § one a03w2yqkz@wnaqn
     assert_eq!((attempt, total, up), (2, 10, 3));
     assert_eq!(names, ["ada"]);
-    // § a03w2yqkz.a@zazrk
+    // § a03w2yqkz.a@70kwh
     assert!(refused.contains("never"), "{refused}");
     assert_eq!(
         ATTEMPTS.load(Ordering::SeqCst),

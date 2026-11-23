@@ -13,7 +13,7 @@ COMMIT_KIND_UNSPECIFIED: CommitKind
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Call(_message.Message):
-    __slots__ = ["bind", "cancel", "chain_result", "child_result", "cost", "end", "iterate", "now", "publish", "random", "receive", "rollback", "saga_begin", "saga_end", "send", "should_continue_as_new", "sleep_ms", "sleep_until", "start", "step", "uuid", "wait"]
+    __slots__ = ["bind", "cancel", "chain_result", "child_result", "cost", "end", "iterate", "now", "patched", "publish", "random", "receive", "rollback", "saga_begin", "saga_end", "send", "should_continue_as_new", "sleep_ms", "sleep_until", "start", "step", "uuid", "wait"]
     class Bind(_message.Message):
         __slots__ = ["names"]
         NAMES_FIELD_NUMBER: _ClassVar[int]
@@ -53,19 +53,26 @@ class Call(_message.Message):
         run: str
         value: _layout_pb2.Value
         def __init__(self, run: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ...) -> None: ...
+    class ShouldContinue(_message.Message):
+        __slots__ = ["highest"]
+        HIGHEST_FIELD_NUMBER: _ClassVar[int]
+        highest: bool
+        def __init__(self, highest: bool = ...) -> None: ...
     class Start(_message.Message):
-        __slots__ = ["budget", "id", "input", "version", "workflow"]
+        __slots__ = ["abandon", "budget", "id", "input", "version", "workflow"]
+        ABANDON_FIELD_NUMBER: _ClassVar[int]
         BUDGET_FIELD_NUMBER: _ClassVar[int]
         ID_FIELD_NUMBER: _ClassVar[int]
         INPUT_FIELD_NUMBER: _ClassVar[int]
         VERSION_FIELD_NUMBER: _ClassVar[int]
         WORKFLOW_FIELD_NUMBER: _ClassVar[int]
+        abandon: bool
         budget: _layout_pb2.Budget
         id: str
         input: _layout_pb2.Value
         version: int
         workflow: str
-        def __init__(self, workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ..., budget: _Optional[_Union[_layout_pb2.Budget, _Mapping]] = ...) -> None: ...
+        def __init__(self, workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ..., budget: _Optional[_Union[_layout_pb2.Budget, _Mapping]] = ..., abandon: bool = ...) -> None: ...
     class Step(_message.Message):
         __slots__ = ["name", "options"]
         NAME_FIELD_NUMBER: _ClassVar[int]
@@ -86,6 +93,7 @@ class Call(_message.Message):
     END_FIELD_NUMBER: _ClassVar[int]
     ITERATE_FIELD_NUMBER: _ClassVar[int]
     NOW_FIELD_NUMBER: _ClassVar[int]
+    PATCHED_FIELD_NUMBER: _ClassVar[int]
     PUBLISH_FIELD_NUMBER: _ClassVar[int]
     RANDOM_FIELD_NUMBER: _ClassVar[int]
     RECEIVE_FIELD_NUMBER: _ClassVar[int]
@@ -108,6 +116,7 @@ class Call(_message.Message):
     end: End
     iterate: _layout_pb2.Value
     now: _boundary_pb2.Empty
+    patched: str
     publish: _layout_pb2.Published
     random: _boundary_pb2.Empty
     receive: str
@@ -115,14 +124,14 @@ class Call(_message.Message):
     saga_begin: _boundary_pb2.Empty
     saga_end: Call.SagaEnd
     send: Call.Send
-    should_continue_as_new: _boundary_pb2.Empty
+    should_continue_as_new: Call.ShouldContinue
     sleep_ms: int
     sleep_until: _layout_pb2.Time
     start: Call.Start
     step: Call.Step
     uuid: _boundary_pb2.Empty
     wait: Call.Wait
-    def __init__(self, step: _Optional[_Union[Call.Step, _Mapping]] = ..., now: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., random: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., uuid: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., sleep_ms: _Optional[int] = ..., sleep_until: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., wait: _Optional[_Union[Call.Wait, _Mapping]] = ..., receive: _Optional[str] = ..., bind: _Optional[_Union[Call.Bind, _Mapping]] = ..., start: _Optional[_Union[Call.Start, _Mapping]] = ..., child_result: _Optional[str] = ..., send: _Optional[_Union[Call.Send, _Mapping]] = ..., publish: _Optional[_Union[_layout_pb2.Published, _Mapping]] = ..., saga_begin: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., saga_end: _Optional[_Union[Call.SagaEnd, _Mapping]] = ..., rollback: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., iterate: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., should_continue_as_new: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., end: _Optional[_Union[End, _Mapping]] = ..., cost: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., cancel: _Optional[_Union[Call.Cancel, _Mapping]] = ..., chain_result: _Optional[_Union[Call.ChainResult, _Mapping]] = ...) -> None: ...
+    def __init__(self, step: _Optional[_Union[Call.Step, _Mapping]] = ..., now: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., random: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., uuid: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., sleep_ms: _Optional[int] = ..., sleep_until: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., wait: _Optional[_Union[Call.Wait, _Mapping]] = ..., receive: _Optional[str] = ..., bind: _Optional[_Union[Call.Bind, _Mapping]] = ..., start: _Optional[_Union[Call.Start, _Mapping]] = ..., child_result: _Optional[str] = ..., send: _Optional[_Union[Call.Send, _Mapping]] = ..., publish: _Optional[_Union[_layout_pb2.Published, _Mapping]] = ..., saga_begin: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., saga_end: _Optional[_Union[Call.SagaEnd, _Mapping]] = ..., rollback: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., iterate: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., should_continue_as_new: _Optional[_Union[Call.ShouldContinue, _Mapping]] = ..., end: _Optional[_Union[End, _Mapping]] = ..., cost: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., cancel: _Optional[_Union[Call.Cancel, _Mapping]] = ..., chain_result: _Optional[_Union[Call.ChainResult, _Mapping]] = ..., patched: _Optional[str] = ...) -> None: ...
 
 class Called(_message.Message):
     __slots__ = ["done", "failed", "live", "messages", "occurrence", "pending", "run", "saga", "undos", "value"]
@@ -159,28 +168,32 @@ class Called(_message.Message):
     def __init__(self, pending: _Optional[int] = ..., messages: _Optional[_Union[Called.Messages, _Mapping]] = ..., run: _Optional[str] = ..., saga: _Optional[int] = ..., undos: _Optional[_Union[Called.Undos, _Mapping]] = ..., value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., done: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., failed: _Optional[_Union[_layout_pb2.Failure, _Mapping]] = ..., occurrence: _Optional[int] = ..., live: bool = ...) -> None: ...
 
 class Commit(_message.Message):
-    __slots__ = ["consumed", "kind", "segment"]
+    __slots__ = ["consumed", "kind", "near_limits", "segment"]
     CONSUMED_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
+    NEAR_LIMITS_FIELD_NUMBER: _ClassVar[int]
     SEGMENT_FIELD_NUMBER: _ClassVar[int]
     consumed: _containers.RepeatedScalarFieldContainer[str]
     kind: CommitKind
+    near_limits: _containers.RepeatedCompositeFieldContainer[LimitUse]
     segment: _layout_pb2.Segment
-    def __init__(self, kind: _Optional[_Union[CommitKind, str]] = ..., segment: _Optional[_Union[_layout_pb2.Segment, _Mapping]] = ..., consumed: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, kind: _Optional[_Union[CommitKind, str]] = ..., segment: _Optional[_Union[_layout_pb2.Segment, _Mapping]] = ..., consumed: _Optional[_Iterable[str]] = ..., near_limits: _Optional[_Iterable[_Union[LimitUse, _Mapping]]] = ...) -> None: ...
 
 class End(_message.Message):
     __slots__ = ["cancelled", "completed", "continued", "failed"]
     class Continued(_message.Message):
-        __slots__ = ["input", "state", "version", "workflow"]
+        __slots__ = ["highest", "input", "state", "version", "workflow"]
+        HIGHEST_FIELD_NUMBER: _ClassVar[int]
         INPUT_FIELD_NUMBER: _ClassVar[int]
         STATE_FIELD_NUMBER: _ClassVar[int]
         VERSION_FIELD_NUMBER: _ClassVar[int]
         WORKFLOW_FIELD_NUMBER: _ClassVar[int]
+        highest: bool
         input: _layout_pb2.Value
         state: _layout_pb2.Value
         version: int
         workflow: str
-        def __init__(self, workflow: _Optional[str] = ..., input: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., state: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., version: _Optional[int] = ...) -> None: ...
+        def __init__(self, workflow: _Optional[str] = ..., input: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., state: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., version: _Optional[int] = ..., highest: bool = ...) -> None: ...
     CANCELLED_FIELD_NUMBER: _ClassVar[int]
     COMPLETED_FIELD_NUMBER: _ClassVar[int]
     CONTINUED_FIELD_NUMBER: _ClassVar[int]
@@ -205,6 +218,16 @@ class InboxMessage(_message.Message):
     key: str
     def __init__(self, key: _Optional[str] = ..., body: _Optional[_Union[_layout_pb2.Message, _Mapping]] = ...) -> None: ...
 
+class LimitUse(_message.Message):
+    __slots__ = ["limit", "max", "used"]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    MAX_FIELD_NUMBER: _ClassVar[int]
+    USED_FIELD_NUMBER: _ClassVar[int]
+    limit: str
+    max: int
+    used: int
+    def __init__(self, limit: _Optional[str] = ..., used: _Optional[int] = ..., max: _Optional[int] = ...) -> None: ...
+
 class Message(_message.Message):
     __slots__ = ["id", "name", "value"]
     ID_FIELD_NUMBER: _ClassVar[int]
@@ -216,7 +239,7 @@ class Message(_message.Message):
     def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ...) -> None: ...
 
 class Next(_message.Message):
-    __slots__ = ["child_ended", "commit", "deliver", "execute", "idle", "live", "resolve", "store", "wait_steps"]
+    __slots__ = ["blocked", "child_ended", "claim", "commit", "deliver", "execute", "idle", "live", "resolve", "store", "wait_steps"]
     class Execute(_message.Message):
         __slots__ = ["attempt", "call", "timeout_ms"]
         ATTEMPT_FIELD_NUMBER: _ClassVar[int]
@@ -233,7 +256,9 @@ class Next(_message.Message):
         call: int
         resolution: Resolution
         def __init__(self, call: _Optional[int] = ..., resolution: _Optional[_Union[Resolution, _Mapping]] = ...) -> None: ...
+    BLOCKED_FIELD_NUMBER: _ClassVar[int]
     CHILD_ENDED_FIELD_NUMBER: _ClassVar[int]
+    CLAIM_FIELD_NUMBER: _ClassVar[int]
     COMMIT_FIELD_NUMBER: _ClassVar[int]
     DELIVER_FIELD_NUMBER: _ClassVar[int]
     EXECUTE_FIELD_NUMBER: _ClassVar[int]
@@ -242,7 +267,9 @@ class Next(_message.Message):
     RESOLVE_FIELD_NUMBER: _ClassVar[int]
     STORE_FIELD_NUMBER: _ClassVar[int]
     WAIT_STEPS_FIELD_NUMBER: _ClassVar[int]
+    blocked: _layout_pb2.Failure
     child_ended: str
+    claim: _boundary_pb2.Empty
     commit: Commit
     deliver: Message
     execute: Next.Execute
@@ -251,7 +278,7 @@ class Next(_message.Message):
     resolve: Next.Resolve
     store: _boundary_pb2.StoreOp
     wait_steps: WaitSteps
-    def __init__(self, resolve: _Optional[_Union[Next.Resolve, _Mapping]] = ..., deliver: _Optional[_Union[Message, _Mapping]] = ..., execute: _Optional[_Union[Next.Execute, _Mapping]] = ..., commit: _Optional[_Union[Commit, _Mapping]] = ..., wait_steps: _Optional[_Union[WaitSteps, _Mapping]] = ..., idle: _Optional[_Union[Idle, _Mapping]] = ..., child_ended: _Optional[str] = ..., store: _Optional[_Union[_boundary_pb2.StoreOp, _Mapping]] = ..., live: bool = ...) -> None: ...
+    def __init__(self, resolve: _Optional[_Union[Next.Resolve, _Mapping]] = ..., deliver: _Optional[_Union[Message, _Mapping]] = ..., execute: _Optional[_Union[Next.Execute, _Mapping]] = ..., commit: _Optional[_Union[Commit, _Mapping]] = ..., wait_steps: _Optional[_Union[WaitSteps, _Mapping]] = ..., idle: _Optional[_Union[Idle, _Mapping]] = ..., child_ended: _Optional[str] = ..., store: _Optional[_Union[_boundary_pb2.StoreOp, _Mapping]] = ..., blocked: _Optional[_Union[_layout_pb2.Failure, _Mapping]] = ..., claim: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., live: bool = ...) -> None: ...
 
 class Outcome(_message.Message):
     __slots__ = ["error", "value"]
@@ -262,18 +289,20 @@ class Outcome(_message.Message):
     def __init__(self, value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., error: _Optional[_Union[_layout_pb2.Failure, _Mapping]] = ...) -> None: ...
 
 class Prices(_message.Message):
-    __slots__ = ["create", "currency", "delete", "get", "list"]
+    __slots__ = ["cas", "create", "currency", "delete", "get", "list"]
+    CAS_FIELD_NUMBER: _ClassVar[int]
     CREATE_FIELD_NUMBER: _ClassVar[int]
     CURRENCY_FIELD_NUMBER: _ClassVar[int]
     DELETE_FIELD_NUMBER: _ClassVar[int]
     GET_FIELD_NUMBER: _ClassVar[int]
     LIST_FIELD_NUMBER: _ClassVar[int]
+    cas: int
     create: int
     currency: str
     delete: int
     get: int
     list: int
-    def __init__(self, currency: _Optional[str] = ..., create: _Optional[int] = ..., get: _Optional[int] = ..., list: _Optional[int] = ..., delete: _Optional[int] = ...) -> None: ...
+    def __init__(self, currency: _Optional[str] = ..., create: _Optional[int] = ..., get: _Optional[int] = ..., list: _Optional[int] = ..., delete: _Optional[int] = ..., cas: _Optional[int] = ...) -> None: ...
 
 class Resolution(_message.Message):
     __slots__ = ["cancelled", "error", "value"]
@@ -286,26 +315,30 @@ class Resolution(_message.Message):
     def __init__(self, value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., error: _Optional[_Union[_layout_pb2.Failure, _Mapping]] = ..., cancelled: _Optional[str] = ...) -> None: ...
 
 class Retention(_message.Message):
-    __slots__ = ["ms"]
-    MS_FIELD_NUMBER: _ClassVar[int]
-    ms: int
-    def __init__(self, ms: _Optional[int] = ...) -> None: ...
+    __slots__ = ["days"]
+    DAYS_FIELD_NUMBER: _ClassVar[int]
+    days: int
+    def __init__(self, days: _Optional[int] = ...) -> None: ...
 
 class RetryPolicy(_message.Message):
-    __slots__ = ["initial_ms", "max_attempts", "max_ms", "multiplier"]
+    __slots__ = ["deadline_ms", "initial_ms", "max_attempts", "max_ms", "multiplier"]
+    DEADLINE_MS_FIELD_NUMBER: _ClassVar[int]
     INITIAL_MS_FIELD_NUMBER: _ClassVar[int]
     MAX_ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
     MAX_MS_FIELD_NUMBER: _ClassVar[int]
     MULTIPLIER_FIELD_NUMBER: _ClassVar[int]
+    deadline_ms: int
     initial_ms: int
     max_attempts: int
     max_ms: int
     multiplier: float
-    def __init__(self, max_attempts: _Optional[int] = ..., initial_ms: _Optional[int] = ..., max_ms: _Optional[int] = ..., multiplier: _Optional[float] = ...) -> None: ...
+    def __init__(self, max_attempts: _Optional[int] = ..., initial_ms: _Optional[int] = ..., max_ms: _Optional[int] = ..., multiplier: _Optional[float] = ..., deadline_ms: _Optional[int] = ...) -> None: ...
 
 class RunInput(_message.Message):
-    __slots__ = ["cost", "history", "history_bytes", "inbox", "next_n", "now", "prefix", "run", "seed", "settings", "start", "worker"]
+    __slots__ = ["claim", "cost", "highest_version", "history", "history_bytes", "inbox", "next_n", "now", "prefix", "run", "seed", "settings", "start", "worker"]
+    CLAIM_FIELD_NUMBER: _ClassVar[int]
     COST_FIELD_NUMBER: _ClassVar[int]
+    HIGHEST_VERSION_FIELD_NUMBER: _ClassVar[int]
     HISTORY_BYTES_FIELD_NUMBER: _ClassVar[int]
     HISTORY_FIELD_NUMBER: _ClassVar[int]
     INBOX_FIELD_NUMBER: _ClassVar[int]
@@ -317,7 +350,9 @@ class RunInput(_message.Message):
     SETTINGS_FIELD_NUMBER: _ClassVar[int]
     START_FIELD_NUMBER: _ClassVar[int]
     WORKER_FIELD_NUMBER: _ClassVar[int]
+    claim: bool
     cost: _layout_pb2.Cost
+    highest_version: int
     history: _containers.RepeatedCompositeFieldContainer[_layout_pb2.Event]
     history_bytes: int
     inbox: _containers.RepeatedCompositeFieldContainer[InboxMessage]
@@ -329,10 +364,10 @@ class RunInput(_message.Message):
     settings: RunSettings
     start: _layout_pb2.Start
     worker: str
-    def __init__(self, run: _Optional[str] = ..., start: _Optional[_Union[_layout_pb2.Start, _Mapping]] = ..., history: _Optional[_Iterable[_Union[_layout_pb2.Event, _Mapping]]] = ..., history_bytes: _Optional[int] = ..., next_n: _Optional[int] = ..., inbox: _Optional[_Iterable[_Union[InboxMessage, _Mapping]]] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., seed: _Optional[bytes] = ..., worker: _Optional[str] = ..., settings: _Optional[_Union[RunSettings, _Mapping]] = ..., prefix: _Optional[str] = ..., cost: _Optional[_Union[_layout_pb2.Cost, _Mapping]] = ...) -> None: ...
+    def __init__(self, run: _Optional[str] = ..., start: _Optional[_Union[_layout_pb2.Start, _Mapping]] = ..., history: _Optional[_Iterable[_Union[_layout_pb2.Event, _Mapping]]] = ..., history_bytes: _Optional[int] = ..., next_n: _Optional[int] = ..., inbox: _Optional[_Iterable[_Union[InboxMessage, _Mapping]]] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., seed: _Optional[bytes] = ..., worker: _Optional[str] = ..., settings: _Optional[_Union[RunSettings, _Mapping]] = ..., prefix: _Optional[str] = ..., cost: _Optional[_Union[_layout_pb2.Cost, _Mapping]] = ..., highest_version: _Optional[int] = ..., claim: bool = ...) -> None: ...
 
 class RunRequest(_message.Message):
-    __slots__ = ["arrived", "call", "next", "satisfied", "step_ended", "stored"]
+    __slots__ = ["arrived", "call", "claimed", "next", "satisfied", "step_ended", "stored"]
     class Arrived(_message.Message):
         __slots__ = ["cost", "messages"]
         COST_FIELD_NUMBER: _ClassVar[int]
@@ -362,17 +397,19 @@ class RunRequest(_message.Message):
         def __init__(self, call: _Optional[int] = ..., attempt: _Optional[int] = ..., outcome: _Optional[_Union[Outcome, _Mapping]] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., charges: _Optional[_Iterable[_Union[_layout_pb2.Amount, _Mapping]]] = ...) -> None: ...
     ARRIVED_FIELD_NUMBER: _ClassVar[int]
     CALL_FIELD_NUMBER: _ClassVar[int]
+    CLAIMED_FIELD_NUMBER: _ClassVar[int]
     NEXT_FIELD_NUMBER: _ClassVar[int]
     SATISFIED_FIELD_NUMBER: _ClassVar[int]
     STEP_ENDED_FIELD_NUMBER: _ClassVar[int]
     STORED_FIELD_NUMBER: _ClassVar[int]
     arrived: RunRequest.Arrived
     call: RunRequest.MakeCall
+    claimed: _boundary_pb2.Empty
     next: _layout_pb2.Time
     satisfied: int
     step_ended: RunRequest.StepEnded
     stored: _boundary_pb2.OpResult
-    def __init__(self, call: _Optional[_Union[RunRequest.MakeCall, _Mapping]] = ..., step_ended: _Optional[_Union[RunRequest.StepEnded, _Mapping]] = ..., satisfied: _Optional[int] = ..., next: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., arrived: _Optional[_Union[RunRequest.Arrived, _Mapping]] = ..., stored: _Optional[_Union[_boundary_pb2.OpResult, _Mapping]] = ...) -> None: ...
+    def __init__(self, call: _Optional[_Union[RunRequest.MakeCall, _Mapping]] = ..., step_ended: _Optional[_Union[RunRequest.StepEnded, _Mapping]] = ..., satisfied: _Optional[int] = ..., next: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., arrived: _Optional[_Union[RunRequest.Arrived, _Mapping]] = ..., stored: _Optional[_Union[_boundary_pb2.OpResult, _Mapping]] = ..., claimed: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ...) -> None: ...
 
 class RunResponse(_message.Message):
     __slots__ = ["called", "done", "error", "next"]
@@ -387,20 +424,30 @@ class RunResponse(_message.Message):
     def __init__(self, error: _Optional[_Union[_boundary_pb2.CoreError, _Mapping]] = ..., called: _Optional[_Union[Called, _Mapping]] = ..., next: _Optional[_Union[Next, _Mapping]] = ..., done: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ...) -> None: ...
 
 class RunSettings(_message.Message):
-    __slots__ = ["commit_every_ms", "continue_as_new_after_bytes", "continue_as_new_after_segments", "dedup_window_ms", "prices", "retention"]
+    __slots__ = ["commit_every_ms", "continue_as_new_after_bytes", "continue_as_new_after_segments", "dedup_window_ms", "history_warn_percent", "max_history_bytes", "max_history_events", "max_replay_inbox", "max_seen", "prices", "retention"]
     COMMIT_EVERY_MS_FIELD_NUMBER: _ClassVar[int]
     CONTINUE_AS_NEW_AFTER_BYTES_FIELD_NUMBER: _ClassVar[int]
     CONTINUE_AS_NEW_AFTER_SEGMENTS_FIELD_NUMBER: _ClassVar[int]
     DEDUP_WINDOW_MS_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_WARN_PERCENT_FIELD_NUMBER: _ClassVar[int]
+    MAX_HISTORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+    MAX_HISTORY_EVENTS_FIELD_NUMBER: _ClassVar[int]
+    MAX_REPLAY_INBOX_FIELD_NUMBER: _ClassVar[int]
+    MAX_SEEN_FIELD_NUMBER: _ClassVar[int]
     PRICES_FIELD_NUMBER: _ClassVar[int]
     RETENTION_FIELD_NUMBER: _ClassVar[int]
     commit_every_ms: int
     continue_as_new_after_bytes: int
     continue_as_new_after_segments: int
     dedup_window_ms: int
+    history_warn_percent: int
+    max_history_bytes: int
+    max_history_events: int
+    max_replay_inbox: int
+    max_seen: int
     prices: Prices
     retention: Retention
-    def __init__(self, commit_every_ms: _Optional[int] = ..., continue_as_new_after_segments: _Optional[int] = ..., continue_as_new_after_bytes: _Optional[int] = ..., dedup_window_ms: _Optional[int] = ..., retention: _Optional[_Union[Retention, _Mapping]] = ..., prices: _Optional[_Union[Prices, _Mapping]] = ...) -> None: ...
+    def __init__(self, commit_every_ms: _Optional[int] = ..., continue_as_new_after_segments: _Optional[int] = ..., continue_as_new_after_bytes: _Optional[int] = ..., dedup_window_ms: _Optional[int] = ..., retention: _Optional[_Union[Retention, _Mapping]] = ..., prices: _Optional[_Union[Prices, _Mapping]] = ..., max_history_bytes: _Optional[int] = ..., max_history_events: _Optional[int] = ..., max_replay_inbox: _Optional[int] = ..., max_seen: _Optional[int] = ..., history_warn_percent: _Optional[int] = ...) -> None: ...
 
 class StepOptions(_message.Message):
     __slots__ = ["occurrence", "retry", "saga", "timeout_ms", "undo"]

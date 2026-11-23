@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pytest
-from conftest import LONG, script
+from conftest import LONG, blocked_with, script
 
 from substantial import (
     Context,
@@ -80,7 +79,7 @@ async def test_a_run_knows_its_chain_as_its_parent_and_clients_do(store: Store) 
         run = await sub.start(asker)
         mine, kid, answered = await run.result(timeout=LONG)
         assert mine == run.chain
-        # § yb61qtt3s@dyz0c
+        # § yb61qtt3s@zvb4x
         assert kid == answered != mine, "a derived id, the child's own chain"
         assert await sub.run(whoami, kid).result(timeout=LONG) == kid
 
@@ -160,7 +159,7 @@ class Opaque:
     at: object = None
 
 
-async def test_a_state_that_is_not_json_fails_a_compression(store: Store) -> None:
+async def test_a_state_that_is_not_json_blocks_a_compression(store: Store) -> None:
     @workflow
     async def opaque(c: Context) -> None:
         started = await c.now()
@@ -170,10 +169,9 @@ async def test_a_state_that_is_not_json_fails_a_compression(store: Store) -> Non
     sub = await Substantial._create(store)
     async with script(sub, [opaque], continue_as_new_after=0):
         run = await sub.start(opaque)
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-    assert failed.value.error.type == "NotCompressible", failed.value
-    assert "datetime" in failed.value.error.message
+        error = await blocked_with(sub, run)
+    assert error.type == "NotCompressible", error
+    assert "datetime" in error.message
 
 
 @workflow

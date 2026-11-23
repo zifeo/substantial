@@ -13,7 +13,13 @@ from typing import TYPE_CHECKING, Any, Concatenate, Protocol, overload
 from substantial._proto import checked, dumps, run
 from substantial.cost import budget_proto
 from substantial.durations import millis
-from substantial.errors import ConfigError, Failed, Failure, InvalidArgument
+from substantial.errors import (
+    Blocking,
+    ConfigError,
+    Failure,
+    InvalidArgument,
+    ValueTooLarge,
+)
 from substantial.names import check_key
 from substantial.settings import check_retention
 
@@ -29,12 +35,15 @@ def _is_int(value: object) -> bool:
 
 @dataclass(frozen=True)
 class Retry:
-    """Exponential backoff for a step: every field is required (I-6)."""
+    """Exponential backoff for a step: every field is required but `deadline` (I-6)."""
 
     max_attempts: int
     initial: timedelta
     max: timedelta
     multiplier: float
+    # The longest the step's attempts and backoffs may take in all, from its first attempt's
+    # start; none unless given.
+    deadline: timedelta | None = None
 
     def __post_init__(self) -> None:
         if not _is_int(self.max_attempts) or not 0 < self.max_attempts < _U32:
@@ -47,6 +56,10 @@ class Retry:
             raise InvalidArgument(f"multiplier is a number, not {self.multiplier!r}")
         if not math.isfinite(self.multiplier) or self.multiplier < 1:
             raise InvalidArgument(f"multiplier must be at least 1: {self.multiplier!r}")
+        if self.deadline is not None and (
+            not isinstance(self.deadline, timedelta) or self.deadline <= timedelta(0)
+        ):
+            raise InvalidArgument(f"deadline is a positive timedelta, not {self.deadline!r}")
 
     def policy(self) -> run.RetryPolicy:
         return run.RetryPolicy(
@@ -54,6 +67,7 @@ class Retry:
             initial_ms=millis(self.initial),
             max_ms=millis(self.max),
             multiplier=float(self.multiplier),
+            deadline_ms=None if self.deadline is None else millis(self.deadline),
         )
 
 
@@ -72,7 +86,8 @@ class Workflow[**P, R]:
         name: str | None = None,
         version: int | None = None,
         step_timeout: timedelta | None = None,
-        retention: timedelta | None = None,
+        heartbeat_timeout: timedelta | None = None,
+        retention: int | None = None,
         budget: Mapping[str, int] | None = None,
     ):
         if not inspect.iscoroutinefunction(fn):
@@ -81,8 +96,12 @@ class Workflow[**P, R]:
             raise InvalidArgument(f"a workflow version is an int in [0, 2**32), not {version!r}")
         if step_timeout is not None and millis(step_timeout) == 0:
             raise InvalidArgument(f"a workflow step_timeout is positive, not {step_timeout}")
-        if retention is not None and not isinstance(retention, timedelta):
-            raise InvalidArgument(f"a workflow retention is a timedelta, not {retention!r}")
+        if heartbeat_timeout is not None and millis(heartbeat_timeout) == 0:
+            raise InvalidArgument(
+                f"a workflow heartbeat_timeout is positive, not {heartbeat_timeout}"
+            )
+        if retention is not None and not _is_int(retention):
+            raise InvalidArgument(f"a workflow retention is whole days, an int, not {retention!r}")
         if budget is not None:
             budget_proto(budget)
         self.fn: Callable[..., Awaitable[R]] = fn
@@ -90,7 +109,9 @@ class Workflow[**P, R]:
         self.version = version
         # The timeout of its steps without their own, over the worker's `step_timeout`.
         self.step_timeout = step_timeout
-        # How long its runs are kept after their chain ends, over the worker's `retention`.
+        # The heartbeat timeout of its steps without their own; none unless set.
+        self.heartbeat_timeout = heartbeat_timeout
+        # How many whole days its runs are kept after they end, over the worker's `retention`.
         self.retention = retention
         # The budget of its runs started without one of their own.
         self.budget = None if budget is None else dict(budget)
@@ -110,10 +131,14 @@ class Workflow[**P, R]:
         try:
             data = dumps(value)
         except (TypeError, ValueError) as e:
-            # § g039jvy6k.a@pbht3
-            raise Failed(Failure("Json", f"the value of {self.name}: {e}")) from None
-        # § one h8wg39cct.d@yvpe4
-        return checked(data)
+            # § dxgjekysz.a@2mqsn
+            raise Blocking(Failure("Json", f"the value of {self.name}: {e}")) from None
+        # § h8wg39cct.e@ep7sq
+        try:
+            return checked(data)
+        except ValueTooLarge as e:
+            raise Blocking(Failure("ValueTooLarge", str(e))) from None
+        # § end h8wg39cct.e
 
 
 class _WorkflowDecorator(Protocol):
@@ -130,7 +155,8 @@ def workflow(
     name: str | None = None,
     version: int | None = None,
     step_timeout: timedelta | None = None,
-    retention: timedelta | None = None,
+    heartbeat_timeout: timedelta | None = None,
+    retention: int | None = None,
     budget: Mapping[str, int] | None = None,
 ) -> _WorkflowDecorator: ...
 def workflow(
@@ -140,10 +166,12 @@ def workflow(
     name: str | None = None,
     version: int | None = None,
     step_timeout: timedelta | None = None,
-    retention: timedelta | None = None,
+    heartbeat_timeout: timedelta | None = None,
+    retention: int | None = None,
     budget: Mapping[str, int] | None = None,
 ) -> Workflow[..., Any] | _WorkflowDecorator:
-    """`@workflow` or `@workflow(name=, version=, step_timeout=, retention=, budget=)`."""
+    """`@workflow` or `@workflow(name=, version=, step_timeout=, heartbeat_timeout=, retention=,
+    budget=)`."""
     if fn is not None:
         return Workflow(fn)
     return lambda f: Workflow(
@@ -151,6 +179,7 @@ def workflow(
         name=name,
         version=version,
         step_timeout=step_timeout,
+        heartbeat_timeout=heartbeat_timeout,
         retention=retention,
         budget=budget,
     )
@@ -159,7 +188,7 @@ def workflow(
 class Workflows:
     """The workflows a worker serves, by name and version."""
 
-    def __init__(self, workflows: Iterable[Workflow[..., Any]], retention_min: timedelta) -> None:
+    def __init__(self, workflows: Iterable[Workflow[..., Any]]) -> None:
         self.by_key: dict[tuple[str, int | None], Workflow[..., Any]] = {}
         if isinstance(workflows, str | Workflow) or not isinstance(workflows, Iterable):
             raise ConfigError(f"a worker serves a list of workflows, not {workflows!r}")
@@ -174,11 +203,11 @@ class Workflows:
         if not self.by_key:
             raise ConfigError("a worker needs at least one workflow")
         # The core keeps one retention per name.
-        self.retentions: dict[str, timedelta | None] = {}
+        self.retentions: dict[str, int | None] = {}
         for (name, _), w in self.by_key.items():
             if w.retention is not None:
-                check_retention(w.retention, retention_min, f"the retention of workflow {name!r}")
-            # § one pn928919v.a@5hqwm
+                check_retention(w.retention, f"the retention of workflow {name!r}")
+            # § one pnctq6tx8.a@tabna
             if self.retentions.setdefault(name, w.retention) != w.retention:
                 raise ConfigError(f"the versions of workflow {name!r} give different retentions")
 

@@ -115,6 +115,9 @@ class RunMachine(_Machine):
     def stored(self, result: boundary.OpResult) -> None:
         self._expect(run.RunRequest(stored=result), run.RunResponse, "done")
 
+    def claimed(self) -> None:
+        self._expect(run.RunRequest(claimed=boundary.Empty()), run.RunResponse, "done")
+
 
 class AgentMachine(_Machine):
     """The agent machine of one worker."""
@@ -136,6 +139,9 @@ class AgentMachine(_Machine):
         self._done(
             agent.AgentRequest(commit=agent.AgentRequest.RunCommit(run=run_id, commit=commit))
         )
+
+    def claim(self, run_id: str) -> None:
+        self._done(agent.AgentRequest(claim=run_id))
 
     def replay_ended(self, run_id: str, end: agent.ReplayEnd) -> None:
         ended = agent.AgentRequest.ReplayEnded(run=run_id, end=end)

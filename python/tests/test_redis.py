@@ -1,9 +1,10 @@
-"""What the Redis adapter does beyond the shared contract; all but URL parsing run only when
-`SUBSTANTIAL_REDIS_URL` names a standalone server (see `dev/redis.compose.yaml`), or, for the
-last one, `SUBSTANTIAL_REDIS_SENTINEL_URL` a Sentinel."""
+"""What the Redis adapter does beyond the shared contract; all but URL parsing on the standalone
+server `SUBSTANTIAL_REDIS_URL` names, the last one on the Sentinel of
+`SUBSTANTIAL_REDIS_SENTINEL_URL` (see `dev/compose.yaml`)."""
 
 import asyncio
 import contextlib
+import hashlib
 import secrets
 import sys
 import time
@@ -11,14 +12,16 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from conftest import LONG, require_redis, script
+from conftest import LONG, require_redis, script, value
 from redis.asyncio import Redis
 
 from substantial import ConfigError, Context, Password, StoreError, Substantial, workflow
 from substantial.stores import (
+    Created,
     ListWait,
     RedisLocation,
     StoreFailure,
+    Written,
     open_store,
     redis_notify,
     redis_store,
@@ -187,7 +190,7 @@ async def test_a_waiting_listing_returns_as_a_key_lands_without_polling(admin: R
     url = require_redis("redis")
     store = open_store(url, None)
     async with listings(admin, url) as listed:
-        await store.create("q/a", b"a")
+        await store.create("q/a", b"a", expiry=None)
         first = await store.list("q/", start_after=None, max_keys=10, wait=ListWait(0))
         assert first.keys == ["q/a"] and first.etag
         before = listed[0]
@@ -202,14 +205,39 @@ async def test_a_waiting_listing_returns_as_a_key_lands_without_polling(admin: R
         store.list("q/", start_after=None, max_keys=10, wait=ListWait(20, first.etag))
     )
     await asyncio.sleep(0.5)
-    await store.create("other/x", b"x")
+    await store.create("other/x", b"x", expiry=None)
     await asyncio.sleep(0.2)
     assert not held.done(), "a key under another prefix does not end the wait"
-    await store.create("q/b", b"b")
+    await store.create("q/b", b"b", expiry=None)
     # At its deadline the wait answers the page it listed before `q/b` landed: `q/b` in the
     # answer is the key's notification waking it, however long the machine takes to get there.
     woken = await held
     assert woken.keys == ["q/a", "q/b"] and woken.etag != first.etag
+    await store.close()
+
+
+@pytest.mark.parametrize("topology", ["redis", "redis-sentinel", "redis-cluster"])
+async def test_a_waiting_listing_wakes_on_a_cas_of_a_key_it_lists(topology: str) -> None:
+    store = open_store(require_redis(topology), None)
+    created = await store.create("runs/c", b"head 1", expiry=None)
+    assert isinstance(created, Created)
+    first = await store.list("runs/c", start_after=None, max_keys=1, wait=ListWait(0))
+    held = asyncio.create_task(
+        store.list("runs/c", start_after=None, max_keys=1, wait=ListWait(20, first.etag))
+    )
+    await asyncio.sleep(0.5)
+    assert not held.done(), "an unchanged page waits"
+    started = time.monotonic()
+    written = await store.cas("runs/c", b"head 2", created.etag, expiry=None)
+    assert isinstance(written, Written)
+    woken = await asyncio.wait_for(held, 10)
+    assert woken.keys == ["runs/c"] and woken.etag != first.etag
+    assert time.monotonic() - started < 10, "woken by the cas, not by the end of its wait"
+    again = await store.list("runs/c", start_after=None, max_keys=1, wait=ListWait(0))
+    assert again.etag == woken.etag
+    await store.delete("runs/c")
+    gone = await store.list("runs/c", start_after=None, max_keys=1, wait=ListWait(0))
+    assert gone.keys == [] and gone.etag != woken.etag
     await store.close()
 
 
@@ -259,7 +287,7 @@ async def test_a_hung_password_provider_fails_only_its_attempt(
 
         store = open_store(require_redis("redis"), provider)
         async with asyncio.timeout(10):
-            assert await store.get("k") is None
+            assert await value(store, "k") is None
         assert len(calls) == 2
         await store.close()
 
@@ -328,10 +356,48 @@ async def test_a_primary_without_a_replica_online_answers_nothing() -> None:
     assert store._current is not None
     # As just promoted, its replicas still syncing.
     store._current.replicas = 0
-    for answer in (store.create("k", b"v"), store.get("k"), store.delete("k")):
+    for answer in (store.create("k", b"v", expiry=None), store.get("k"), store.delete("k")):
         with pytest.raises(StoreFailure, match="no replica online"):
             await answer
     await store.close()
     counted = open_store(url, None)
-    assert await counted.get("k") is None, "nothing written"
+    assert await value(counted, "k") is None, "nothing written"
     await counted.close()
+
+
+async def test_an_expiry_is_the_servers_own(admin: Redis) -> None:
+    url = require_redis("redis")
+    ns = RedisLocation.parse(url).namespace
+    store = open_store(url, None)
+    obj, expiries, etags = f"{{{ns}}}:o:runs/e", f"{{{ns}}}:e", f"{{{ns}}}:t"
+    try:
+        # § hxvcx7f2a@cpzrn
+        await store.create("runs/e", b"one", expiry=1)
+        day = 86_400_000
+        left = await admin.pttl(obj)
+        assert day - 60_000 < left <= day, left
+        assert await admin.zscore(expiries, "runs/e") is not None
+        read = await store.get("runs/e")
+        assert read is not None
+        # § one rz3se15bd@7htgz
+        assert read.etag == hashlib.sha1(b"one").hexdigest()
+        assert await admin.hget(etags, "runs/e") == read.etag.encode()
+        assert isinstance(await store.cas("runs/e", b"two", read.etag, expiry=None), Written)
+        assert await admin.hget(etags, "runs/e") == hashlib.sha1(b"two").hexdigest().encode()
+        assert await admin.pttl(obj) == -1, "a write without an expiry clears it"
+        assert await admin.zscore(expiries, "runs/e") is None
+        # A key the server expired leaves the index at the next write of an expiry.
+        await admin.pexpire(obj, 1)
+        await admin.zadd(expiries, {"runs/e": 0})
+        await asyncio.sleep(0.01)
+        listed = await store.list("runs/", start_after=None, max_keys=10, wait=None)
+        assert listed.keys == ["runs/e"]
+        await store.create("runs/f", b"f", expiry=1)
+        listed = await store.list("runs/", start_after=None, max_keys=10, wait=None)
+        assert listed.keys == ["runs/f"]
+        assert await store.get("runs/e") is None
+        assert await admin.hget(etags, "runs/e") is None, "its ETag goes with its index member"
+        await store.delete("runs/f")
+        assert await admin.hget(etags, "runs/f") is None
+    finally:
+        await store.close()

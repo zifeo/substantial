@@ -1,6 +1,7 @@
 // Worker settings (I-18): a preset names every setting, the only defaults there are.
-import { Duration, days, hours, milliseconds, minutes, seconds } from "./durations.ts";
+import { Duration, days, milliseconds, minutes, seconds } from "./durations.ts";
 import { ConfigError } from "./errors.ts";
+import { EXPIRY_MAX_DAYS } from "./stores/store.ts";
 
 const KIB = 1024;
 const MIB = 1024 * KIB;
@@ -8,27 +9,23 @@ const U32 = 0xffff_ffff;
 export const PRESETS = ["script", "service"] as const;
 export type Preset = (typeof PRESETS)[number];
 
-/** The least retention of the presets; a `result` wait follows its chain again within half of
- * it. */
-// § one y025f8qen.c@rha6g
-export const RETENTION_MIN = hours(1);
+/** The longest retention, 100 years of days, the longest expiry a store write carries. */
+// § one pnctq6tx8@zt3vj
+export const RETENTION_MAX_DAYS = EXPIRY_MAX_DAYS;
 
-/** The longest retention, 100 years. A collection's due key names its year in 4 digits, which
- * far longer retentions would pass. */
-// § one pn928919v@vmk10
-export const RETENTION_MAX = days(36_500);
-
-/** Refuses a retention that is not a Duration from `minimum` to `RETENTION_MAX`. */
-export function checkRetention(retention: unknown, minimum: Duration, what: string): void {
-  // § pn928919v@estyn
-  if (!(retention instanceof Duration)) {
-    throw new ConfigError(`${what} must be a Duration, not ${String(retention)}`);
-  }
-  if (retention.ms < minimum.ms) {
-    throw new ConfigError(`${what} must be at least ${minimum.ms} ms, not ${retention.ms} ms`);
-  }
-  if (retention.ms > RETENTION_MAX.ms) {
-    throw new ConfigError(`${what} must be at most ${RETENTION_MAX.ms} ms, not ${retention.ms} ms`);
+/** Refuses a retention, how many whole days an ended run is kept (I-16), under 1 or over
+ * 36,500. */
+export function checkRetention(retention: unknown, what: string): void {
+  // § pnctq6tx8@389eb
+  if (
+    typeof retention !== "number" ||
+    !Number.isInteger(retention) ||
+    retention < 1 ||
+    retention > RETENTION_MAX_DAYS
+  ) {
+    throw new ConfigError(
+      `${what} must be whole days from 1 to ${RETENTION_MAX_DAYS}, not ${String(retention)}`,
+    );
   }
 }
 
@@ -57,14 +54,19 @@ export interface Settings {
   readonly wait: Duration;
   readonly duePage: number;
   readonly duePages: number;
-  readonly snapshotEvery: number;
   readonly continueAsNewAfter: ContinueAsNewAfter;
   readonly dedupWindow: Duration;
   readonly stepTimeout: Duration;
-  readonly retention: Duration;
-  readonly tombstone: Duration;
-  readonly retentionMin: Duration;
-  readonly recheck: Duration;
+  /** Whole days. */
+  readonly retention: number;
+  readonly blockedInitial: Duration;
+  readonly blockedMax: Duration;
+  readonly blockedMultiplier: number;
+  readonly maxHistoryBytes: number;
+  readonly maxHistoryEvents: number;
+  readonly maxReplayInbox: number;
+  readonly maxSeen: number;
+  readonly historyWarnPercent: number;
 }
 
 /** A preset and the settings it overrides; `continueAsNewAfter: 0` compresses at every
@@ -79,9 +81,8 @@ export interface WorkerOptions {
   readonly stepTimeout?: Duration;
   /** Whichever of the two the history passes first. */
   readonly continueAsNewAfter?: { readonly segments: number; readonly bytes: number } | 0;
-  /** How long a run is kept after its chain ends, unless its workflow gives one: at least an
-   * hour and at most 100 years. */
-  readonly retention?: Duration;
+  /** How many whole days an ended run is kept, unless its workflow gives one: from 1 to 36,500. */
+  readonly retention?: number;
 }
 
 // § one yxy5pzfkp@r3hqt
@@ -103,7 +104,7 @@ export type InternalOptions = { readonly preset: Preset } & {
 };
 
 /** The adapters' retries of transient failures (I-26). */
-// § one zemxe46k3@xt5aq
+// § one zemxe46k3@a0kwq
 export const STORE_RETRY: StoreRetry = Object.freeze({
   attempts: 5,
   initial: milliseconds(100),
@@ -118,44 +119,55 @@ export function presetSettings(preset: Preset, waitingStore: boolean): Settings 
   const service = preset === "service";
   return {
     concurrency: service ? 16 : 1,
-    // § one ry26kkc7v.a@t1qyy
+    // § one ry26kkc7v.a@nh5dm
     commitEvery: milliseconds(0),
     shutdownGrace: seconds(service ? 25 : 5),
     claimTtl: seconds(30),
-    // § one ry26kkc7v.b@h84nz
+    // § one ry26kkc7v.b@c554y
     claimSkew: seconds(5),
     maxIdle: !service ? seconds(1) : waitingStore ? minutes(5) : seconds(30),
     wait: seconds(20),
     // § one ry26kkc7v.e@d9b8m
     duePage: 1000,
     duePages: 10,
-    snapshotEvery: 64,
     continueAsNewAfter: { segments: 1000, bytes: 8 * MIB },
-    // § one ry26kkc7v.c@jt7nk
+    // § one ry26kkc7v.c@4ttc6
     dedupWindow: days(7),
     stepTimeout: minutes(5),
-    retention: days(30),
-    // § one ry26kkc7v.d@6krsm
-    tombstone: days(7),
-    retentionMin: RETENTION_MIN,
-    recheck: days(1),
+    retention: 30,
+    // § ksmvx2mfk@y5ef0
+    blockedInitial: seconds(service ? 10 : 1),
+    blockedMax: minutes(service ? 10 : 1),
+    blockedMultiplier: 2,
+    // § end ksmvx2mfk
+    // § one ry26kkc7v.f@dwggd
+    maxHistoryBytes: 128 * MIB,
+    // § one ry26kkc7v.g@n3203
+    maxHistoryEvents: 100_000,
+    // § one ry26kkc7v.h@ztn85
+    maxReplayInbox: 10_000,
+    // § one ry26kkc7v.i@j9nq1
+    maxSeen: 100_000,
+    // § one ry26kkc7v.j@kc1ah
+    historyWarnPercent: 80,
   };
 }
 
-const INTS = ["concurrency", "duePage", "duePages", "snapshotEvery"];
+const LIMITS = ["maxHistoryBytes", "maxHistoryEvents", "maxReplayInbox", "maxSeen"];
+const INTS = ["concurrency", "duePage", "duePages", "historyWarnPercent", ...LIMITS];
 const POSITIVE = [
   "concurrency",
   "duePage",
   "duePages",
-  "snapshotEvery",
   "claimTtl",
   "maxIdle",
   "stepTimeout",
-  "tombstone",
-  "retentionMin",
-  "recheck",
+  "blockedInitial",
+  ...LIMITS,
 ];
 const DURATIONS = [
+  "blockedInitial",
+  "blockedMax",
   "commitEvery",
   "shutdownGrace",
   "claimTtl",
@@ -164,9 +176,6 @@ const DURATIONS = [
   "wait",
   "dedupWindow",
   "stepTimeout",
-  "tombstone",
-  "retentionMin",
-  "recheck",
 ];
 
 function isCount(value: unknown): value is number {
@@ -204,6 +213,17 @@ function validate(s: Record<string, unknown>): Settings {
   for (const name of ["concurrency", "duePage", "duePages"]) {
     if ((s[name] as number) > U32) throw new ConfigError(`${name} is too large`);
   }
+  if ((s.blockedMax as Duration).ms < (s.blockedInitial as Duration).ms) {
+    throw new ConfigError(`blockedMax ${s.blockedMax} is under blockedInitial ${s.blockedInitial}`);
+  }
+  const multiplier = s.blockedMultiplier;
+  if (typeof multiplier !== "number" || !Number.isFinite(multiplier) || multiplier < 1) {
+    throw new ConfigError(`blockedMultiplier is a number of at least 1, not ${String(multiplier)}`);
+  }
+  const percent = s.historyWarnPercent as number;
+  if (percent < 1 || percent > 100) {
+    throw new ConfigError(`historyWarnPercent is from 1 to 100, not ${percent}`);
+  }
   if ((s.duePage as number) > 1000) {
     throw new ConfigError(`duePage must be at most 1000, an S3 page: ${s.duePage}`);
   }
@@ -215,7 +235,7 @@ function validate(s: Record<string, unknown>): Settings {
   if (!isCount(c.segments) || !isCount(c.bytes)) {
     throw new ConfigError("continueAsNewAfter segments and bytes must be non-negative integers");
   }
-  checkRetention(s.retention, s.retentionMin as Duration, "retention");
+  checkRetention(s.retention, "retention");
   return s as unknown as Settings;
 }
 
@@ -226,7 +246,7 @@ export function resolveSettings(
   waitingStore: boolean,
   internal: boolean,
 ): Settings {
-  // § yxy5pzfkp.a@gw8w8
+  // § yxy5pzfkp.a@s7ej9
   if (typeof options !== "object" || options === null || !("preset" in options)) {
     throw new ConfigError("a worker needs a preset, script or service");
   }

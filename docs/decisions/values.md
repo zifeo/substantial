@@ -26,7 +26,7 @@ A JSON encoder may write a value it cannot hold as another one: `JSON.stringify`
 
 - (e) Python and Rust refuse an integer past 2^53 - 1 anywhere in a value, which a TypeScript reader would round; TypeScript, whose numbers are doubles, holds such an integer only as a `bigint`, refused by (b).
 
-A refused step value fails its step with cause `Json` ([epxcjcz4s](steps.md#epxcjcz4s)), and a refused result fails its run with `Json` ([the replay drive](workflows.md#ends)). A value the code gives with nothing in it, a TypeScript `undefined` or a Rust `()`, is written `null`. A Rust map whose keys are not strings is written with its keys as strings, which its type reads back as they were.
+A refused step value fails its step with cause `Json` ([epxcjcz4s](steps.md#epxcjcz4s)), and a refused result blocks its run with `Json` ([the replay drive](workflows.md#ends)). A value the code gives with nothing in it, a TypeScript `undefined` or a Rust `()`, is written `null`. A Rust map whose keys are not strings is written with its keys as strings, which its type reads back as they were.
 
 ## Size
 
@@ -40,11 +40,23 @@ Values are stored inline, and a value far larger than the cap traps the core: "F
 
 - (c) A child's input, a message, a published value or a loop state over the cap raises `ValueTooLarge` at its call.
 
-- (d) A workflow's result over the cap fails the run with `ValueTooLarge`.
+- (d) ~~A workflow's result over the cap fails the run with `ValueTooLarge`.~~
+
+- (e) A workflow's result, or the input or state of its continuation, over the cap blocks the run with `ValueTooLarge`, not retryable, as a bug of the code a deploy fixes.
+
+## History limits
+
+Every wakeup reads and replays a run's whole history, so a history without bound would exhaust the worker that replays it, and every other run of that worker with it. Its limits are the worker's ([ry26kkc7v.f](workers.md#ry26kkc7v)).
+
+**§ <a id="vkpvtd54g">vkpvtd54g</a> A run whose history passes a limit of its bytes or its events, whose replay consumes more messages than its limit, or whose continuation would carry more message ids than its limit, ends failed with `HistoryTooLarge`, and its worker goes on serving its other runs.**
+
+- (a) A call made once the run passed a limit raises `HistoryTooLarge`, and the run ends failed whatever the code then does.
+
+- (b) `HistoryTooLarge` is not retryable, and its details hold the limit, the amount used and the maximum.
 
 ## Canonical inputs
 
-A start is deduplicated by comparing its input with the stored one byte for byte ([ct862686r](core/lifecycle.md#ct862686r)), so every host writes an input "as canonical JSON (RFC 8785), as the core compares a start's input byte for byte" (`python/substantial/child.py`). Then "keys in another order, `1.0` for `1`, or the same input from another host is the same input" (I-17). An encoder that silently changes a value would break that: serde_jcs, "as serde_json, writes a NaN or an infinity inside a value as `null`, and rounds an integer past 2^53 - 1 to the double JCS numbers are: both are refused here first" (`rust/src/workflow/canonical.rs`).
+A start is deduplicated by comparing its input with the stored one byte for byte ([jbkv4v0we](core/lifecycle.md#jbkv4v0we)), so every host writes an input "as canonical JSON (RFC 8785), as the core compares a start's input byte for byte" (`python/substantial/child.py`). Then "keys in another order, `1.0` for `1`, or the same input from another host is the same input" (I-17). An encoder that silently changes a value would break that: serde_jcs, "as serde_json, writes a NaN or an infinity inside a value as `null`, and rounds an integer past 2^53 - 1 to the double JCS numbers are: both are refused here first" (`rust/src/workflow/canonical.rs`).
 
 **§ <a id="aaev3rs1q">aaev3rs1q</a> Every host encodes an input as canonical JSON (RFC 8785), keys sorted and numbers written as the doubles they are, so the same input from any host or in any key order is the same input.**
 

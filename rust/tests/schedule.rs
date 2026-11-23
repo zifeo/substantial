@@ -239,7 +239,7 @@ async fn sub_schedule_does_nothing_twice_and_refuses_a_stale_or_another_config()
 }
 
 #[tokio::test]
-async fn a_malformed_schedule_message_fails_the_run() {
+async fn a_malformed_schedule_message_blocks_the_run() {
     let (env, f) = env().await;
     let wf = ticker(&f);
     let run = env.schedule(&wf, "tick", hourly(), 1).await.unwrap();
@@ -253,22 +253,18 @@ async fn a_malformed_schedule_message_fails_the_run() {
     env.settle().await.unwrap();
     worker.shutdown().await.unwrap();
     match run.result().await {
-        Err(Error::RunFailed { error, .. }) => {
-            assert_eq!(error.kind, "InvalidArgument", "{error}");
-            assert!(
-                error
-                    .message
-                    .contains("a schedule message is a config of sub.schedule"),
-                "{error}"
-            );
-        }
+        Err(Error::Stuck(m)) => assert!(
+            m.contains("blocked by InvalidArgument")
+                && m.contains("a schedule message is a config of sub.schedule"),
+            "{m}"
+        ),
         other => panic!("{other:?}"),
     }
     done(env).await;
 }
 
 #[tokio::test]
-async fn two_configs_of_one_revision_fail_the_run() {
+async fn two_configs_of_one_revision_block_the_run() {
     let (env, f) = env().await;
     let wf = ticker(&f);
     env.schedule(&wf, "tick", hourly(), 1).await.unwrap();
@@ -278,13 +274,12 @@ async fn two_configs_of_one_revision_fail_the_run() {
     env.settle().await.unwrap();
     worker.shutdown().await.unwrap();
     match run.result().await {
-        Err(Error::RunFailed { error, .. }) => {
-            assert_eq!(error.kind, "ConfigError", "{error}");
-            assert!(
-                error.message.contains("revision 1 came with two configs"),
-                "{error}"
-            );
-        }
+        Err(Error::Stuck(m)) => assert!(
+            m.contains(
+                "blocked by ConfigError: config error: schedule revision 1 came with two configs"
+            ),
+            "{m}"
+        ),
         other => panic!("{other:?}"),
     }
     done(env).await;
@@ -348,10 +343,10 @@ async fn the_schedule_step_name_is_reserved() {
     });
     let worker = env.worker(&inline).preset(Preset::Service).start().unwrap();
     let run = env.start(&inline, ()).await.unwrap();
-    let failed = run.result().await;
+    let blocked = run.result().await;
     assert!(
-        matches!(&failed, Err(e @ Error::RunFailed { .. }) if e.to_string().contains("reserved")),
-        "{failed:?}"
+        matches!(&blocked, Err(Error::Stuck(m)) if m.contains("blocked by InvalidArgument") && m.contains("reserved")),
+        "{blocked:?}"
     );
     worker.shutdown().await.unwrap();
     done(env).await;

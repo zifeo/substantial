@@ -27,3 +27,17 @@ An environment "is a `Substantial` on a namespace in memory and a virtual clock"
 - (a) A `Chaos` fault is drawn from the seed and the operation itself, its kind, its key, its worker and its attempt, so the same seed replays the same faults.
 
 - (b) `Chaos` faults the workers, not the clients.
+
+## Replaying recorded runs
+
+New code that no longer matches the history of a run in flight diverges at the run's next wakeup, once deployed (I-5). A test of the new code against runs recorded in production finds it before the deploy: it copies them from their store into an environment, so it writes nothing where they live, and replays each up to the end of its history, so no step runs again. It reports a divergence as a worker of the new code would meet it, `NonDeterminism`, and any other error that would block the run, as a divergence too: either way the new code would block the run once deployed.
+
+**§ <a id="awhhtbr5n">awhhtbr5n</a> The replay tester replays recorded runs, named by id, with new code in an environment, and reports for each whether its history matched, diverged with `NonDeterminism`, or had ended.**
+
+- (a) ~~It reads the source store with get and list alone, and copies each run's keys, its claims excepted, with those of the run a retry resumes or a continuation follows, into the environment's namespace in memory.~~
+
+- (d) It reads the source store with gets alone, writing nothing to it, and copies each run's head, without its lease and its block, into the environment's namespace in memory.
+
+- (b) A replay stops at the end of its history, or at its divergence or any other error that blocks it: no step runs and nothing past the history is recorded.
+
+- (c) A run the source does not hold raises `RunNotFound`, a run of a workflow and version none of the code given serves raises `InvalidArgument`, and a source of another layout raises `LayoutError`.

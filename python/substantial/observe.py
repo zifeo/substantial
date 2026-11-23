@@ -1,24 +1,27 @@
-"""What a `Substantial` tells its observer (I-29): store operations, step attempts, replays and
-scans."""
+"""What a `Substantial` tells its observer (I-29): store operations, step attempts, replays,
+scans, blocked runs, runs near a history limit, and runs left for a clock behind them."""
 
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
+from substantial._proto import layout
 from substantial.cost import Amount, Prices
-from substantial.errors import ConfigError
+from substantial.errors import ConfigError, Failure
 from substantial.stores.attempts import measured
-from substantial.stores.base import Capabilities, Create, Listing, ListWait, Store
+from substantial.stores.base import Capabilities, Cas, Create, Listing, ListWait, Object, Store
 
 
 @dataclass(frozen=True)
 class StoreOp:
-    """A store operation of a client or a worker, once it answered: `op` is `create`, `get`,
-    `list` or `delete`; `attempts` the requests the adapter sent, its retries included; `outcome`
-    `created`, `exists`, `found`, `missing`, `listed`, `deleted` or `failed`; `cost` `attempts`
-    requests at the price of the operation's kind, `None` without prices."""
+    """A store operation of a client or a worker, once it answered: `op` is `create`, `cas`,
+    `get`, `list` or `delete`; `attempts` the requests the adapter sent, its retries included;
+    `outcome` `created`, `exists`, `written`, `mismatch`, `found`, `missing`, `listed`, `deleted`
+    or `failed`; `cost` `attempts` requests at the price of the operation's kind, `None` without
+    prices."""
 
     op: str
     seconds: float
@@ -60,7 +63,53 @@ class Scan:
     due: int
 
 
-type Observed = StoreOp | Attempt | Replay | Scan
+@dataclass(frozen=True)
+class Blocked:
+    """A replay of `run` was blocked by `error`, an error of its code that is no end or a
+    divergence from its history: nothing of it is recorded, and the run is tried again after a
+    backoff."""
+
+    workflow: str
+    run: str
+    error: Failure
+
+
+@dataclass(frozen=True)
+class NearLimit:
+    """A commit took `run` past the warning share of its `limit`, `history_bytes`,
+    `history_events`, `replay_inbox` or `seen`, using `used` of `max`."""
+
+    workflow: str
+    run: str
+    limit: str
+    used: int
+    max: int
+
+
+@dataclass(frozen=True)
+class Skewed:
+    """The worker left the chain `run` alone, `current` its current run: its clock, `now`, is
+    behind the run's last segment, `segment_at`, by more than `claim_skew`."""
+
+    run: str
+    current: str
+    segment_at: datetime
+    now: datetime
+
+
+type Observed = StoreOp | Attempt | Replay | Scan | Blocked | NearLimit | Skewed
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def time_of(t: layout.Time) -> datetime:
+    return _EPOCH + timedelta(milliseconds=t.ms)
+
+
+def rfc3339(t: datetime) -> str:
+    return t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 type Observe = Callable[[Observed], object]
 
 
@@ -112,7 +161,7 @@ class ObservingStore:
     async def _observed[T](
         self, op: str, call: Callable[[], Awaitable[T]], outcome: Callable[[T], str]
     ) -> T:
-        # § yp7fv5sa7.a@gva6d
+        # § yp7fv5sa7.a@xd50r
         started = time.monotonic()
         try:
             with measured() as sent:
@@ -139,11 +188,27 @@ class ObservingStore:
             # § yp7fv5sa7.b@pwsj8
             raise ObserverRaised(e) from e
 
-    async def create(self, key: str, data: bytes) -> Create:
-        return await self._observed("create", lambda: self._inner.create(key, data), str)
+    async def create(self, key: str, data: bytes, *, expiry: int | None) -> Create:
+        def outcome(created: Create) -> str:
+            return "exists" if created == "exists" else "created"
 
-    async def get(self, key: str) -> bytes | None:
-        def found(data: bytes | None) -> str:
+        return await self._observed(
+            "create", lambda: self._inner.create(key, data, expiry=expiry), outcome
+        )
+
+    async def cas(self, key: str, data: bytes, etag: str, *, expiry: int | None) -> Cas:
+        def outcome(written: Cas) -> str:
+            return "mismatch" if written == "mismatch" else "written"
+
+        return await self._observed(
+            "cas", lambda: self._inner.cas(key, data, etag, expiry=expiry), outcome
+        )
+
+    async def check_expiry(self, days: Sequence[int]) -> None:
+        await self._inner.check_expiry(days)
+
+    async def get(self, key: str) -> Object | None:
+        def found(data: Object | None) -> str:
             return "missing" if data is None else "found"
 
         return await self._observed("get", lambda: self._inner.get(key), found)

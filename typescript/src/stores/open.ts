@@ -44,7 +44,7 @@ async function loadRedis(url: string): Promise<RedisModule> {
 
 /** The adapter a URL names; the scheme alone picks it, nothing is detected. */
 export async function openStore(url: string, credentials: CredentialsArg): Promise<Store> {
-  // § x2qrbh9jk@06zkh
+  // § x2qrbh9jk@4knvs
   if (typeof url !== "string") throw new ConfigError(`a store URL is a string, not ${url}`);
   if (url.startsWith("memory://")) {
     const ns = namespace(url, url.slice("memory://".length));
@@ -85,14 +85,32 @@ async function performOp(store: Store, op: boundary.StoreOp): Promise<boundary.O
   const o = op.op;
   switch (o.case) {
     case "create": {
-      const outcome = await store.create(o.value.key, o.value.bytes);
-      return create(boundary.OpResultSchema, { result: { case: outcome, value: {} } });
-    }
-    case "get": {
-      const data = await store.get(o.value);
+      const { key, bytes, expiryDays } = o.value;
+      const outcome = await store.create(key, bytes, expiryDays);
       return create(boundary.OpResultSchema, {
         result:
-          data === undefined ? { case: "missing", value: {} } : { case: "bytes", value: data },
+          outcome === "exists"
+            ? { case: "exists", value: {} }
+            : { case: "created", value: { etag: outcome.etag } },
+      });
+    }
+    case "cas": {
+      const { key, bytes, etag, expiryDays } = o.value;
+      const outcome = await store.cas(key, bytes, etag, expiryDays);
+      return create(boundary.OpResultSchema, {
+        result:
+          outcome === "mismatch"
+            ? { case: "mismatch", value: {} }
+            : { case: "written", value: { etag: outcome.etag } },
+      });
+    }
+    case "get": {
+      const object = await store.get(o.value);
+      return create(boundary.OpResultSchema, {
+        result:
+          object === undefined
+            ? { case: "missing", value: {} }
+            : { case: "object", value: { bytes: object.data, etag: object.etag } },
       });
     }
     case "list": {
@@ -132,7 +150,7 @@ export async function perform(store: Store, op: boundary.StoreOp): Promise<bound
 }
 
 async function performOnce(store: Store, op: boundary.StoreOp): Promise<boundary.OpResult> {
-  // § pgv9r1j12.b@nkyft
+  // § pgv9r1j12.b@qmdj3
   let message: string;
   try {
     return await performOp(store, op);

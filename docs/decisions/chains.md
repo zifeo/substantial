@@ -16,12 +16,18 @@ A child started without an id gets one the core derives from its parent's ([yb61
 
 **§ <a id="hy3f1z5jj">hy3f1z5jj</a> At each boundary of `iterate`, once the core says the history passed `continue_as_new_after`, the run continues as a new run of its chain carrying the loop's state, the new run starts the loop from that state with an empty history, and of the code's values only the state crosses.**
 
-- (a) A state that does not serialize to JSON at a compression fails the run with `NotCompressible`, while the full history still exists.
+- (a) ~~A state that does not serialize to JSON at a compression fails the run with `NotCompressible`, while the full history still exists.~~
 
 - (b) Code before the loop runs again in each run of the chain, with the input of the run that continued.
 
+- (c) A state that does not serialize to JSON at a compression blocks the run with `NotCompressible`, while the full history still exists.
+
+A loop that never ends, a schedule or an actor, keeps the version it started with as long as it continues as itself, so a deploy of a new version never reaches it. A loop that opts in upgrades at its next boundary instead, as a new run of its chain under the new version, once a worker serves it.
+
+**§ <a id="zsyv7772c">zsyv7772c</a> A loop of `iterate` or `c.schedule()` that opts into upgrades continues at its next boundary into the highest version of its workflow its worker serves, once that version is higher than the run's, carrying its state.**
+
 ## Continuing by hand
 
-A tail call, a workflow whose last act is to run itself again, is `c.continue_as_new` ([Interfaces](../interfaces.md#i-11-starting-other-workflows)). The same workflow keeps the run's version, and another runs with the version it was declared with ([deycjjrap](core/lifecycle.md#deycjjrap), (a)).
+A tail call, a workflow whose last act is to run itself again, is `c.continue_as_new` ([Interfaces](../interfaces.md#i-11-starting-other-workflows)). Continuing as itself keeps the run's version, naming its own workflow with a version moves it to that version, and another workflow runs with the version it was declared with ([deycjjrap.b](core/lifecycle.md#deycjjrap)).
 
 **§ <a id="gjnefe4w6">gjnefe4w6</a> `c.continue_as_new(input, workflow=)` ends the run by raising a continuation that holds this input and, for another workflow, that workflow's name and the version it was declared with, or none.**
