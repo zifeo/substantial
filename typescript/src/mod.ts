@@ -15,6 +15,7 @@ export {
   type MessageOptions,
 } from "./child.ts";
 export {
+  type Message,
   type OpenOptions,
   type RunInfo,
   type ScheduleOptions,
@@ -24,6 +25,7 @@ export {
 export type {
   Context,
   ContinueOptions,
+  LoopOptions,
   PollOptions,
   ReceiveOptions,
   WaitOptions,
@@ -44,8 +46,10 @@ export {
   ContinuedAsNew,
   Control,
   type EndedStatus,
+  Fail,
   Failed,
   type Failure,
+  HistoryTooLarge,
   InvalidArgument,
   isControl,
   LayoutError,
@@ -66,7 +70,16 @@ export {
 } from "./errors.ts";
 export type { Log } from "./log.ts";
 export type { HandleOptions } from "./messages.ts";
-export { Attempt, type Observed, Replay, Scan, StoreOp } from "./observe.ts";
+export {
+  Attempt,
+  Blocked,
+  NearLimit,
+  type Observed,
+  Replay,
+  Scan,
+  Skewed,
+  StoreOp,
+} from "./observe.ts";
 export {
   type HistoryEvent,
   type ResultOptions,
@@ -80,6 +93,7 @@ export type { Preset, WorkerOptions } from "./settings.ts";
 export {
   charge,
   type DeclaredStepOptions,
+  heartbeat,
   type StepOptions,
   step,
   stepKey,

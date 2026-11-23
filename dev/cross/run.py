@@ -10,18 +10,22 @@ of the third host's `watch-<language>`, served by that host's watcher, awaits th
 client started and the worker serves. Then each host starts the same id, without a budget, with
 the same input written its own way, keys in
 another order or `200.0` for `200`, and must get the same run, the input being canonical JSON.
-Uses a `file:` store, an S3 one too when `SUBSTANTIAL_S3_URL` is set (see dev/rustfs.compose.yaml),
-and a Redis one when `SUBSTANTIAL_REDIS_URL` is set (see dev/redis.compose.yaml).
+Uses a `file:` store, the S3 one `SUBSTANTIAL_S3_URL` names and the Redis one
+`SUBSTANTIAL_REDIS_URL` names, those of dev/compose.yaml at the URLs of dev/stores.env unless the
+environment sets them.
 
+    docker compose -f dev/compose.yaml up -d --wait
     uv run dev/cross/run.py
 
-Needs cargo, uv and node 24 on the PATH, and `npm ci` done. Exits 1 on any mismatch.
+Needs cargo, uv and node 24 on the PATH, and `npm ci` done. Exits 1 on any mismatch, and at once
+when a store does not answer.
 """
 
 import json
 import os
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -31,6 +35,8 @@ from itertools import permutations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+STORES = ROOT / "dev" / "stores.env"
+UP = "docker compose -f dev/compose.yaml up -d --wait"
 CLIENT_TIMEOUT_S = 90
 SHUTDOWN_TIMEOUT_S = 30
 
@@ -62,8 +68,37 @@ def commands() -> dict[str, list[str]]:
     }
 
 
-def fresh_url(variable: str, url: str) -> str:
-    """A fresh namespace under the one `url` names."""
+def load_stores() -> None:
+    """Sets each variable of dev/stores.env the environment does not, for this script and the
+    hosts it runs."""
+    for n, line in enumerate(STORES.read_text().splitlines(), 1):
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition("=")
+        if not sep:
+            sys.exit(f"{STORES}:{n} is not NAME=value: {line!r}")
+        os.environ.setdefault(name, value)
+
+
+def reached(variable: str) -> str:
+    """The URL `variable` names, once each of its hosts accepts a connection."""
+    url = os.environ.get(variable)
+    if not url:
+        sys.exit(f"{variable} is not set: see dev/stores.env and run `{UP}`")
+    for address in url.partition("://")[2].partition("/")[0].split(","):
+        host, _, port = address.rpartition(":")
+        if not host or not port.isdigit():
+            sys.exit(f"{variable} names {address!r}, not a host:port")
+        try:
+            socket.create_connection((host, int(port)), timeout=2).close()
+        except OSError as e:
+            sys.exit(f"{variable} names {address}, which does not answer ({e}): run `{UP}`")
+    return url
+
+
+def fresh_url(variable: str) -> str:
+    """A fresh namespace under the one `variable` names."""
+    url = reached(variable)
     path, _, query = url.partition("?")
     if not query:
         sys.exit(f"{variable} has no query: {url!r}")
@@ -110,7 +145,7 @@ def pair(cmds: dict[str, list[str]], client: str, worker: str, url: str, logs: P
         return failure + worker_log
     if ran.returncode != 0:
         return f"the client exited with {ran.returncode}\n{ran.stdout}{ran.stderr}{worker_log}"
-    # § sqbjc1adw@2jweq
+    # § sqbjc1adw@wq5pb
     expected = {
         "result": {
             "greeting": "hello ada",
@@ -148,22 +183,22 @@ def pair(cmds: dict[str, list[str]], client: str, worker: str, url: str, logs: P
         )
 
     history, over = got.get("history") or [], got.get("over") or {}
-    # § one ap5tfnrja.d@twvp3
+    # § one ap5tfnrja.d@pzabt
     if got.get("result") != expected["result"]:
         return differs("result", expected["result"], got.get("result"))
-    # § one eqpe8dchq@qft03
+    # § one eqpe8dchq@b4hb2
     if history[:3] != ["step", "timer", "fired"]:
         return differs("the sleep", ["step", "timer", "fired"], history[:3])
-    # § one bq8tt3bh7@e62dh
+    # § one bq8tt3bh7@bwxh7
     if history != expected["history"]:
         return differs("history", expected["history"], history)
-    # § one j2xzy4akb@484rf
+    # § one j2xzy4akb@v2kc5
     if over.get("type") != "BudgetExceeded":
         return differs("the budget's failure", "BudgetExceeded", over.get("type"))
-    # § one fkgsx3gvk.b@t5tar
+    # § one fkgsx3gvk.b@df3gw
     if over != expected["over"]:
         return differs("the budget's details", expected["over"], over)
-    # § one dgn4hcfv0@s18nb
+    # § one gzga227zz@qb3vv
     if got.get("watched") != expected["watched"]:
         return differs("watched", expected["watched"], got.get("watched"))
     if got != expected:
@@ -187,32 +222,28 @@ def same_input(cmds: dict[str, list[str]], url: str) -> str | None:
             got = json.loads(ran.stdout.strip().splitlines()[-1])
         except (IndexError, json.JSONDecodeError):
             got = None
-        # § ct862686r.a@a0nd7
+        # § jbkv4v0we.d@h89fv
         if ran.returncode != 0 or got != expected:
             return f"{host}: expected {json.dumps(expected)}\n     got {ran.stdout}{ran.stderr}"
     return None
 
 
 def main() -> None:
+    load_stores()
+    reached("SUBSTANTIAL_S3_URL")
+    reached("SUBSTANTIAL_REDIS_URL")
     cmds = commands()
     with tempfile.TemporaryDirectory(prefix="substantial-cross-") as tmp:
         logs = Path(tmp)
         pairs = list(permutations(cmds, 2))
         cases = [("file", c, w, f"file:{logs / f'{c}-{w}'}") for c, w in pairs]
-        s3 = os.environ.get("SUBSTANTIAL_S3_URL")
-        if s3 is None:
-            print("skipping the S3 store: SUBSTANTIAL_S3_URL is not set")
-        else:
-            cases += [("s3", c, w, fresh_url("SUBSTANTIAL_S3_URL", s3)) for c, w in pairs]
-        inputs = [("file", f"file:{logs / 'same-input'}")]
-        if s3 is not None:
-            inputs.append(("s3", fresh_url("SUBSTANTIAL_S3_URL", s3)))
-        redis = os.environ.get("SUBSTANTIAL_REDIS_URL")
-        if redis is None:
-            print("skipping the Redis store: SUBSTANTIAL_REDIS_URL is not set")
-        else:
-            cases += [("redis", c, w, fresh_url("SUBSTANTIAL_REDIS_URL", redis)) for c, w in pairs]
-            inputs.append(("redis", fresh_url("SUBSTANTIAL_REDIS_URL", redis)))
+        cases += [("s3", c, w, fresh_url("SUBSTANTIAL_S3_URL")) for c, w in pairs]
+        cases += [("redis", c, w, fresh_url("SUBSTANTIAL_REDIS_URL")) for c, w in pairs]
+        inputs = [
+            ("file", f"file:{logs / 'same-input'}"),
+            ("s3", fresh_url("SUBSTANTIAL_S3_URL")),
+            ("redis", fresh_url("SUBSTANTIAL_REDIS_URL")),
+        ]
         started = time.monotonic()
         with ThreadPoolExecutor(len(cases) + len(inputs)) as pool:
             pairs_done = pool.map(lambda case: pair(cmds, *case[1:], logs), cases)

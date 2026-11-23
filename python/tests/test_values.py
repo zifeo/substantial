@@ -7,13 +7,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import pytest
-from conftest import LONG, Recording, script
+from conftest import LONG, Recording, blocked_with, script
 from test_replay import Harness
 
 from substantial import (
     Context,
     InvalidArgument,
-    RunFailed,
     StepFailed,
     Substantial,
     ValueTooLarge,
@@ -86,7 +85,7 @@ async def test_values_of_the_code_past_the_cap_raise_in_the_code(where: str) -> 
 
     replayed = await Harness(large).replay(1_000)
     if where == "result":
-        failure = replayed.failed()
+        failure = replayed.blocked()
         assert failure is not None and failure.type == "ValueTooLarge", failure
         message = failure.message
     else:
@@ -94,7 +93,7 @@ async def test_values_of_the_code_past_the_cap_raise_in_the_code(where: str) -> 
     assert f"bytes is past the limit of {MAX_VALUE} bytes" in message, message
 
 
-async def test_a_state_past_the_cap_fails_the_compression() -> None:
+async def test_a_state_past_the_cap_blocks_the_compression() -> None:
     @workflow
     async def growing(c: Context) -> None:
         async for s in c.iterate(Holder()):
@@ -103,9 +102,8 @@ async def test_a_state_past_the_cap_fails_the_compression() -> None:
     sub = await Substantial.create("memory://values-state")
     async with script(sub, [growing], continue_as_new_after=0):
         run = await sub.start(growing)
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-    assert failed.value.error.type == "ValueTooLarge"
+        error = await blocked_with(sub, run)
+    assert error.type == "ValueTooLarge"
 
 
 async def test_the_core_refuses_a_value_past_the_cap_and_records_nothing(
@@ -130,7 +128,7 @@ async def test_the_core_refuses_a_value_past_the_cap_and_records_nothing(
     async with script(sub, [large]):
         run = await sub.start(large)
         message = await run.result(timeout=LONG)
-    # § w5rs0gck0@wanp2
+    # § w5rs0gck0@36qkw
     assert str(len(LARGE) + 2) in message and str(MAX_VALUE) in message, message
     published = [e.data for e in await run.history() if e.kind == "published"]
     assert [p["value"] for p in published] == ["fits"], published
@@ -157,7 +155,7 @@ async def test_a_client_refuses_a_value_past_the_cap_before_the_store() -> None:
         assert await run.result(timeout=LONG) == "fits"
 
 
-async def test_a_run_whose_result_is_past_the_cap_fails() -> None:
+async def test_a_run_whose_result_is_past_the_cap_blocks() -> None:
     @workflow
     async def huge(c: Context) -> str:
         return LARGE
@@ -165,9 +163,10 @@ async def test_a_run_whose_result_is_past_the_cap_fails() -> None:
     sub = await Substantial.create("memory://values-result")
     async with script(sub, [huge]):
         run = await sub.start(huge)
-        with pytest.raises(RunFailed) as failed:
-            await run.result(timeout=LONG)
-    assert failed.value.error.type == "ValueTooLarge"
+        error = await blocked_with(sub, run)
+    # § h8wg39cct.e@8essm
+    assert (error.type, error.retryable) == ("ValueTooLarge", False)
+    # § end h8wg39cct.e
 
 
 # What `json` would write as another value: a key that is not a string, a NaN, a tuple, an
@@ -208,13 +207,14 @@ async def test_a_value_json_cannot_hold_is_refused_never_written_as_another() ->
             await run.send("note", bad)
     async with script(sub, [holding]):
         for i in range(len(NOT_JSON)):
-            with pytest.raises(RunFailed) as failed:
-                await (await sub.start(holding, {"i": i})).result(timeout=LONG)
-            assert failed.value.error.type == "Json", failed.value
+            # § dxgjekysz.a@gxwwx
+            error = await blocked_with(sub, await sub.start(holding, {"i": i}))
+            assert error.type == "Json", error
+            # § end dxgjekysz.a
 
 
 def test_a_duration_past_the_longest_is_refused() -> None:
-    # § b60bm4szk@28h7n
+    # § b60bm4szk@4cxa1
     assert millis(timedelta(milliseconds=2**53 - 1)) == 2**53 - 1
     with pytest.raises(InvalidArgument, match="longer than the longest"):
         millis(timedelta(milliseconds=2**53))

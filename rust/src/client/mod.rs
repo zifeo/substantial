@@ -18,13 +18,14 @@ pub(crate) use open::Source;
 pub(crate) use open::attached;
 pub use open::{Create, Open};
 pub use run::{HistoryEvent, ResultWait, RetryRun, Run, RunStatus, SendMessage};
+
 pub use runs::{RunInfo, WaitingOn};
 
 use crate::clock::Clock;
 use crate::core::Core;
 use crate::cost::Budget;
 use crate::error::{Error, Result};
-use crate::names::check_key;
+use crate::names::{check_key, check_sent_name};
 use crate::observe::Metering;
 use crate::plan;
 use crate::proto::boundary::v1::{self as b, plan_input::Plan, plan_step::Step, started};
@@ -78,7 +79,7 @@ impl Substantial {
 
     /// Starts a run of `workflow`, idempotently under `.id(..)`, a ULID when none is given.
     pub fn start<W: AsWorkflow>(&self, workflow: W, input: impl Serialize) -> StartRun<W::Output> {
-        // § bxb0ygj7m@dg747
+        // § bxb0ygj7m@4fma4
         let workflow = workflow.workflow();
         StartRun {
             sub: self.clone(),
@@ -87,6 +88,8 @@ impl Substantial {
             workflow,
             input: input_object(input),
             id: None,
+            message: None,
+            upgrade: false,
         }
     }
 
@@ -166,7 +169,7 @@ impl Substantial {
     /// Wakes the workers of this process serving `workflow`, which then list its due entries at
     /// once instead of after `max_idle`.
     fn wake_workers(&self, workflow: &str) {
-        // § c46hgkfse@n0pkt
+        // § c46hgkfse@vmswe
         let workers = self.0.workers.lock().expect("never poisoned");
         for worker in workers.iter().filter_map(Weak::upgrade) {
             worker.wake_workflow(workflow);
@@ -186,6 +189,32 @@ pub struct StartRun<O> {
     input: Result<Vec<u8>>,
     id: Option<String>,
     budget: Option<Budget>,
+    message: Option<Message>,
+    /// `schedule`'s: the id's run under an older version is the run, not `RunExists`.
+    upgrade: bool,
+}
+
+/// A message a start sends to its chain once the run is created or found: signal with start.
+pub struct Message {
+    name: String,
+    value: Result<Vec<u8>>,
+    id: Option<String>,
+}
+
+impl Message {
+    pub fn new(name: &str, value: impl Serialize) -> Self {
+        Self {
+            name: name.to_owned(),
+            value: crate::workflow::argument_json(&value, "the message's value"),
+            id: None,
+        }
+    }
+
+    /// Delivers the message once whatever the number of sends with this id.
+    pub fn id(mut self, id: &str) -> Self {
+        self.id = Some(id.to_owned());
+        self
+    }
 }
 
 impl<O> StartRun<O> {
@@ -199,6 +228,13 @@ impl<O> StartRun<O> {
     /// The run's budget, instead of its workflow's.
     pub fn budget(mut self, budget: impl Into<Budget>) -> Self {
         self.budget = Some(budget.into());
+        self
+    }
+
+    /// Sends `message` to the chain once the run is created or found, as `Run::send` would:
+    /// `RunEnded` if the chain's last run ended, and nothing sent when the start is refused.
+    pub fn message(mut self, message: Message) -> Self {
+        self.message = Some(message);
         self
     }
 }
@@ -215,11 +251,27 @@ impl<O: 'static> IntoFuture for StartRun<O> {
                 check_key("run id", id)?;
             }
             let budget = self.budget.as_ref().map(Budget::to_proto).transpose()?;
-            // § cq034wpjp@g1pap
+            // § cq034wpjp@17sbc
             let now = self.sub.now();
             let id = self.id.unwrap_or_else(|| self.sub.ulid(now.ms));
             // § end cq034wpjp
-            // § h8wg39cct.a@tpvr4
+            let message = match self.message {
+                Some(m) => {
+                    check_sent_name(&m.name)?;
+                    if let Some(id) = &m.id {
+                        check_key("message id", id)?;
+                    }
+                    let ord = self.sub.ulid(now.ms);
+                    Some(b::StartMessage {
+                        name: m.name,
+                        value: Some(json(m.value?)?),
+                        id: m.id.unwrap_or_else(|| ord.clone()),
+                        ord,
+                    })
+                }
+                None => None,
+            };
+            // § h8wg39cct.a@nxa3x
             let start = b::StartPlan {
                 prefix: String::new(),
                 workflow: self.workflow.name().to_owned(),
@@ -228,26 +280,41 @@ impl<O: 'static> IntoFuture for StartRun<O> {
                 id: id.clone(),
                 now: Some(now),
                 budget,
+                upgrade: self.upgrade,
+                message,
             };
             // § end h8wg39cct.a
-            match self.sub.plan(Plan::Start(start)).await? {
+            let sent = match self.sub.plan(Plan::Start(start)).await? {
                 Step::Started(b::Started {
                     started: Some(outcome),
+                    sent,
                 }) => match outcome {
-                    started::Started::Created(_) | started::Started::Existing(_) => {}
-                    started::Started::RunExists(taken) => {
-                        let until = taken.collected_until.map(|t| datetime(&t));
-                        return Err(Error::RunExists {
-                            id,
-                            collected: until.is_some(),
-                            until,
-                        });
+                    started::Started::Created(_) | started::Started::Existing(_) => sent,
+                    // § sfzkmddwj@1m35f
+                    started::Started::Versioned(v) => {
+                        let running = v.version.map_or("none".into(), |v| v.to_string());
+                        let new = self
+                            .workflow
+                            .version()
+                            .map_or("none".into(), |v| v.to_string());
+                        tracing::info!(
+                            "schedule {id} runs version {running}: it moves to version {new} at its next boundary that upgrades"
+                        );
+                        sent
                     }
+                    // § end sfzkmddwj
+                    started::Started::RunExists(_) => return Err(Error::RunExists { id }),
                     started::Started::Failed(f) => return Err(Error::StoreError(f.message)),
                 },
                 other => return Err(plan::unexpected("start", other)),
-            }
+            };
             self.sub.wake_workers(self.workflow.name());
+            if let Some(b::Sent {
+                sent: Some(outcome),
+            }) = sent
+            {
+                run::sent_outcome(&self.sub, &id, outcome)?;
+            }
             Ok(Run::new(self.sub, id))
         })
     }
@@ -282,7 +349,7 @@ impl<O: 'static> IntoFuture for ScheduleRun<O> {
             schedule::check_config(revision, self.backfill)?;
             let wanted = schedule::config(revision, self.cron.as_ref(), self.backfill);
             let run = self.sub.run(&self.workflow, id);
-            // § ey8zhz0kq.b@hkjnf
+            // § ey8zhz0kq.b@b17vm
             let published: Option<serde_json::Value> = run.read(schedule::MESSAGE).await?;
             if let Some(published) = published {
                 let applied: serde_json::Map<_, _> = ["revision", "cron", "tz", "backfill"]
@@ -309,8 +376,10 @@ impl<O: 'static> IntoFuture for ScheduleRun<O> {
                 }
             }
             // § end ey8zhz0kq.b
-            // § ey8zhz0kq.a@c9ffn
-            let run = self.sub.start(&self.workflow, ()).id(id).await?;
+            // § ey8zhz0kq.a@xawmt
+            let mut start = self.sub.start(&self.workflow, ()).id(id);
+            start.upgrade = true;
+            let run = start.await?;
             let message = schedule::message_id(&wanted)?;
             run.send(schedule::MESSAGE, wanted).id(&message).await?;
             // § end ey8zhz0kq.a

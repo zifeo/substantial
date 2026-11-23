@@ -11,6 +11,7 @@ struct Options {
     name: Option<LitStr>,
     retry: Option<Expr>,
     timeout: Option<Expr>,
+    heartbeat_timeout: Option<Expr>,
     undo: Option<Expr>,
 }
 
@@ -21,13 +22,17 @@ fn options(args: TokenStream) -> syn::Result<Options> {
             &mut o.retry
         } else if meta.path.is_ident("timeout") {
             &mut o.timeout
+        } else if meta.path.is_ident("heartbeat_timeout") {
+            &mut o.heartbeat_timeout
         } else if meta.path.is_ident("undo") {
             &mut o.undo
         } else if meta.path.is_ident("name") {
             o.name = Some(meta.value()?.parse()?);
             return Ok(());
         } else {
-            return Err(meta.error("expected `name`, `retry`, `timeout` or `undo`"));
+            return Err(
+                meta.error("expected `name`, `retry`, `timeout`, `heartbeat_timeout` or `undo`")
+            );
         };
         *slot = Some(meta.value()?.parse()?);
         Ok(())
@@ -109,10 +114,11 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let calls = passed(&args);
     let retry = o.retry.map(|r| quote!(.retry(#r)));
     let timeout = o.timeout.map(|t| quote!(.timeout(#t)));
+    let heartbeat_timeout = o.heartbeat_timeout.map(|t| quote!(.heartbeat_timeout(#t)));
     // The undo gets the arguments too: its closure keeps copies of its own.
     let (undo_args, undo) = match o.undo {
         Some(undo) => {
-            // § a5c1mfs8d@thjp5
+            // § a5c1mfs8d@9wwy8
             let copies: Vec<Ident> = (0..types.len())
                 .map(|i| format_ident!("__undo{i}"))
                 .collect();
@@ -151,6 +157,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                     })
                     #retry
                     #timeout
+                    #heartbeat_timeout
                     #undo
                     .await
             }

@@ -7,6 +7,7 @@ skips fires at the end of the gap, and a local time it repeats fires at its firs
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
@@ -14,7 +15,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import rfc8785
 
@@ -86,7 +87,16 @@ def _field(expr: str, text: str, field: str, lo: int, hi: int, names: dict[str, 
     return values
 
 
+@functools.cache
+def _zones() -> frozenset[str]:
+    return frozenset(available_timezones())
+
+
 def _zone(tz: str) -> ZoneInfo:
+    # A case-insensitive file system (macOS) opens `europe/zurich`, which Linux and the other
+    # hosts refuse.
+    if tz not in _zones():
+        raise InvalidArgument(f"{tz!r} is not a time zone of the IANA database")
     try:
         return ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError):
@@ -173,7 +183,7 @@ def _wall_ms(w: datetime) -> int:
 def _resolve(zone: ZoneInfo, w: int) -> int:
     """The instant of the local time `w` (ms, read as UTC): the earlier of two in a repeated
     hour, the end of the gap for a time a clock change skips."""
-    # § d08sxcdv8@2ybt3
+    # § d08sxcdv8@mxt82
     before, after = _offset(zone, w - _DAY), _offset(zone, w + _DAY)
     valid = [w - o for o in {before, after} if _offset(zone, w - o) == o]
     if valid:
@@ -225,7 +235,7 @@ def parse(text: str) -> int:
 def plan(expr: str, tz: str, after: str, now: str, backfill: int) -> dict[str, Any]:
     """The fires due by `now` after `after`, at most the `backfill` most recent, those before
     them skipped, and the next fire after `now`."""
-    # § vnykycs34.d@s1gcg
+    # § vnykycs34.d@tw1qx
     c = _compile(expr, tz)
     t, end = parse(after), parse(now)
     due: list[int] = []
@@ -295,7 +305,7 @@ def _published(st: dict[str, Any]) -> dict[str, Any]:
 
 
 def _received(value: Any) -> tuple[int, Cron | None, int]:
-    # § ey8zhz0kq.c@q9vqt
+    # § ey8zhz0kq.g@yh4ek
     if not isinstance(value, dict) or set(value) != {"revision", "cron", "tz", "backfill"}:
         raise InvalidArgument(f"a schedule message is a config of sub.schedule, not {value!r}")
     cron = None if value["cron"] is None else Cron(value["cron"], value["tz"])
@@ -316,7 +326,7 @@ async def _apply(c: Context, st: dict[str, Any], configs: list[Any]) -> None:
     # § ey8zhz0kq.e@n0ntt
     revision, cron, backfill = max(received, key=lambda r: r[0])
     # § end ey8zhz0kq.e
-    # § ey8zhz0kq.f@03mqy
+    # § ey8zhz0kq.h@j3yhf
     known: dict[int, str] = {}
     if st["revision"] > 0:
         known[st["revision"]] = _flat(st["revision"], st["cron"], st["tz"], st["backfill"])
@@ -325,7 +335,7 @@ async def _apply(c: Context, st: dict[str, Any], configs: list[Any]) -> None:
         if known.get(r, text) != text:
             raise ConfigError(f"schedule revision {r} came with two configs: {known[r]} and {text}")
         known[r] = text
-    # § end ey8zhz0kq.f
+    # § end ey8zhz0kq.h
     # § one ey8zhz0kq@5y6t4
     if revision <= st["revision"]:
         return
@@ -346,24 +356,24 @@ def _ms(t: datetime) -> int:
     return (t - _EPOCH) // timedelta(milliseconds=1)
 
 
-async def schedule(c: Context) -> AsyncIterator[datetime]:
+async def schedule(c: Context, upgrade: bool) -> AsyncIterator[datetime]:
     """The loop of `c.schedule()`: its state is the loop's, its config the last `schedule`
     message of a higher revision."""
     configs: list[Any] = []
     c.handle(MESSAGE, configs.append)
-    async for st in c.iterate(_initial()):
+    async for st in c.iterate(_initial(), upgrade=upgrade):
         while not st["pending"]:
             if configs:
                 await _apply(c, st, configs)
                 continue
             if st["cron"] is None:
-                # § vnykycs34.c@a7hpd
+                # § vnykycs34.c@57m4t
                 await c.wait_until(lambda: bool(configs))
                 continue
             now = _ms(await c.now())
             args = (st["cron"], st["tz"], st["after"], iso(now), st["backfill"])
             before = st["next"]
-            # § vnykycs34.a@1yfem
+            # § vnykycs34.a@ytpk6
             fires = await call_step(c._shared, NEXT, plan, args, {}, None, None, None)
             # § end vnykycs34.a
             skipped = fires["skipped"]
@@ -379,14 +389,14 @@ async def schedule(c: Context) -> AsyncIterator[datetime]:
             st["next"] = fires["next"]
             if not st["pending"]:
                 if st["next"] != before:
-                    # § ey8zhz0kq.d@yb0pg
+                    # § ey8zhz0kq.d@p15j3
                     c.publish(MESSAGE, _published(st))
                 wait = timedelta(milliseconds=parse(st["next"]) - now)
                 await c.wait_until(lambda: bool(configs), timeout=wait)
-        # § vnykycs34@1bh5t
+        # § vnykycs34@p61hd
         at = st["pending"].pop(0)
         st["last"] = at
-        # § ey8zhz0kq.d@yzh9r
+        # § ey8zhz0kq.d@4rpw0
         st["recent"] = [*st["recent"], at][-RECENT:]
         c.publish(MESSAGE, _published(st))
         # § end ey8zhz0kq.d

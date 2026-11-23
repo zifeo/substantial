@@ -44,12 +44,17 @@ message CreatePlan {
   reserved 2, 3;
   reserved "partitions";
   string prefix = 1;
+  // The opener's own probe keys, probe/<probe>/: an id no other opener uses, a valid name (1 to
+  // 100 of a-z, 0-9, ".", "_", "-"), drawn at random by the host, such as a lowercase ULID.
+  string probe = 4;
 }
 
 // Opens the namespace whose marker exists; then the probe.
 message OpenPlan {
   reserved 2;
   string prefix = 1;
+  // As CreatePlan's.
+  string probe = 3;
 }
 
 message StartPlan {
@@ -65,6 +70,19 @@ message StartPlan {
   layout.v1.Time now = 7;
   // The run's limits, part of its identity; absent, none.
   layout.v1.Budget budget = 8;
+  // sub.schedule: an id whose run has an older version than this start, and is the same otherwise,
+  // answers versioned instead of run_exists.
+  bool upgrade = 9;
+  // Signal with start: sent to the chain once the start is created or found, as a send.
+  StartMessage message = 10;
+}
+
+// A message start sends, as SendPlan's fields.
+message StartMessage {
+  string name = 1;
+  layout.v1.Value value = 2;
+  string id = 3;
+  string ord = 4;
 }
 
 // The outcome of a chain's last run, through its continuations.
@@ -83,7 +101,7 @@ message StatusPlan {
   reserved "partitions";
   string prefix = 1;
   string chain = 3;
-  // Tells a live claim from an expired one.
+  // Tells a live lease from an expired one.
   layout.v1.Time now = 4;
 }
 
@@ -109,29 +127,33 @@ message ReadPlan {
   string key = 4;
 }
 
-// The live runs of a workflow, all versions, read from its queue: its due entries, then its rest
-// markers. Answered in pages: each next that answers a page goes on, so each page comes once, then
-// end.
+// The live runs of a workflow, all versions, read from its queue: its blocked markers, then its due
+// entries, its messages among them, then its rest markers. Answered in pages: each next that
+// answers a page goes on, so each page comes once, then end.
 message RunsPlan {
   string prefix = 1;
   string workflow = 2;
 }
 
-// The events the chain's last run replays: of its latest snapshot and the segments after it, and,
-// for a retry without a snapshot yet, of the failed run it resumes first.
+// The events the chain's current run replays: those of the runs a retry or a reset resumes, then
+// its own segments'.
 message HistoryPlan {
   string prefix = 1;
   string chain = 2;
 }
 
-// A retry of the chain's last run, which failed: a run with a derived id resuming it.
+// A retry of the chain's last run, which failed: a run with a derived id resuming it. With keep,
+// a reset of the chain's last run, which ended completed, failed or cancelled: the run resumes its
+// first keep events.
 message RetryPlan {
   string prefix = 1;
   string chain = 2;
   // The retry's created_at, the time of its due entry.
   layout.v1.Time now = 3;
-  // The retry's limits; absent, the failed run's.
+  // The retry's limits; absent, the ended run's.
   layout.v1.Budget budget = 4;
+  // A reset: how many events of the run's history, as HistoryPlan gives them, the new run replays.
+  optional uint64 keep = 5;
 }
 
 message PlanRequest {
@@ -141,22 +163,21 @@ message PlanRequest {
   }
 }
 
-// No run of the chain. During the tombstone the host raises RunNotFound saying the run was collected.
+// No run of the chain: it never existed, or it ended and its retention passed.
 message NoChain {
-  // The chain's first run was collected and its id stays taken until then; absent when it never
-  // existed or its tombstone passed.
-  layout.v1.Time collected_until = 1;
+  reserved 1;
+  reserved "collected_until";
 }
 
-// The id is taken.
+// The id is taken, by a run live or within its retention.
 message RunExists {
-  // By a run collected, whose id is free again after then; absent when taken by a run kept.
-  layout.v1.Time collected_until = 1;
+  reserved 1;
+  reserved "collected_until";
 }
 
 message Sent {
-  // The message is in the inbox of run, with its due entry under the queue of workflow, which a
-  // worker of this process serving it is woken on.
+  // The message is a due entry of the chain, whose current run was run, under the queue of
+  // workflow, which a worker of this process serving it is woken on.
   message Accepted {
     string run = 1;
     string workflow = 2;
@@ -181,25 +202,40 @@ message Opened {
   oneof opened {
     // The namespace is open and the store passed the probe.
     Empty open = 4;
-    // No namespace, a namespace of another layout, or a store that failed the probe.
+    // No namespace, or a namespace of a layout this core does not know.
     string layout_error = 2;
     StoreFailure failed = 3;
+    // A namespace of layout 2 (Substantial 0.3), which this core never reads, or a store that
+    // failed a probe: an exclusive create that created twice, or a cas naming a wrong etag that
+    // wrote. The host raises ConfigError with the message.
+    string config_error = 5;
   }
 }
 
 message Started {
   oneof started {
-    // The run is created: start, indexes, due entry.
+    // The run is created: its head, then its due entry.
     Empty created = 1;
-    // The id was started with the same workflow, version and input: that run, whose indexes and
-    // due entry are created again in case its first start stopped before them.
+    // The id was started with the same workflow, version and input: that run, whose due entry is
+    // created again in case its first start stopped before it.
     Empty existing = 2;
-    // The id is taken by another workflow, version or input, or by a run the core created; or by a
-    // run collected, until its collected_until.
+    // The id is taken by another workflow, version or input, or by a run the core created, until
+    // its run's retention passed.
     RunExists run_exists = 3;
     // Starting again with the same id creates the run once.
     StoreFailure failed = 4;
+    // StartPlan.upgrade: the id's run has an older version than this start and is the same
+    // otherwise. The chain's last run and its version, absent for one without; a live run moves at
+    // its next continuation that asks for the highest version served.
+    Versioned versioned = 6;
   }
+  message Versioned {
+    string run = 1;
+    optional uint32 version = 2;
+  }
+  // With StartPlan.message, once the start is created, existing or versioned: the message's
+  // outcome, as a send's to the chain. Absent otherwise.
+  Sent sent = 5;
 }
 
 message RunResult {
@@ -208,7 +244,7 @@ message RunResult {
     layout.v1.Result result = 2;
   }
   // The chain's last run, not ended yet: the host asks again later, passing run back in
-  // ResultPlan.run, and may wait on result_key, the run's result under the namespace, on a store
+  // ResultPlan.run, and may wait on result_key, the chain's head under the namespace, on a store
   // whose listings wait.
   message NotEnded {
     string run = 1;
@@ -226,11 +262,11 @@ message RunResult {
 
 enum RunStatus {
   RUN_STATUS_UNSPECIFIED = 0;
-  // Started, no segment yet, no live claim.
+  // Started, no segment yet, no live lease.
   RUN_STATUS_PENDING = 1;
-  // A worker holds a live claim on it.
+  // A worker holds a live lease on it.
   RUN_STATUS_RUNNING = 2;
-  // Segments, no result, no live claim.
+  // Segments, not ended, no live lease.
   RUN_STATUS_SUSPENDED = 3;
   RUN_STATUS_COMPLETED = 4;
   RUN_STATUS_FAILED = 5;
@@ -238,12 +274,17 @@ enum RunStatus {
   // A run that continued is live until its result exists, then the chain goes on with the next.
   reserved 7;
   reserved "RUN_STATUS_CONTINUED";
+  // Its code raised an error that is no end, or diverged from its history: no live lease, tried
+  // again after a backoff, until code that runs it is deployed.
+  RUN_STATUS_BLOCKED = 8;
 }
 
 message RunState {
   message Of {
     string run = 1;
     RunStatus status = 2;
+    // For RUN_STATUS_BLOCKED: the latest block, its error and when it is tried again.
+    layout.v1.Blocked blocked = 3;
   }
   oneof state {
     // The status of the chain's last run.
@@ -273,6 +314,8 @@ enum Waiting {
   WAITING_INBOX = 3;
   // Idle until a message comes, with no timer.
   WAITING_MESSAGE = 4;
+  // Blocked by an error of its code, tried again at due_at (RunInfo.blocked).
+  WAITING_BLOCKED = 5;
 }
 
 message RunInfo {
@@ -282,6 +325,8 @@ message RunInfo {
   // Its earliest due entry's time; absent when it waits on messages alone.
   layout.v1.Time due_at = 4;
   Waiting waiting = 5;
+  // For WAITING_BLOCKED: the latest block, its error and when it is tried again.
+  layout.v1.Blocked blocked = 6;
 }
 
 message Runs {
@@ -305,7 +350,7 @@ message HistoryEvent {
   // When the segment was committed.
   layout.v1.Time at = 3;
   // step, step_retry, step_failed, timer, fired, message, child, sent, published, completed,
-  // failed, cancelled, continued.
+  // failed, cancelled, continued, budget_exceeded, watched, patched.
   string kind = 4;
   // A JSON object, the event's fields: times in RFC 3339, failures as {"type", "message",
   // "retryable", "details"}, values as the code gave them, a value of raw bytes as
@@ -335,7 +380,9 @@ message Retried {
   }
   message NotRetryable {
     string run = 1;
-    // Why: the run has not ended, ended otherwise than failed, or was rolled back.
+    // Why: the run has not ended, ended otherwise than failed (a retry), was rolled back or ran
+    // undos, was retried or reset already otherwise, or a reset's keep is past its end, or drops a
+    // child start or an undo it made after the point.
     string message = 2;
   }
   oneof retried {

@@ -13,7 +13,9 @@ use super::workers::Incarnation;
 use super::world::World;
 use crate::settings::STORE_RETRY;
 use crate::store::retry::{self, Fault};
-use crate::store::{Capabilities, Create, ListWait, Listing, Store, StoreFailure, StoreFuture};
+use crate::store::{
+    Capabilities, Cas, Create, ListWait, Listing, Object, Store, StoreFailure, StoreFuture,
+};
 
 /// Faults drawn from `seed`: each worker store operation fails with probability `rate`, half of
 /// the failed creates applied anyway with their answer lost, and each step attempt that returns
@@ -112,7 +114,12 @@ impl Store for FaultStore {
         Box::pin(async { Ok(()) })
     }
 
-    fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
+    fn create<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Create> {
         Box::pin(async move {
             let memory = &self.world.memory;
             let create = || {
@@ -120,14 +127,14 @@ impl Store for FaultStore {
                     "create",
                     key,
                     || async {
-                        let created = memory.create(key, bytes.clone()).await?;
-                        if created == Create::Created {
+                        let created = memory.create(key, bytes.clone(), expiry).await?;
+                        if let Create::Created { .. } = created {
                             self.world.writes.fetch_add(1, Ordering::SeqCst);
                             self.world.written(key, &bytes);
                         }
                         Ok(created)
                     },
-                    |created| *created == Create::Created,
+                    |created| matches!(created, Create::Created { .. }),
                 )
             };
             let get = || self.attempt("get", key, || memory.get(key), |_| false);
@@ -135,7 +142,35 @@ impl Store for FaultStore {
         })
     }
 
-    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>> {
+    /// Chaos faults a compare-and-set as it does a get: it fails, never applied.
+    fn cas<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        etag: &'a str,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Cas> {
+        Box::pin(async move {
+            let memory = &self.world.memory;
+            let written = self
+                .retry("cas", key, || memory.cas(key, bytes.clone(), etag, expiry))
+                .await?;
+            if let Cas::Written { .. } = written {
+                self.world.writes.fetch_add(1, Ordering::SeqCst);
+                self.world.written(key, &bytes);
+            }
+            Ok(written)
+        })
+    }
+
+    fn check_expiry<'a>(
+        &'a self,
+        days: &'a [u32],
+    ) -> futures::future::BoxFuture<'a, crate::error::Result<()>> {
+        self.world.memory.check_expiry(days)
+    }
+
+    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Object>> {
         Box::pin(self.retry("get", key, move || self.world.memory.get(key)))
     }
 

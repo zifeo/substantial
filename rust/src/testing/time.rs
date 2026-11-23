@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -124,6 +124,9 @@ impl State {
 
 pub(crate) struct Time {
     state: Mutex<State>,
+    /// `state.ms`, read without the lock: the memory store reads the clock at every listing, and
+    /// a scan skip lists while it holds the lock.
+    ms: AtomicI64,
     /// Raised by every park, task end and body end.
     changed: Notify,
     settling: tokio::sync::Mutex<()>,
@@ -142,6 +145,7 @@ impl Time {
         };
         Self {
             state: Mutex::new(state),
+            ms: AtomicI64::new(ms),
             changed: Notify::new(),
             settling: tokio::sync::Mutex::new(()),
         }
@@ -152,7 +156,7 @@ impl Time {
     }
 
     pub(super) fn now(&self) -> i64 {
-        self.lock().ms
+        self.ms.load(Ordering::SeqCst)
     }
 
     /// Parks the task running until one of `signals` is ready or the clock reaches `at`, while
@@ -324,7 +328,7 @@ impl Time {
 
     /// Moves to each deadline up to `target`, settling there.
     async fn move_to(&self, target: i64, skip: &mut impl FnMut(&mut State, i64)) -> Result<()> {
-        // § x55x5yqy4.b@1dhda
+        // § x55x5yqy4.b@72hpp
         loop {
             {
                 let mut st = self.lock();
@@ -340,6 +344,7 @@ impl Time {
                     )));
                 }
                 st.ms = next;
+                self.ms.store(next, Ordering::SeqCst);
             }
             self.settled().await?;
         }

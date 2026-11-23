@@ -93,5 +93,6 @@ async def test_poll_checks_every_and_timeout(
 ) -> None:
     async with env.worker([poller], preset="service"):
         run = await env.start(poller, {"n": 1, "every": every, "timeout": timeout})
-        with pytest.raises(s.RunFailed, match=message):
+        with pytest.raises(s.testing.Stuck, match=f"blocked by InvalidArgument: {message}"):
             await run.result()
+        assert await run.status() == "blocked"

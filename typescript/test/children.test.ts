@@ -11,7 +11,7 @@ import {
   workflow,
 } from "../src/mod.ts";
 import { current } from "../src/scheduler.ts";
-import { eachAdapter, LONG, script } from "./helpers.ts";
+import { blockedBy, eachAdapter, LONG, script } from "./helpers.ts";
 
 const double = workflow("double", async (c: Context, input: { n: number }) => {
   if (input.n === 0) {
@@ -117,7 +117,7 @@ eachAdapter("a loop compresses at every boundary", async (store) => {
 });
 
 eachAdapter(
-  "a state that is not JSON fails a compression",
+  "a state that is not JSON blocks a compression",
   async (store) => {
     const opaque = workflow("opaque", async (c: Context) => {
       const s = { i: 0, at: null as unknown };
@@ -137,9 +137,8 @@ eachAdapter(
     });
     const sub = await createOn(store);
     await using _ = script(sub, [opaque, notObject], { continueAsNewAfter: 0 });
-    const failed = await (await sub.start(opaque)).result({ timeout: LONG }).catch((e) => e);
-    assert.ok(failed instanceof RunFailed, String(failed));
-    assert.equal(failed.error.type, "NotCompressible", failed.error.message);
+    const error = await blockedBy(sub, opaque, await sub.start(opaque));
+    assert.equal(error.type, "NotCompressible", error.message);
     assert.equal(await (await sub.start(notObject)).result({ timeout: LONG }), "refused");
   },
   ["memory"],

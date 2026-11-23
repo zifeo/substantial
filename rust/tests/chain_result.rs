@@ -27,7 +27,7 @@ fn waiter() -> Workflow<String> {
 fn doomed() -> Workflow<()> {
     Workflow::without_input("doomed", |c| async move {
         let message: String = c.receive("go").await?;
-        Err(Error::failed("ValueError", message))
+        Err(Error::fail("ValueError", message))
     })
 }
 
@@ -59,9 +59,7 @@ fn watcher() -> Workflow<Value> {
             Err(Error::RunFailed { status, error, .. }) => {
                 Ok(json!({"status": status.to_string(), "error": error.message}))
             }
-            Err(e @ Error::RunNotFound { collected, .. }) => {
-                Ok(json!({"not_found": e.to_string(), "collected": collected}))
-            }
+            Err(e @ Error::RunNotFound { .. }) => Ok(json!({"not_found": e.to_string()})),
             Err(e) => Err(e),
         }
     })
@@ -84,7 +82,7 @@ async fn a_chain_ended_before_the_watch_answers_at_once() {
         .start(watcher(), json!({"chain": target.chain()}))
         .await
         .unwrap();
-    // § kqh75fg4a.a@9nvw6
+    // § e93tpdr4p.a@rz68j
     assert_eq!(run.result().await.unwrap(), json!({"value": 1}));
     worker.shutdown().await.unwrap();
     done(env).await;
@@ -159,24 +157,24 @@ async fn a_chain_that_continued_is_awaited_to_its_last_run() {
     env.settle().await.unwrap();
     assert_eq!(run.status().await.unwrap(), RunStatus::Suspended);
     target.send("go", "second").await.unwrap();
-    // § dgn4hcfv0.b@3hx5g
+    // § gzga227zz.b@2nfq4
     assert_eq!(run.result().await.unwrap(), json!({"value": "second"}));
     worker.shutdown().await.unwrap();
     done(env).await;
 }
 
 #[tokio::test]
-async fn a_collected_chain_raises_run_not_found_collected() {
+async fn a_removed_chain_raises_run_not_found() {
     let env = Env::open(t0()).await.unwrap();
     let worker = service(&env);
     let target = env.start(quick(), ()).id("q").await.unwrap();
     assert_eq!(target.result().await.unwrap(), 1);
     env.advance(days(31)).await.unwrap();
     let run = env.start(watcher(), json!({"chain": "q"})).await.unwrap();
-    let result = run.result().await.unwrap();
-    assert_eq!(result["collected"], json!(true));
-    let message = result["not_found"].as_str().unwrap();
-    assert!(message.starts_with("no chain q"), "{message}");
+    assert_eq!(
+        run.result().await.unwrap(),
+        json!({"not_found": "no chain q"})
+    );
     worker.shutdown().await.unwrap();
     done(env).await;
 }
@@ -191,7 +189,7 @@ async fn a_missing_chain_raises_run_not_found() {
         .unwrap();
     assert_eq!(
         run.result().await.unwrap(),
-        json!({"not_found": "no chain nobody", "collected": false})
+        json!({"not_found": "no chain nobody"})
     );
     worker.shutdown().await.unwrap();
     done(env).await;
@@ -200,14 +198,14 @@ async fn a_missing_chain_raises_run_not_found() {
 /// Rust's `WaitTimeout` carries no message, as for its other timeouts.
 fn patient() -> Workflow<Value> {
     Workflow::new("patient", |c: Context, input: Watched| async move {
-        // § dgn4hcfv0.a@j9hnc
+        // § gzga227zz.a@p812n
         match c.result::<String>(&input.chain).timeout(minutes(5)).await {
             Err(e @ Error::WaitTimeout) => {
                 let at = c.now().await?.to_rfc3339();
                 let value: String = c.result(&input.chain).await?;
                 Ok(json!([e.to_string(), at, value]))
             }
-            other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+            other => Err(Error::fail("Unexpected", format!("{other:?}"))),
         }
     })
 }
@@ -250,7 +248,8 @@ async fn two_watchers_of_one_chain_both_get_its_end() {
     }
     env.settle().await.unwrap();
     target.send("go", "both").await.unwrap();
-    // § one dgn4hcfv0.d@c8w1b, kqh75fg4a@s5aj6
+    // § e93tpdr4p@pf53r
+    // § one gzga227zz.d@60h60
     for run in runs {
         assert_eq!(run.result().await.unwrap(), json!({"value": "both"}));
     }
@@ -264,7 +263,7 @@ fn narcissist() -> Workflow<Vec<String>> {
         for chain in [c.chain().to_owned(), "Not An Id".to_owned()] {
             match c.result::<Value>(&chain).await {
                 Err(Error::InvalidArgument(message)) => refused.push(message),
-                other => return Err(Error::failed("Unexpected", format!("{other:?}"))),
+                other => return Err(Error::fail("Unexpected", format!("{other:?}"))),
             }
         }
         Ok(refused)
@@ -280,12 +279,12 @@ async fn waiting_on_its_own_chain_raises_invalid_argument() {
         .unwrap();
     let run = env.start(narcissist(), ()).id("me").await.unwrap();
     let refused = run.result().await.unwrap();
-    // § dgn4hcfv0.c@gf1mw
+    // § gzga227zz.c@m2yq3
     assert!(
         refused[0].contains("cannot await its own chain me"),
         "{refused:?}"
     );
-    // § end dgn4hcfv0.c
+    // § end gzga227zz.c
     assert!(
         refused[1].starts_with(r#"run id "Not An Id" must match"#),
         "{refused:?}"
@@ -320,7 +319,7 @@ async fn the_outcome_replays() {
     env.settle().await.unwrap();
     target.send("go", "kept").await.unwrap();
     env.settle().await.unwrap();
-    // The watched chain is collected: a result read again would raise RunNotFound.
+    // The watched chain is removed: a result read again would raise RunNotFound.
     env.advance(days(31)).await.unwrap();
     let status = target.status().await;
     assert!(

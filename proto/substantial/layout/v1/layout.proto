@@ -1,8 +1,8 @@
-// The objects of layout 2, those of layout 1 unchanged (docs/interfaces.md). Every object of a
-// namespace but its marker, substantial.json, is one of these messages in protobuf binary encoding.
-// The core alone encodes them, for every host, so the bytes are the same everywhere: no map fields,
-// whose order would vary.
-// § sqbjc1adw.a@c0abq
+// The objects of layout 3, the head layout (docs/interfaces.md). Every object of a namespace but its
+// marker, substantial.json, and its empty markers is one of these messages in protobuf binary
+// encoding: runs/<id> a Run, a message's due entry a Message. The core alone encodes them, for every
+// host, so the bytes are the same everywhere: no map fields, whose order would vary.
+// § sqbjc1adw@b3cmx
 syntax = "proto3";
 
 package substantial.layout.v1;
@@ -36,9 +36,10 @@ message Failure {
 message Parent {
   string run = 1;
   uint64 occurrence = 2;
-  // The parent's segment whose effects start the child: its collection waits until the parent can
-  // no longer redo them.
+  // The parent's segment whose effects start the child.
   uint64 segment = 3;
+  // c.start(..., abandon): the parent's end does not cancel this child.
+  bool abandon = 4;
 }
 
 // A message id a run consumed, and when: the at of its message event.
@@ -47,7 +48,7 @@ message Seen {
   Time at = 2;
 }
 
-// runs/<run>/start
+// What a run is: in its head, and in its archive.
 message Start {
   string workflow = 1;
   optional uint32 version = 2;
@@ -72,8 +73,14 @@ message Start {
   // The run's limits: the start's own, else its workflow's; part of the start's identity, carried by
   // continuations, set again or kept by a retry. None means no limit.
   Budget budget = 16;
-  // The chain's cost before this run: of the runs it continues or the failed run it retries.
+  // The chain's cost before this run: of the runs it continues or the ended run it retries or resets.
   Cost cost = 17;
+  // A reset only: how many events of the run it resumes it replays, as history numbers them; the
+  // messages that run consumed after them are consumed again. Absent for a retry of a failed run.
+  optional uint64 keep = 18;
+  // A run of the chain before this one started a child it did not abandon: this run's end cancels
+  // the children of the chain not yet ended. Set from the end segment of the run it continues.
+  bool children = 19;
 }
 
 // An integer amount of nano-units of an ISO 4217 currency, at most 2^63-1.
@@ -88,6 +95,7 @@ message Requests {
   uint64 get = 2;
   uint64 list = 3;
   uint64 delete = 4;
+  uint64 cas = 5;
 }
 
 // Requests and amounts, the amounts sorted by currency, one per currency.
@@ -137,6 +145,9 @@ message StepRetry {
   Failure error = 4;
   Time at = 5;
   repeated Amount charges = 6;
+  // The step's deadline, Retry(deadline=): its first attempt's start plus the deadline, past which
+  // no attempt starts; absent for a step without one.
+  Time deadline = 7;
 }
 
 message StepFailed {
@@ -160,7 +171,7 @@ message MessageConsumed {
   string key = 1;
   string id = 2;
   string name = 3;
-  // Exactly one of value and ended; ended only for substantial.ended.
+  // Exactly one of value and ended; ended only for substantial.ended and substantial.watched.
   Value value = 4;
   Ended ended = 5;
   // When the run consumed it, the run machine's now: its dedup_window starts there.
@@ -175,6 +186,8 @@ message Child {
   Value input = 5;
   // The child's budget, given to its start.
   Budget budget = 6;
+  // c.start(..., abandon): the parent's end does not cancel this child (Parent.abandon).
+  bool abandon = 7;
 }
 
 message Sent {
@@ -206,14 +219,20 @@ message Watched {
   // The chain awaited.
   string chain = 2;
   oneof outcome {
-    // The chain's last run, under which runs/<run>/watch/<watcher> was created: its end arrives as
+    // The chain's current run when watch/<chain>/<watcher> was created: its end arrives as
     // a substantial.watched message.
     string waiting = 3;
     // The chain's end, read before or just after the watcher key was created.
     Ended ended = 4;
-    // RunNotFound: no such chain, or one collected.
+    // RunNotFound: no such chain, or one past its retention.
     Failure refused = 5;
   }
+}
+
+// The code asked c.patched(id) live: every replay that reaches this point answers true, and one of
+// a history without it answers false.
+message Patched {
+  string id = 1;
 }
 
 message Published {
@@ -274,10 +293,11 @@ message Event {
     Continued continued = 13;
     BudgetExceeded budget_exceeded = 14;
     Watched watched = 15;
+    Patched patched = 16;
   }
 }
 
-// runs/<run>/log/<n>
+// Segment n of a run, in its head.
 message Segment {
   uint64 n = 1;
   repeated Event events = 2;
@@ -287,30 +307,25 @@ message Segment {
   Time next_wake = 3;
   string worker = 4;
   Time created_at = 5;
-  // On an end segment, how long the run is kept after it ends; absent on any other.
-  optional uint64 retention_ms = 6;
-  // The run's rest marker, queues/<workflow>/rest/<run>, exists: set by the suspension that
+  // Milliseconds, before retention was whole days.
+  reserved 6;
+  reserved "retention_ms";
+  // On an end segment, how many whole days the run is kept after it ends; absent on any other.
+  optional uint32 retention_days = 10;
+  // The rest marker, queues/<workflow>/rest/<chain>, exists: set by the suspension that
   // created it, waiting on messages only, and kept by every later segment of the run.
   bool rest = 7;
   // The chain's cost through this segment, its own commit's planned requests included.
   Cost cost = 8;
+  // On an end segment: the run, or a run of its chain before it (Start.children), started a child it
+  // did not abandon. An end other than a continuation then cancels the children of the chain not
+  // yet ended; a continuation passes it on to the next run's start. A cancellation cancels them
+  // whatever it says, as before this field existed.
+  bool children = 9;
 }
 
-// runs/<run>/snap/<n>: every event of segments 0 to n, after those of the failed runs it resumes.
-message Snapshot {
-  uint64 n = 1;
-  repeated Event events = 2;
-  Time next_wake = 3;
-  // Segment n's rest.
-  bool rest = 4;
-  // Where the events come from, in their order, one per segment.
-  repeated Origin origins = 5;
-  // Segment n's cost.
-  Cost cost = 6;
-}
-
-// A segment whose events a snapshot holds: the run that wrote it, this one or a failed run it
-// resumes, its number and time, and how many of the events that follow are its.
+// A segment whose events a head's resumed events hold: the run that wrote it, a run a retry or a
+// reset resumes, its number and time, and how many of the events that follow are its.
 message Origin {
   string run = 1;
   uint64 n = 2;
@@ -318,11 +333,12 @@ message Origin {
   uint64 events = 4;
 }
 
-// runs/<run>/inbox/<ord>-<id>
+// A message's due entry, queues/<workflow>/due/19700101t000000000z~<chain>~m<ord>-<id>, and a
+// message a head holds (Inboxed).
 message Message {
   string id = 1;
   string name = 2;
-  // Exactly one of value and ended; ended only for substantial.ended.
+  // Exactly one of value and ended; ended only for substantial.ended and substantial.watched.
   Value value = 3;
   Time sent_at = 4;
   Ended ended = 5;
@@ -340,8 +356,9 @@ message Ended {
   Cost cost = 6;
 }
 
-// runs/<run>/claim/<n>-<attempt>
-message Claim {
+// A worker's claim on a chain's current run, in its head: it runs the run's steps until at plus
+// ttl_ms.
+message Lease {
   string worker = 1;
   Time at = 2;
   uint64 ttl_ms = 3;
@@ -355,7 +372,7 @@ enum Status {
   STATUS_CONTINUED = 4;
 }
 
-// runs/<run>/result
+// What a client reads of a run that ended, built from its end segment.
 message Result {
   Status status = 1;
   Value value = 2;
@@ -363,17 +380,91 @@ message Result {
   string reason = 4;
   optional string next = 5;
   Time ended_at = 6;
-  // When its writer created it: a collection waits until it is old enough that no worker that read
-  // the run without it may still write under the run.
-  Time written_at = 7;
+  // Before expiry replaced collection.
+  reserved 7;
+  reserved "written_at";
 }
 
-// runs/<run>/gone: the run was collected, and its id stays taken until then.
-message Gone {
-  Time until = 1;
+// The latest block of a chain's current run, in its head: a hint, the replay that would write
+// segment n raised an error that is no end, or diverged from the history; nothing of it was
+// recorded. Its queue's marker queues/<workflow>/blocked/<chain> is empty.
+message Blocked {
+  Failure error = 1;
+  // When the replay was dropped, by its worker's clock.
+  Time at = 2;
+  string worker = 3;
+  // The time of the due entry that tries the run again.
+  Time retry_at = 4;
+  // The blocks in a row at segment n before this one.
+  uint32 attempt = 5;
+  // The segment the replay would have written.
+  uint64 n = 6;
 }
 
-// pub/<chain>/<key>/<seq>-<n>-<i>
-message PublishedValue {
-  Value value = 1;
+// runs/<id>: the head of the chain <id>, the archive of a run <id> that is not its chain's
+// current run, or, while a later run <id> of a chain is its current run, a pointer to the chain.
+message Run {
+  oneof kind {
+    Head head = 1;
+    Pointer pointer = 2;
+  }
+}
+
+// A later run of a chain, while it is the chain's current run: runs/<chain> holds it.
+message Pointer {
+  string chain = 1;
+}
+
+// A message the chain accepted and no run of it consumed yet, under its name in the chain,
+// <ord>-<id>, the key its consumption records.
+message Inboxed {
+  string key = 1;
+  Message body = 2;
+}
+
+// The chain of a child's parent, and the workflow whose queue its notices go to.
+message ParentChain {
+  string chain = 1;
+  string workflow = 2;
+}
+
+// A run: at runs/<chain>, the chain's head, its current run; at runs/<run> for a later run, or
+// archives/<chain> for a chain's first run, the archive of a run that continued, was retried or
+// was reset, its head as the commit that replaced it fixed it.
+message Head {
+  string run = 1;
+  Start start = 2;
+  // A retry's or a reset's: the events of the runs it resumes that it replays, and their
+  // segments, one Origin per segment.
+  repeated Event resumed = 3;
+  repeated Origin origins = 4;
+  // The run's own segments, 0 to n-1.
+  repeated Segment segments = 5;
+  // The messages the chain accepted and no run consumed: those start.carried names first, in that
+  // order, then by key.
+  repeated Inboxed inbox = 6;
+  Lease lease = 7;
+  // The segment whose effects may be missing; with archive, the continuation or the retry
+  // whose archive and pointer may be missing.
+  optional uint64 pending = 8;
+  // A continuation's or a retry's while pending: the run before as its archive holds it.
+  bytes archive = 9;
+  // The latest value published under each key by the chain, sorted by key.
+  repeated Published published = 10;
+  ParentChain parent = 11;
+  // Children the chain's earlier runs started whose end it did not consume: the cancel an end owes,
+  // and the children whose substantial.ended the chain accepts.
+  repeated string children = 12;
+  Blocked blocked = 13;
+  // Before every run expired after its own end, whatever its children.
+  reserved 14, 15, 17;
+  reserved "kept", "expiry_days", "kept_archives";
+  // A later run's: the etag of its pointer, for the cas that gives it its expiry or replaces it by
+  // its archive.
+  string pointer_etag = 16;
+  // An archive's: the run that replaced it, its continuation, retry or reset.
+  string next = 18;
+  // The start of the chain's first run, once the head holds a later run: a start of the chain's
+  // id compares with it, whatever became of that run's archive.
+  Start first = 19;
 }

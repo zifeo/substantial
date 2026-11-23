@@ -5,6 +5,7 @@ import { type Core, CoreModule } from "./core.ts";
 import { type Budget, effectiveBudget, type Prices } from "./cost.ts";
 import {
   ConfigError,
+  type Failure,
   InvalidArgument,
   LayoutError,
   onlyOptions,
@@ -12,11 +13,11 @@ import {
   RunExists,
   StoreError,
 } from "./errors.ts";
-import { checkKey } from "./names.ts";
+import { checkKey, checkSentName } from "./names.ts";
 import { Metering, type Observed } from "./observe.ts";
 import { outcomeOf, planOutcomes, runPlan, ulid } from "./plan.ts";
-import { jsonValue, plan, time } from "./proto.ts";
-import { collectedUntil, type Namespace, Run } from "./run.ts";
+import { encodeJson, failureFrom, jsonValue, type layout, plan, time } from "./proto.ts";
+import { type Namespace, Run, sentOutcome } from "./run.ts";
 import { type Config, type Cron, checkConfig, config, MESSAGE, messageId } from "./schedule.ts";
 import {
   type InternalOptions,
@@ -42,7 +43,7 @@ export interface OpenOptions {
   /** Prices the store's requests (I-27); without them, requests are counted and no money is. */
   readonly prices?: Prices;
   /** Called with each store operation, step attempt, replay and scan of this `Substantial` and
-   * its workers (I-29). */
+   * its workers, and each run they block, find near a limit or leave for a skewed clock (I-29). */
   readonly observe?: (event: Observed) => unknown;
 }
 
@@ -66,6 +67,16 @@ export interface StartOptions {
   /** The run's budget, else its workflow's (I-28); the same id with another budget is
    * `RunExists`. */
   readonly budget?: Budget;
+  /** Sent to the chain once the run is started or found, as `run.send` sends it. */
+  readonly message?: Message;
+}
+
+/** A message a start sends: signal with start. */
+export interface Message {
+  readonly name: string;
+  readonly value?: unknown;
+  /** Delivered once per id; a ULID when none is given. */
+  readonly id?: string;
 }
 
 /** A live run of a workflow. */
@@ -74,11 +85,14 @@ export interface RunInfo {
   readonly run: string;
   /** Absent for a workflow without version. */
   readonly version?: number;
-  /** When it is due next; absent when it waits for a message. */
+  /** When it is due next; absent when it waits for a message. For a blocked run, when it is
+   * tried again. */
   readonly dueAt?: Date;
   /** Its first replay, a timer or a step's retry backoff, a message arrived and due to be
-   * consumed, or a message yet to arrive. */
-  readonly waitingOn: "start" | "time" | "inbox" | "message";
+   * consumed, a message yet to arrive, or a fix of its code. */
+  readonly waitingOn: "start" | "time" | "inbox" | "message" | "blocked";
+  /** For a blocked run, the error of its code that blocks it. */
+  readonly error?: Failure;
 }
 
 const WAITING: (RunInfo["waitingOn"] | undefined)[] = [
@@ -87,17 +101,23 @@ const WAITING: (RunInfo["waitingOn"] | undefined)[] = [
   "time",
   "inbox",
   "message",
+  "blocked",
 ];
 
 function runInfo(info: plan.RunInfo): RunInfo {
   const waitingOn = WAITING[info.waiting];
   if (waitingOn === undefined) throw new ProtocolError(`run ${info.run} waiting on nothing`);
+  const error = info.blocked?.error;
+  if (waitingOn === "blocked" && error === undefined) {
+    throw new ProtocolError(`run ${info.run} blocked without its error`);
+  }
   return {
     chain: info.chain,
     run: info.run,
     ...(info.version === undefined ? {} : { version: info.version }),
     ...(info.dueAt === undefined ? {} : { dueAt: new Date(Number(info.dueAt.ms)) }),
     waitingOn,
+    ...(error === undefined ? {} : { error: failureFrom(error) }),
   };
 }
 
@@ -125,13 +145,20 @@ const REAL_HOST: Host = {
   handle: (ns, workflow, chain) => new Run(ns, workflow, chain),
 };
 
+/** An id of this opener's own, so that two processes opening one namespace at once never share a
+ * probe key. */
+function probe(): string {
+  // § mgfgmd25p.e@70yfx
+  return ulid(Date.now());
+}
+
 export function createInput(): plan.PlanInput {
-  const value = { prefix: "" };
+  const value = { prefix: "", probe: probe() };
   return create(plan.PlanInputSchema, { plan: { case: "create", value } });
 }
 
 export function openInput(): plan.PlanInput {
-  const value = { prefix: "" };
+  const value = { prefix: "", probe: probe() };
   return create(plan.PlanInputSchema, { plan: { case: "open", value } });
 }
 
@@ -148,7 +175,8 @@ export async function opening(store: Store, input: plan.PlanInput): Promise<Core
   const outcome = outcomeOf("open", await runPlan(module.instantiate(), store, input), "opened");
   const opened = outcome.opened;
   if (opened.case === "layoutError") throw new LayoutError(opened.value);
-  // § one zemxe46k3.b@2cj8t
+  if (opened.case === "configError") throw new ConfigError(opened.value);
+  // § one zemxe46k3.b@9ssv3
   if (opened.case === "failed") throw new StoreError(opened.value.message);
   if (opened.case !== "open") throw new LayoutError("empty open outcome");
   return module;
@@ -262,7 +290,7 @@ export class Substantial {
 
   #worker(workflows: Iterable<AnyWorkflow>, options: InternalOptions, internal: boolean): Worker {
     const settings = resolveSettings(options, this.#store.capabilities.wait, internal);
-    const served = new Workflows(workflows, settings.retentionMin);
+    const served = new Workflows(workflows);
     const hooks: WorkerHooks = {
       stopped: () => this.#workers.delete(worker),
       died: (error) => {
@@ -282,19 +310,31 @@ export class Substantial {
     input?: I,
     options: StartOptions = {},
   ): Promise<Run<O>> {
-    // § bxb0ygj7m@753fm
+    return (await this.#start(workflow, input, options, false)).run;
+  }
+
+  /** Starts a run; with `upgrade`, finding the same run under an older version answers that
+   * version instead of `RunExists`. */
+  async #start<I, O>(
+    workflow: Workflow<I, O>,
+    input: I | undefined,
+    options: StartOptions,
+    upgrade: boolean,
+  ): Promise<{ run: Run<O>; versioned?: plan.Started_Versioned }> {
+    // § bxb0ygj7m@528ra
     if (!(workflow instanceof Workflow)) {
       throw new InvalidArgument(`start takes a workflow, not ${workflow}`);
     }
-    // § one h8wg39cct.a@xrrp9
+    // § one h8wg39cct.a@4zwa6
     const json = inputObject(input);
-    onlyOptions(options, ["id", "budget"], "start");
+    onlyOptions(options, ["id", "budget", "message"], "start");
     checkKey("workflow name", workflow.name);
     const budget = effectiveBudget(options.budget, workflow.budget);
     const at = time(this.#host.now());
-    // § one cq034wpjp@16qwz
+    // § one cq034wpjp@33heg
     const chain =
       options.id === undefined ? this.#host.ulid(Number(at.ms)) : checkKey("run id", options.id);
+    const message = options.message === undefined ? undefined : this.#message(options.message, at);
     const value = {
       prefix: "",
       workflow: workflow.name,
@@ -303,15 +343,36 @@ export class Substantial {
       id: chain,
       now: at,
       ...(budget === undefined ? {} : { budget }),
+      upgrade,
+      ...(message === undefined ? {} : { message }),
     };
     const plan_ = create(plan.PlanInputSchema, { plan: { case: "start", value } });
-    const started = outcomeOf("start", await this.#plan(plan_), "started").started;
+    const outcome = outcomeOf("start", await this.#plan(plan_), "started");
+    const started = outcome.started;
     if (started.case === "runExists") {
-      throw new RunExists(chain, collectedUntil(started.value.collectedUntil));
+      throw new RunExists(chain);
     }
     if (started.case === "failed") throw new StoreError(started.value.message);
     this.#wake(workflow.name);
-    return this.run(workflow, chain);
+    if (message !== undefined) {
+      if (outcome.sent === undefined) throw new ProtocolError(`start of ${chain} sent nothing`);
+      sentOutcome(outcome.sent, chain, (w) => this.#wake(w));
+    }
+    const run = this.run(workflow, chain);
+    return started.case === "versioned" ? { run, versioned: started.value } : { run };
+  }
+
+  /** A start's message, its id and order made as `run.send` makes them. */
+  #message(message: Message, at: layout.Time): plan.StartMessage {
+    onlyOptions(message, ["name", "value", "id"], "message");
+    const id = message.id === undefined ? undefined : checkKey("message id", message.id);
+    const ord = this.#host.ulid(Number(at.ms));
+    return create(plan.StartMessageSchema, {
+      name: checkSentName(message.name),
+      value: jsonValue(encodeJson(message.value, "the message")),
+      id: id ?? ord,
+      ord,
+    });
   }
 
   /** The live runs of `workflow`, all its versions, each once: the ended ones are not listed. */
@@ -347,7 +408,7 @@ export class Substantial {
     checkConfig(revision, cron, backfill);
     const wanted = config(revision, cron, backfill);
     const published = await this.run(workflow, id).read<Record<string, unknown>>("schedule");
-    // § ey8zhz0kq.b@exs0t
+    // § ey8zhz0kq.b@yvntz
     if (published !== undefined) {
       const applied = {
         revision: published.revision ?? null,
@@ -372,8 +433,16 @@ export class Substantial {
       }
     }
     // § end ey8zhz0kq.b
-    // § ey8zhz0kq.a@4szdb
-    const run = await this.start(workflow, undefined, { id });
+    // § ey8zhz0kq.a@5358n
+    const { run, versioned } = await this.#start(workflow, undefined, { id }, true);
+    // § sfzkmddwj@yc956
+    if (versioned !== undefined) {
+      console.info(
+        `substantial: schedule ${id} runs version ${versioned.version ?? "none"}: it moves to ` +
+          `version ${workflow.version ?? "none"} at its next boundary that upgrades`,
+      );
+    }
+    // § end sfzkmddwj
     await run.send(MESSAGE, wanted, { id: await messageId(wanted) });
     // § end ey8zhz0kq.a
     return run;

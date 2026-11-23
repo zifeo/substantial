@@ -67,7 +67,7 @@ fn failing() -> Workflow<()> {
 
 fn failing_parent() -> Workflow<()> {
     Workflow::without_input("failing_parent", |c| async move {
-        c.start(&failing(), ()).id("its-child").await?;
+        c.start(&failing(), ()).id("its-child").abandon().await?;
         Ok(())
     })
 }
@@ -224,11 +224,11 @@ fn failing_briefly_kept() -> Workflow<()> {
         let fail = || async { Err::<(), _>(Permanent::new("card declined")) };
         c.step("fail", fail).await
     })
-    .with_retention(Duration::from_secs(3600))
+    .with_retention(1)
 }
 
 #[tokio::test]
-async fn a_failed_run_collected_before_check_is_reported() {
+async fn a_failed_run_removed_before_check_is_reported() {
     let env = Env::open(t0()).await.unwrap();
     let worker = env
         .worker(failing_briefly_kept())
@@ -240,7 +240,7 @@ async fn a_failed_run_collected_before_check_is_reported() {
         .id("nightly")
         .await
         .unwrap();
-    env.advance(days(1)).await.unwrap();
+    env.advance(days(2)).await.unwrap();
     let status = run.status().await;
     assert!(
         matches!(status, Err(Error::RunNotFound { .. })),

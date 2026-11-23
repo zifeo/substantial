@@ -12,12 +12,13 @@ use crate::proto::layout::v1 as layout;
 const MAX: u64 = i64::MAX as u64;
 
 /// What the store charges: integer nano-units of `currency` per 1,000 requests of each kind
-/// (`create` is S3's PUT class, `get` its GET class, `list` its LIST class). A request costs its
-/// share rounded up.
+/// (`create` and `cas` are S3's PUT class, `get` its GET class, `list` its LIST class). A request
+/// costs its share rounded up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Prices {
     pub currency: String,
     pub create: u64,
+    pub cas: u64,
     pub get: u64,
     pub list: u64,
     pub delete: u64,
@@ -35,6 +36,7 @@ impl Prices {
             "aws-s3-standard-us-east-1-2026-11-09" => Ok(Prices {
                 currency: "USD".into(),
                 create: 5_000_000,
+                cas: 5_000_000,
                 get: 400_000,
                 list: 5_000_000,
                 delete: 0,
@@ -52,6 +54,7 @@ impl Prices {
         }
         let fields = [
             ("create", self.create),
+            ("cas", self.cas),
             ("get", self.get),
             ("list", self.list),
             ("delete", self.delete),
@@ -66,9 +69,10 @@ impl Prices {
 
     /// What `attempts` requests of the store operation `op` cost.
     pub(crate) fn of(&self, op: &str, attempts: u32) -> Amount {
-        // § vg9yp9xsf@f6w2c
+        // § vg9yp9xsf@8dae7
         let per_1000 = match op {
             "create" => self.create,
+            "cas" => self.cas,
             "get" => self.get,
             "list" => self.list,
             "delete" => self.delete,
@@ -87,6 +91,7 @@ impl Prices {
             get: self.get,
             list: self.list,
             delete: self.delete,
+            cas: self.cas,
         }
     }
 }
@@ -106,6 +111,7 @@ pub struct Amount {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Meters {
     pub create: u64,
+    pub cas: u64,
     pub get: u64,
     pub list: u64,
     pub delete: u64,
@@ -120,6 +126,7 @@ pub struct Meters {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cost {
     pub create: u64,
+    pub cas: u64,
     pub get: u64,
     pub list: u64,
     pub delete: u64,
@@ -182,7 +189,7 @@ mod steps {
     }
 }
 
-/// Limits on a run's cost, by meter: `create`, `get`, `list`, `delete`, `requests`, or a
+/// Limits on a run's cost, by meter: `create`, `cas`, `get`, `list`, `delete`, `requests`, or a
 /// currency code (`USD`), each limit at most `i64::MAX`.
 ///
 /// ```
@@ -207,13 +214,13 @@ impl Budget {
     /// Its limits as the core takes them, sorted by meter; `InvalidArgument` for a malformed
     /// meter or limit.
     pub(crate) fn to_proto(&self) -> Result<layout::Budget> {
-        let request = ["create", "get", "list", "delete", "requests"];
+        let request = ["create", "cas", "get", "list", "delete", "requests"];
         let mut limits = Vec::new();
         for (meter, limit) in &self.0 {
             if !request.contains(&meter.as_str()) && !is_currency(meter) {
                 return Err(Error::InvalidArgument(format!(
-                    "the budget meter {meter:?} is none of create, get, list, delete, requests \
-                     or a currency of three uppercase letters"
+                    "the budget meter {meter:?} is none of create, cas, get, list, delete, \
+                     requests or a currency of three uppercase letters"
                 )));
             }
             if *limit > MAX {
@@ -237,7 +244,7 @@ mod tests {
     #[test]
     fn the_named_table_and_its_shares() {
         let p = Prices::named("aws-s3-standard-us-east-1-2026-11-09").unwrap();
-        // § vg9yp9xsf@pnr4n
+        // § vg9yp9xsf@gb5de
         assert_eq!(p.of("create", 2).nano, 10_000);
         assert_eq!(p.of("get", 1).nano, 400);
         assert_eq!(p.of("delete", 3).nano, 0);
@@ -251,16 +258,16 @@ mod tests {
 
     #[test]
     fn costs_read_the_core_json() {
-        let json = r#"{"create": 1, "get": 2, "list": 3, "delete": 0, "requests": 6,
+        let json = r#"{"create": 1, "cas": 1, "get": 2, "list": 3, "delete": 0, "requests": 7,
             "amounts": {"USD": "9007199254740993"},
-            "store": {"create": 1, "get": 2, "list": 3, "delete": 0, "requests": 6, "amounts": {}},
+            "store": {"create": 1, "cas": 1, "get": 2, "list": 3, "delete": 0, "requests": 7, "amounts": {}},
             "steps": {"pay": {"USD": "5"}},
-            "children": {"create": 0, "get": 0, "list": 0, "delete": 0, "requests": 0, "amounts": {}}}"#;
-        // § hzh3dr6yh@cgzqa
+            "children": {"create": 0, "cas": 0, "get": 0, "list": 0, "delete": 0, "requests": 0, "amounts": {}}}"#;
+        // § hzh3dr6yh@a4twy
         let cost: Cost = serde_json::from_str(json).unwrap();
         assert_eq!(cost.amounts["USD"], 9_007_199_254_740_993);
         assert_eq!(cost.steps["pay"]["USD"], 5);
-        assert_eq!(cost.store.requests, 6);
+        assert_eq!(cost.store.requests, 7);
         let again: Cost = serde_json::from_slice(&serde_json::to_vec(&cost).unwrap()).unwrap();
         assert_eq!(again, cost);
     }

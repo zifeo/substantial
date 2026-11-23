@@ -54,7 +54,7 @@ const failing = s.workflow("failing", async (c) => {
 });
 
 const failingParent = s.workflow("failing_parent", async (c) => {
-  await c.start(failing, {}, { id: "its-child" });
+  await c.start(failing, {}, { id: "its-child", abandon: true });
 });
 
 const napping = s.workflow("napping", async (c) => {
@@ -158,14 +158,14 @@ const failingBrieflyKept = s.workflow(
       throw new s.Permanent("card declined");
     });
   },
-  { retention: s.hours(1) },
+  { retention: 1 },
 );
 
-test("a failed run collected before check is reported", async () => {
+test("a failed run removed before check is reported", async () => {
   await using env = await s.testing.Env.open({ now: T0 });
   await using _worker = env.worker([failingBrieflyKept], service);
   const run = await env.start(failingBrieflyKept, {}, { id: "nightly" });
-  await env.advance(s.days(1));
+  await env.advance(s.days(2));
   await assert.rejects(run.status(), s.RunNotFound);
   await assert.rejects(
     env.check(),
@@ -384,12 +384,13 @@ test("chaos counts a create that found its key as failed", async () => {
     chaos: new s.testing.Chaos({ seed: 1, rate: 1 }),
   });
   const world = worldOf(env);
-  await world.memory.create("taken", new Uint8Array([1]));
+  await world.memory.create("taken", new Uint8Array([1]), undefined);
   const clock = { id: "w", paused: false, dead: false, tries: new Map(), now: () => world.time.ms };
   const store = world.store(clock as unknown as WorkerClock);
   world.time.open = true;
   // Each create fails its first try, then cannot wait its backoff outside a task of a worker.
-  for (let i = 0; i < 20; i++) await assert.rejects(store.create("taken", new Uint8Array([1])));
+  for (let i = 0; i < 20; i++)
+    await assert.rejects(store.create("taken", new Uint8Array([1]), undefined));
   world.time.open = false;
   assert.deepEqual([env.faults.failed, env.faults.ambiguous], [20, 0]);
 });
@@ -462,7 +463,7 @@ async function aChaoticDay(skipping: boolean) {
     await env.advance(s.hours(26));
     results = [await run.result(), await late.result()];
   }
-  const same = { results, faults: env.faults, objects: new Map(world.objects), now: env.now };
+  const same = { results, faults: env.faults, objects: world.snapshot(), now: env.now };
   return { same, skipped: world.skipped };
 }
 

@@ -8,7 +8,7 @@ import { layout, run } from "./proto.ts";
 // § one cvnf47vy8.a@t86v9
 export const MAX: bigint = 2n ** 63n - 1n;
 
-const KINDS = ["create", "get", "list", "delete"] as const;
+const KINDS = ["create", "cas", "get", "list", "delete"] as const;
 const REQUESTS = [...KINDS, "requests"] as const;
 const FIELDS = ["currency", ...KINDS];
 
@@ -19,6 +19,7 @@ export type Kind = (typeof KINDS)[number];
 export interface PriceFields {
   readonly currency: string;
   readonly create: bigint;
+  readonly cas: bigint;
   readonly get: bigint;
   readonly list: bigint;
   readonly delete: bigint;
@@ -32,7 +33,14 @@ const TABLES: ReadonlyMap<string, PriceFields> = new Map([
   // CANCEL requests are free").
   [
     "aws-s3-standard-us-east-1-2026-11-09",
-    { currency: "USD", create: 5_000_000n, get: 400_000n, list: 5_000_000n, delete: 0n },
+    {
+      currency: "USD",
+      create: 5_000_000n,
+      cas: 5_000_000n,
+      get: 400_000n,
+      list: 5_000_000n,
+      delete: 0n,
+    },
   ],
 ]);
 
@@ -64,15 +72,16 @@ export class Amount {
 }
 
 /** What the store charges: integer nano-units of `currency` per 1,000 requests of each kind
- * (`create` is S3's PUT class, `get` its GET class, `list` its LIST class). A request costs its
- * share rounded up.
+ * (`create` and `cas` are S3's PUT class, `get` its GET class, `list` its LIST class). A request
+ * costs its share rounded up.
  *
  * `new Prices("aws-s3-standard-us-east-1-2026-11-09", { get: 500_000n })` is a shipped table, whose
- * fields the overrides replace; `new Prices({ currency, create, get, list, delete })` gives every
+ * fields the overrides replace; `new Prices({ currency, create, cas, get, list, delete })` gives every
  * field. */
 export class Prices implements PriceFields {
   readonly currency: string;
   readonly create: bigint;
+  readonly cas: bigint;
   readonly get: bigint;
   readonly list: bigint;
   readonly delete: bigint;
@@ -113,6 +122,7 @@ export class Prices implements PriceFields {
     }
     this.currency = currency;
     this.create = fields.create as bigint;
+    this.cas = fields.cas as bigint;
     this.get = fields.get as bigint;
     this.list = fields.list as bigint;
     this.delete = fields.delete as bigint;
@@ -127,13 +137,14 @@ export function priceOf(prices: Prices, op: Kind, attempts: number): Amount {
 }
 
 export function pricesProto(prices: Prices): run.Prices {
-  const { currency, create: c, get, list, delete: d } = prices;
-  return create(run.PricesSchema, { currency, create: c, get, list, delete: d });
+  const { currency, create: c, cas, get, list, delete: d } = prices;
+  return create(run.PricesSchema, { currency, create: c, cas, get, list, delete: d });
 }
 
 /** Store requests by kind, their total, and amounts by currency in nano-units. */
 export class Meters {
   readonly create: number;
+  readonly cas: number;
   readonly get: number;
   readonly list: number;
   readonly delete: number;
@@ -142,6 +153,7 @@ export class Meters {
 
   constructor(
     create: number,
+    cas: number,
     get: number,
     list: number,
     del: number,
@@ -149,6 +161,7 @@ export class Meters {
     amounts: Record<string, bigint>,
   ) {
     this.create = create;
+    this.cas = cas;
     this.get = get;
     this.list = list;
     this.delete = del;
@@ -162,6 +175,7 @@ export class Meters {
  * three. */
 export class Cost {
   readonly create: number;
+  readonly cas: number;
   readonly get: number;
   readonly list: number;
   readonly delete: number;
@@ -173,6 +187,7 @@ export class Cost {
 
   constructor(
     create: number,
+    cas: number,
     get: number,
     list: number,
     del: number,
@@ -183,6 +198,7 @@ export class Cost {
     children: Meters,
   ) {
     this.create = create;
+    this.cas = cas;
     this.get = get;
     this.list = list;
     this.delete = del;
@@ -214,14 +230,14 @@ function amountsOf(value: unknown, what: string): Record<string, bigint> {
 
 function metersOf(value: unknown, what: string): Meters {
   if (!isObject(value)) throw new ProtocolError(`${what} ${JSON.stringify(value)}`);
-  const [c, g, l, d, r] = REQUESTS.map((k) => {
+  const [c, x, g, l, d, r] = REQUESTS.map((k) => {
     const n = value[k];
     if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) {
       throw new ProtocolError(`${what} ${JSON.stringify(value)}`);
     }
     return n;
-  }) as [number, number, number, number, number];
-  return new Meters(c, g, l, d, r, amountsOf(value.amounts, `${what} amounts`));
+  }) as [number, number, number, number, number, number];
+  return new Meters(c, x, g, l, d, r, amountsOf(value.amounts, `${what} amounts`));
 }
 
 /** A `Cost` from the JSON the core resolves `c.cost()` with. */
@@ -236,6 +252,7 @@ export function costOf(value: unknown): Cost {
   const { store, children } = value as Record<string, unknown>;
   return new Cost(
     total.create,
+    total.cas,
     total.get,
     total.list,
     total.delete,
@@ -247,8 +264,8 @@ export function costOf(value: unknown): Cost {
   );
 }
 
-/** Limits on a run's cost, by meter: `create`, `get`, `list`, `delete`, `requests`, or a currency
- * code (`USD`), each a bigint from 0n to 2n ** 63n - 1n. */
+/** Limits on a run's cost, by meter: `create`, `cas`, `get`, `list`, `delete`, `requests`, or a
+ * currency code (`USD`), each a bigint from 0n to 2n ** 63n - 1n. */
 export type Budget = Readonly<Record<string, bigint>>;
 
 /** A budget as the core takes it, its limits sorted by meter; `InvalidArgument` for a malformed
@@ -260,7 +277,7 @@ export function budgetProto(budget: unknown): layout.Budget {
   const limits = Object.entries(budget).map(([meter, limit]) => {
     if (!(REQUESTS as readonly string[]).includes(meter) && !isCurrency(meter)) {
       throw new InvalidArgument(
-        `the budget meter "${meter}" is none of create, get, list, delete, requests or a ` +
+        `the budget meter "${meter}" is none of create, cas, get, list, delete, requests or a ` +
           "currency of three uppercase letters",
       );
     }
@@ -280,7 +297,7 @@ export function effectiveBudget(
   budget: Budget | undefined,
   declared: Budget | undefined,
 ): layout.Budget | undefined {
-  // § evdz71nzb.a@55rxd
+  // § evdz71nzb.a@rvtf3
   if (budget !== undefined) return budgetProto(budget);
   if (declared !== undefined) return budgetProto(declared);
   return undefined;

@@ -28,6 +28,7 @@ use crate::workflow::Workflows;
 pub(crate) enum Event {
     Feed(u64, b::OpResult),
     Commit(String, Box<b::Commit>),
+    Claim(String),
     Ended(String, replay_end::End),
     /// A full scan.
     Wake,
@@ -192,6 +193,13 @@ impl Launch<'_> {
             self.settings.step_timeout,
             agent.events.clone(),
         );
+        // § cfdckf61n.c@jnqqa
+        let mut retentions: Vec<u32> = self.workflows.retentions().collect();
+        retentions.push(self.settings.retention);
+        // A `create` or `open` a crash stops halfway leaves its probe keys, `probe/<id>/`, which
+        // only their expiry of 1 day removes.
+        retentions.push(1);
+        let store = self.store.clone();
         let looped = AgentLoop {
             machine,
             store: self.store,
@@ -202,6 +210,10 @@ impl Launch<'_> {
         };
         let (id, died) = (self.id.clone(), self.died);
         let looped = async move {
+            // Before it serves anything: a run written with a retention no rule expires would
+            // never be removed.
+            store.check_expiry(&retentions).await?;
+            // § end cfdckf61n.c
             AssertUnwindSafe(looped.run())
                 .catch_unwind()
                 .await
@@ -209,7 +221,7 @@ impl Launch<'_> {
         };
         // Told once the task has its value, so that the waits it fails see a worker not alive.
         let ended = move |ended: &Result<()>| {
-            // § pgv9r1j12@kxt4m
+            // § pgv9r1j12@y78he
             if let Err(e) = ended {
                 tracing::error!(worker = id, "worker died: {e}");
                 died(e);
@@ -289,14 +301,13 @@ fn agent_config(
         max_idle_ms: millis(s.max_idle),
         due_page: s.due_page,
         due_pages: s.due_pages,
-        snapshot_every: s.snapshot_every,
         op_retries: OP_RETRIES,
         seed,
         store_waits,
         wait_seconds: s.wait.as_secs() as u32,
-        tombstone_ms: millis(s.tombstone),
-        retention_min_ms: millis(s.retention_min),
-        recheck_ms: millis(s.recheck),
+        blocked_initial_ms: millis(s.blocked_initial),
+        blocked_max_ms: millis(s.blocked_max),
+        blocked_multiplier: s.blocked_multiplier,
         settings: Some(b::RunSettings {
             commit_every_ms: millis(s.commit_every),
             continue_as_new_after_segments: s.continue_as_new_after.segments,
@@ -304,8 +315,22 @@ fn agent_config(
             dedup_window_ms: millis(s.dedup_window),
             retention: Some(retention_proto(s.retention)),
             prices: prices.map(Prices::to_proto),
+            max_history_bytes: s.limits.history_bytes,
+            max_history_events: s.limits.history_events,
+            max_replay_inbox: s.limits.replay_inbox,
+            max_seen: s.limits.seen,
+            history_warn_percent: s.limits.warn_percent,
         }),
     }
+}
+
+fn time(t: Option<layout::Time>) -> chrono::DateTime<chrono::Utc> {
+    let ms = t.map_or(0, |t| t.ms);
+    chrono::DateTime::from_timestamp_millis(ms).expect("a time in chrono's range")
+}
+
+fn rfc3339(t: &chrono::DateTime<chrono::Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 struct AgentLoop {
@@ -327,7 +352,7 @@ impl AgentLoop {
         loop {
             match self.machine.next(self.clock.now())? {
                 Command::Store(b::agent_command::Store { id, op }) => {
-                    // § pgv9r1j12.b@5p1g1
+                    // § pgv9r1j12.b@22p9t
                     let (store, events) = (self.store.clone(), events.clone());
                     let op =
                         op.ok_or_else(|| Error::Protocol("store command without op".into()))?;
@@ -350,7 +375,7 @@ impl AgentLoop {
                         n: c.n,
                         won: c.won,
                         inbox: c.inbox,
-                        cost: c.cost,
+                        cost: c.cost.map(Box::new),
                     },
                 ),
                 Command::Scanned(s) => {
@@ -361,6 +386,28 @@ impl AgentLoop {
                     self.metering.tell(|| scan).map_err(Error::Protocol)?;
                 }
                 Command::StopReplay(run) => self.replays.tell(&run, ToReplay::Stop),
+                Command::Claimed(run) => self.replays.tell(&run, ToReplay::Claimed),
+                Command::Skewed(skewed) => {
+                    let (segment_at, now) = (time(skewed.segment_at), time(skewed.now));
+                    // § yp7fv5sa7.c@fd1fr
+                    tracing::error!(
+                        run = skewed.run,
+                        current = skewed.current,
+                        "run {} of chain {} left alone: this worker's clock, {}, is behind its last segment, {}, by more than claim_skew",
+                        skewed.current,
+                        skewed.run,
+                        rfc3339(&now),
+                        rfc3339(&segment_at)
+                    );
+                    let event = Observed::Skewed(observe::Skewed {
+                        run: skewed.run,
+                        current: skewed.current,
+                        segment_at,
+                        now,
+                    });
+                    self.metering.tell(|| event).map_err(Error::Protocol)?;
+                    // § end yp7fv5sa7.c
+                }
                 Command::WaitUntil(mut at) => {
                     let past_grace = grace_ends.filter(|_| !self.replays.is_empty());
                     if let Some(ends) = past_grace {
@@ -374,7 +421,7 @@ impl AgentLoop {
                     }
                     let Some(event) = events.pop() else {
                         if past_grace.is_some_and(|ends| self.clock.elapsed() >= ends) {
-                            // § dh7y75pvn.b@j5tr9
+                            // § dh7y75pvn.b@0hvr2
                             self.replays.stop_all();
                             grace_ends = Some(self.clock.elapsed() + grace);
                         }
@@ -383,6 +430,7 @@ impl AgentLoop {
                     match event {
                         Event::Feed(id, result) => self.machine.feed(id, result)?,
                         Event::Commit(run, commit) => self.machine.commit(run, *commit)?,
+                        Event::Claim(run) => self.machine.claim(run)?,
                         Event::Ended(run, end) => {
                             self.replays.ended(&run);
                             self.machine.replay_ended(run, end)?;
@@ -393,7 +441,7 @@ impl AgentLoop {
                         }
                         Event::WakeWorkflow(workflow) => self.machine.wake_workflow(workflow)?,
                         Event::Shutdown(g) if grace_ends.is_none() => {
-                            // § dh7y75pvn@kb3x4
+                            // § dh7y75pvn@b8gs7
                             grace = i64::try_from(millis(g)).expect("a grace fits in i64 ms");
                             grace_ends = Some(self.clock.elapsed() + grace);
                             self.machine.shutdown()?;

@@ -1,19 +1,11 @@
 // Presets and their overrides (I-18), validated strictly; the adapters' retries (I-26).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  ConfigError,
-  days,
-  hours,
-  InvalidArgument,
-  milliseconds,
-  minutes,
-  seconds,
-} from "../src/mod.ts";
+import { ConfigError, days, InvalidArgument, milliseconds, minutes, seconds } from "../src/mod.ts";
 import { type InternalOptions, presetSettings, resolveSettings } from "../src/settings.ts";
 import * as retry from "../src/stores/retry.ts";
 import { Ambiguous, Refused, Transient } from "../src/stores/retry.ts";
-import { StoreFailure } from "../src/stores/store.ts";
+import { type Cas, type Create, StoreFailure, type StoreObject } from "../src/stores/store.ts";
 
 test("presets differ where the table says", () => {
   const script = presetSettings("script", false);
@@ -27,7 +19,7 @@ test("presets differ where the table says", () => {
   assert.deepEqual(script.wait, seconds(20));
   assert.equal(script.duePage, 1000);
   assert.deepEqual([script.stepTimeout, service.stepTimeout], [minutes(5), minutes(5)]);
-  assert.deepEqual([script.retention, service.retention], [days(30), days(30)]);
+  assert.deepEqual([script.retention, service.retention], [30, 30]);
 });
 
 test("overrides replace and refuse", () => {
@@ -46,12 +38,12 @@ test("overrides replace and refuse", () => {
   assert.equal(s.concurrency, 4);
   assert.deepEqual(s.commitEvery, milliseconds(250));
   assert.deepEqual(s.continueAsNewAfter, { segments: 0, bytes: 0 });
-  assert.deepEqual(
-    resolveSettings({ preset: "script", retention: days(400) }, false, false).retention,
-    days(400),
+  assert.equal(resolveSettings({ preset: "script", retention: 400 }, false, false).retention, 400);
+  assert.equal(resolveSettings({ preset: "script", retention: 1 }, false, false).retention, 1);
+  assert.equal(
+    resolveSettings({ preset: "script", retention: 36_500 }, false, false).retention,
+    36_500,
   );
-  const lowered = { preset: "script", retention: minutes(30), retentionMin: minutes(10) } as const;
-  assert.deepEqual(resolveSettings(lowered, false, true).retention, minutes(30));
   const refused: Record<string, unknown>[] = [
     { concurency: 4 },
     { commitEvery: 250 },
@@ -72,11 +64,15 @@ test("overrides replace and refuse", () => {
     { continueAsNewAfter: 1 },
     { continueAsNewAfter: { segments: 1 } },
     { continueAsNewAfter: { segments: 1, bytes: 2, more: 3 } },
-    { retention: minutes(59) },
-    { retention: "forever" },
-    { retention: 3_600_000 },
-    { tombstone: milliseconds(0) },
+    { retention: 0 },
+    { retention: 1.5 },
+    { retention: 36_501 },
+    { retention: days(30) },
+    { retention: "30d" },
+    { snapshotEvery: 64 },
+    { tombstone: days(7) },
     { retentionMin: days(31) },
+    { recheck: days(1) },
   ];
   for (const override of refused) {
     assert.throws(
@@ -100,12 +96,12 @@ test("only the public settings are given to a worker", () => {
       claimTtl: seconds(4),
       continueAsNewAfter: { segments: 5, bytes: 6 },
       stepTimeout: seconds(7),
-      retention: hours(2),
+      retention: 2,
     },
     false,
     false,
   );
-  assert.deepEqual(s.retention, hours(2));
+  assert.equal(s.retention, 2);
   assert.deepEqual(
     [s.concurrency, s.maxIdle, s.shutdownGrace, s.claimTtl, s.continueAsNewAfter, s.stepTimeout],
     [2, seconds(2), seconds(3), seconds(4), { segments: 5, bytes: 6 }, seconds(7)],
@@ -116,11 +112,7 @@ test("only the public settings are given to a worker", () => {
     wait: seconds(1),
     duePage: 10,
     duePages: 20,
-    snapshotEvery: 8,
     dedupWindow: seconds(1),
-    tombstone: days(1),
-    retentionMin: hours(2),
-    recheck: hours(2),
     snapshotGrace: seconds(1),
     storeRetry: { attempts: 3, initial: milliseconds(10), max: seconds(1) },
   };
@@ -169,21 +161,42 @@ test("transient failures are retried, then fail", async () => {
 const mine = new TextEncoder().encode("mine");
 const theirs = new TextEncoder().encode("theirs");
 
-function resolve(
-  creates: ("created" | "exists" | Error)[],
-  gets: (Uint8Array | undefined | Error)[],
-) {
+function resolve(creates: (Create | Error)[], gets: (StoreObject | undefined | Error)[]) {
   return retry.create(POLICY, mine, script(creates), script(gets));
 }
 
+const found = (data: Uint8Array, etag: string): StoreObject => ({ data, etag });
+
 test("ambiguous creates are resolved with a get", async () => {
   const lost = () => new Ambiguous("timeout");
-  assert.equal(await resolve([lost()], [mine]), "created");
-  assert.equal(await resolve([lost()], [theirs]), "exists");
-  assert.equal(await resolve([lost(), "created"], [undefined]), "created");
-  assert.equal(await resolve([lost(), "exists"], [undefined, mine]), "created", "landed late");
-  assert.equal(await resolve([lost()], [new Transient("get"), mine]), "created");
+  assert.deepEqual(await resolve([lost()], [found(mine, "e1")]), { etag: "e1" });
+  assert.equal(await resolve([lost()], [found(theirs, "e2")]), "exists");
+  assert.deepEqual(await resolve([lost(), { etag: "e3" }], [undefined]), { etag: "e3" });
+  const late = await resolve([lost(), "exists"], [undefined, found(mine, "e4")]);
+  assert.deepEqual(late, { etag: "e4" }, "landed late");
+  assert.deepEqual(await resolve([lost()], [new Transient("get"), found(mine, "e5")]), {
+    etag: "e5",
+  });
   await assert.rejects(resolve([lost(), lost()], [undefined, new Transient("x")]), StoreFailure);
   assert.equal(await resolve(["exists"], []), "exists", "no ambiguity, no get");
-  assert.equal(await resolve([new Transient("409"), "created"], []), "created");
+  assert.deepEqual(await resolve([new Transient("409"), { etag: "e6" }], []), { etag: "e6" });
+});
+
+function resolveCas(writes: (Cas | Error)[], gets: (StoreObject | undefined | Error)[]) {
+  return retry.cas(POLICY, mine, "e0", script(writes), script(gets));
+}
+
+test("ambiguous compare-and-sets are resolved with a get", async () => {
+  const lost = () => new Ambiguous("timeout");
+  const before = new TextEncoder().encode("before");
+  assert.deepEqual(await resolveCas([lost()], [found(mine, "e1")]), { etag: "e1" });
+  assert.equal(await resolveCas([lost()], [found(theirs, "e2")]), "mismatch");
+  assert.equal(await resolveCas([lost()], [undefined]), "mismatch");
+  const again = await resolveCas([lost(), { etag: "e3" }], [found(before, "e0")]);
+  assert.deepEqual(again, { etag: "e3" }, "the ETag named still current: sent again");
+  const late = await resolveCas([lost(), "mismatch"], [found(before, "e0"), found(mine, "e4")]);
+  assert.deepEqual(late, { etag: "e4" }, "the first attempt landed after the read-back");
+  const flaky = [new Transient("get"), found(mine, "e5")];
+  assert.deepEqual(await resolveCas([lost()], flaky), { etag: "e5" });
+  assert.equal(await resolveCas(["mismatch"], []), "mismatch", "no ambiguity, no get");
 });

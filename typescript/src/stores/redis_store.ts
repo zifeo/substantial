@@ -1,5 +1,6 @@
 // The Redis adapter, over `@redis/client`, an optional peer dependency.
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { RedisClientOptions, RedisFunctions, RedisModules, RedisScripts } from "@redis/client";
 import { read } from "../core.ts";
 import { delay } from "../durations.ts";
@@ -18,11 +19,16 @@ import * as retry from "./retry.ts";
 import { Ambiguous, Fault, Refused, Transient } from "./retry.ts";
 import {
   type Capabilities,
+  type Cas,
   type Create,
+  checkAllDays,
+  checkDays,
   compareKeys,
+  DAY_MS,
   type Listing,
   type ListOptions,
   type Store,
+  type StoreObject,
 } from "./store.ts";
 
 /** `@redis/client`, loaded when a Redis store is opened. */
@@ -44,6 +50,7 @@ interface Script {
 
 interface Scripts {
   readonly create: Script;
+  readonly cas: Script;
   readonly delete: Script;
 }
 
@@ -56,15 +63,42 @@ async function shipped(name: string): Promise<Script> {
   return { text, sha };
 }
 
+/** The expiry of a write in ms for the scripts, 0 for none. */
+function expiryMs(expiry: number | undefined): string {
+  // § hxvcx7f2a@z527k
+  return String(expiry === undefined ? 0 : expiry * DAY_MS);
+}
+
+/** The ETag of a value: the digest the compare-and-set script computes with `redis.sha1hex`. */
+function sha1Etag(data: Uint8Array): string {
+  return createHash("sha1").update(data).digest("hex");
+}
+
+/** The etag of a waiting listing's page: its keys, their ETags, and whether more follow, so a
+ * page changes when a key under it is added, removed or rewritten. */
+export function pageEtag(keys: string[], etags: (string | null)[], more: boolean): string {
+  const digest = createHash("sha256");
+  const length = Buffer.alloc(8);
+  keys.forEach((key, i) => {
+    for (const part of [Buffer.from(key), Buffer.from(etags[i] ?? "")]) {
+      length.writeBigUInt64BE(BigInt(part.length));
+      digest.update(length);
+      digest.update(part);
+    }
+  });
+  digest.update(Buffer.from([more ? 1 : 0]));
+  return digest.digest("hex").slice(0, 16);
+}
+
 let scripts: Promise<Scripts> | undefined;
 
 /** The scripts of `redis/`, as the package ships them, read once per process. */
 function shippedScripts(): Promise<Scripts> {
-  // § htbc4k715.e@v00yk
-  scripts ??= Promise.all([shipped("create.lua"), shipped("delete.lua")]).then(([c, d]) => ({
-    create: c,
-    delete: d,
-  }));
+  // § htbc4k715.f@amyfp
+  scripts ??= Promise.all([shipped("create.lua"), shipped("cas.lua"), shipped("delete.lua")]).then(
+    ([create, cas, remove]) => ({ create, cas, delete: remove }),
+  );
+  // § end htbc4k715.f
   return scripts;
 }
 
@@ -332,7 +366,7 @@ class Connector {
         throw new ConfigError(`${where} has no WAITAOF, which needs Redis 7.2: ${e.message}`);
       }
       // § end htbc4k715.b
-      for (const script of [scripts.create, scripts.delete]) {
+      for (const script of [scripts.create, scripts.cas, scripts.delete]) {
         const loaded = await pool.sendCommand(["SCRIPT", "LOAD", script.text]);
         if (String(loaded) !== script.sha) {
           throw new Refused(`${where} loaded a script as ${loaded}, not ${script.sha}`);
@@ -617,8 +651,9 @@ async function woken(
 
 /** `redis://`, `redis+sentinel://` and `redis+cluster://`: the namespace `<ns>` is the hash tag
  * of its keys, so they live on one slot. A key is the string `{<ns>}:o:<key>` and a member of the
- * sorted set `{<ns>}:i`, its index, listed by lex range; every create and delete publishes the
- * key on `{<ns>}:c`, which waiting listings subscribe to.
+ * sorted set `{<ns>}:i`, its index, listed by lex range, its ETag the field of the key in the hash
+ * `{<ns>}:t`; every create, cas and delete publishes the key on `{<ns>}:c`, which waiting listings
+ * subscribe to.
  *
  * A create is the script `create.lua`, then `WAITAOF` on the same connection: acknowledged once
  * fsynced on the primary and on `replicas`. The client's own retries are off: `storeRetry` is
@@ -632,6 +667,8 @@ export class RedisStore implements Store {
   readonly #object: string;
   readonly #index: string;
   readonly #fence: string;
+  readonly #expiries: string;
+  readonly #etags: string;
   readonly #channel: string;
   readonly #publish: string;
   readonly #connector: Connector;
@@ -652,11 +689,13 @@ export class RedisStore implements Store {
     this.#redis = redis;
     this.#retry = storeRetry;
     this.#waitaofMs = waitaofMs;
-    // § htbc4k715.d@f1kpm
+    // § htbc4k715.d@0mhn6
     const tag = `{${location.namespace}}`;
     this.#object = `${tag}:o:`;
     this.#index = `${tag}:i`;
     this.#fence = `${tag}:f`;
+    this.#expiries = `${tag}:e`;
+    this.#etags = `${tag}:t`;
     this.#channel = `${tag}:c`;
     // § end htbc4k715.d
     const cluster = location.topology === "cluster";
@@ -788,23 +827,64 @@ export class RedisStore implements Store {
     return `${this.#object}${key}`;
   }
 
-  async #put(primary: Primary, key: string, data: Uint8Array): Promise<Create> {
+  async #put(
+    primary: Primary,
+    key: string,
+    data: Uint8Array,
+    expiry: number | undefined,
+  ): Promise<Create> {
     await this.#replicas(primary);
     return primary.pool.execute(async (conn: Connection) => {
       const created = await conn.sendCommand([
         "EVALSHA",
         primary.scripts.create.sha,
-        "3",
+        "5",
         this.#key(key),
         this.#index,
         this.#fence,
+        this.#expiries,
+        this.#etags,
         key,
         Buffer.from(data.buffer, data.byteOffset, data.byteLength),
         this.#channel,
         this.#publish,
+        expiryMs(expiry),
       ]);
-      const outcome: Create = created === 1 ? "created" : "exists";
-      await this.#durable(primary, conn, `create ${key}`, outcome === "created");
+      const outcome: Create = created === 1 ? { etag: sha1Etag(data) } : "exists";
+      await this.#durable(primary, conn, `create ${key}`, outcome !== "exists");
+      return outcome;
+    });
+  }
+
+  async #putIfMatch(
+    primary: Primary,
+    key: string,
+    data: Uint8Array,
+    etag: string,
+    expiry: number | undefined,
+  ): Promise<Cas> {
+    // § rz3se15bd@4wwgf
+    await this.#replicas(primary);
+    return primary.pool.execute(async (conn: Connection) => {
+      const written = await conn.sendCommand([
+        "EVALSHA",
+        primary.scripts.cas.sha,
+        "5",
+        this.#key(key),
+        this.#index,
+        this.#fence,
+        this.#expiries,
+        this.#etags,
+        key,
+        Buffer.from(data.buffer, data.byteOffset, data.byteLength),
+        etag,
+        expiryMs(expiry),
+        this.#channel,
+        this.#publish,
+      ]);
+      // § htbc4k715.g@9nxrc
+      const outcome: Cas = written === 1 ? { etag: sha1Etag(data) } : "mismatch";
+      await this.#durable(primary, conn, `cas ${key}`, outcome !== "mismatch");
       return outcome;
     });
   }
@@ -832,7 +912,7 @@ export class RedisStore implements Store {
     });
   }
 
-  async #get(primary: Primary, key: string, resolving: boolean): Promise<Uint8Array | undefined> {
+  async #get(primary: Primary, key: string, resolving: boolean): Promise<StoreObject | undefined> {
     const bytes = { typeMapping: { [this.#redis.RESP_TYPES.BLOB_STRING]: Buffer } };
     const found = await this.#read(
       primary,
@@ -841,7 +921,9 @@ export class RedisStore implements Store {
       bytes,
       resolving,
     );
-    return found === null ? undefined : new Uint8Array(found as Buffer);
+    if (found === null) return undefined;
+    const data = new Uint8Array(found as Buffer);
+    return { data, etag: sha1Etag(data) };
   }
 
   async #page(
@@ -877,13 +959,8 @@ export class RedisStore implements Store {
           this.#page(p, prefix, startAfter, maxKeys + 1),
         );
         const keys = page.slice(0, maxKeys);
-        const digest = await crypto.subtle.digest(
-          "SHA-256",
-          new TextEncoder().encode(JSON.stringify([keys, page.length > maxKeys])),
-        );
-        const etag = Array.from(new Uint8Array(digest).slice(0, 8), (b) =>
-          b.toString(16).padStart(2, "0"),
-        ).join("");
+        const etags = await this.#attempt(what, (p) => this.#etagsOf(p, keys));
+        const etag = pageEtag(keys, etags, page.length > maxKeys);
         if (flag === undefined || etag !== wait.etag) return { keys, etag };
         if (!(await woken(what, flag, deadline, signal))) return { keys, etag };
       } finally {
@@ -892,21 +969,44 @@ export class RedisStore implements Store {
     }
   }
 
+  /** The ETags of `keys` the scripts keep, `null` for a key without one. */
+  async #etagsOf(primary: Primary, keys: string[]): Promise<(string | null)[]> {
+    if (keys.length === 0) return [];
+    return (await primary.pool.sendCommand(["HMGET", this.#etags, ...keys])) as (string | null)[];
+  }
+
   async open(): Promise<void> {
     await retry.withRetry(this.#retry, () => this.#attempt("connect", async () => {}));
   }
 
-  create(key: string, data: Uint8Array): Promise<Create> {
+  async create(key: string, data: Uint8Array, expiry: number | undefined): Promise<Create> {
+    checkDays(expiry);
     const bytes = data.slice();
     return retry.create(
       this.#retry,
       bytes,
-      () => this.#attempt(`create ${key}`, (p) => this.#put(p, key, bytes), true),
+      () => this.#attempt(`create ${key}`, (p) => this.#put(p, key, bytes, expiry), true),
       () => this.#attempt(`get ${key}`, (p) => this.#get(p, key, true)),
     );
   }
 
-  get(key: string): Promise<Uint8Array | undefined> {
+  async cas(key: string, data: Uint8Array, etag: string, expiry: number | undefined): Promise<Cas> {
+    checkDays(expiry);
+    const bytes = data.slice();
+    return retry.cas(
+      this.#retry,
+      bytes,
+      etag,
+      () => this.#attempt(`cas ${key}`, (p) => this.#putIfMatch(p, key, bytes, etag, expiry), true),
+      () => this.#attempt(`get ${key}`, (p) => this.#get(p, key, true)),
+    );
+  }
+
+  async checkExpiry(days: readonly number[]): Promise<void> {
+    checkAllDays(days);
+  }
+
+  get(key: string): Promise<StoreObject | undefined> {
     return retry.withRetry(this.#retry, () =>
       this.#attempt(`get ${key}`, (p) => this.#get(p, key, false)),
     );
@@ -923,15 +1023,17 @@ export class RedisStore implements Store {
           await conn.sendCommand([
             "EVALSHA",
             p.scripts.delete.sha,
-            "3",
+            "5",
             this.#key(key),
             this.#index,
             this.#fence,
+            this.#expiries,
+            this.#etags,
             key,
             this.#channel,
             this.#publish,
           ]);
-          // § htbc4k715.a@44jcs
+          // § htbc4k715.a@b5j0w
           await this.#durable(p, conn, `delete ${key}`, false);
         }),
       ),

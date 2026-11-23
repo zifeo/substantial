@@ -6,7 +6,7 @@ A run executes the workflow function from its first line every time it wakes up,
 
 **§ <a id="ftq7bbgff">ftq7bbgff</a> Steps run at least once: a step attempt whose outcome was not committed runs again on the worker that takes the run, after its effect may already have happened, and a recorded step never runs again.**
 
-- (a) An attempt runs again when its worker crashed, paused past its claim, or shut down past its grace before its outcome was committed.
+- (a) An attempt runs again when its worker crashed, paused past its lease, or shut down past its grace before its outcome was committed.
 
 **§ <a id="a03w2yqkz">a03w2yqkz</a> A step without a retry policy has one attempt, and one with a policy backs off exponentially between attempts, from `initial`, times `multiplier`, up to `max`, for at most `max_attempts`.**
 

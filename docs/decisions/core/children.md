@@ -14,7 +14,9 @@ A chain is a run and every run it continued into, under its first run's id (I-12
 
 **§ <a id="yb61qtt3s">yb61qtt3s</a> A child started without an id gets an id derived from its parent's.**
 
-- (a) An id taken by a run that is not this child, or by a chain collected less than `tombstone` ago, ends the child failed with `RunExists`, and the other run is left untouched.
+- (a) ~~An id taken by a run that is not this child, or by a chain collected less than `tombstone` ago, ends the child failed with `RunExists`, and the other run is left untouched.~~
+
+- (d) An id taken by a run that is not this child, a later run's pointer or archive included, ends the child failed with `RunExists`, and the other run is left untouched.
 
 - (b) Two children with the same id from one run raise `InvalidArgument`.
 
@@ -22,13 +24,13 @@ A chain is a run and every run it continued into, under its first run's id (I-12
 
 **§ <a id="t53k37khf">t53k37khf</a> `child.cancel(reason)` cancels a child as a client's `run.cancel` does, returns once the message is sent, and is recorded like a workflow's send.**
 
-- (a) A child that ended raises `RunEnded`, and a collected one `RunNotFound`.
+- (a) A child that ended raises `RunEnded`, and a removed one `RunNotFound`.
 
 - (b) The child's `result()` then raises `RunFailed` with the status `cancelled` and the reason.
 
 ## Awaiting a chain
 
-**§ <a id="dgn4hcfv0">dgn4hcfv0</a> `c.result(chain)` returns a chain's value, a chain it did not start included, without polling: a chain that ended failed or cancelled raises `RunFailed`, and one that does not exist or was collected `RunNotFound`.**
+**§ <a id="gzga227zz">gzga227zz</a><a id="dgn4hcfv0"></a> `c.result(chain)` returns a chain's value, a chain it did not start included, without polling: a chain that ended failed or cancelled raises `RunFailed`, and one that does not exist or was removed `RunNotFound`.**
 
 - (a) A timeout raises `WaitTimeout`, and the call can be made again.
 

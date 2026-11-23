@@ -104,6 +104,7 @@ impl IntoFuture for Create {
         Box::pin(async move {
             let plan = Plan::Create(b::CreatePlan {
                 prefix: String::new(),
+                probe: crate::plan::probe(),
             });
             opened(self.access, plan).await
         })
@@ -151,6 +152,7 @@ impl IntoFuture for Open {
         Box::pin(async move {
             let plan = Plan::Open(b::OpenPlan {
                 prefix: String::new(),
+                probe: crate::plan::probe(),
             });
             opened(self.access, plan).await
         })
@@ -185,7 +187,8 @@ pub(crate) async fn attached(
         }) => match outcome {
             opened::Opened::Open(_) => {}
             opened::Opened::LayoutError(e) => return Err(Error::LayoutError(e)),
-            // § one zemxe46k3.b@nxn4m
+            opened::Opened::ConfigError(e) => return Err(Error::ConfigError(e)),
+            // § one zemxe46k3.b@53t47
             opened::Opened::Failed(f) => return Err(Error::StoreError(f.message)),
         },
         other => return Err(plan::unexpected("open", other)),

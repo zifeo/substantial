@@ -1,4 +1,5 @@
-//! What a `Substantial` tells its observer: store operations, step attempts, replays and scans.
+//! What a `Substantial` tells its observer: store operations, step attempts, replays, scans, and
+//! runs blocked, near a history limit or left for a clock behind their history.
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -8,9 +9,11 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 
 use crate::cost::{Amount, Prices};
-use crate::error::Result;
+use crate::error::{Failure, Result};
 use crate::store::attempts::measured;
-use crate::store::{Capabilities, Create, ListWait, Listing, Store, StoreFailure, StoreFuture};
+use crate::store::{
+    Capabilities, Cas, Create, ListWait, Listing, Object, Store, StoreFailure, StoreFuture,
+};
 
 /// An event of a `Substantial`, given to the function of `.observe(..)`.
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +22,9 @@ pub enum Observed {
     Attempt(Attempt),
     Replay(Replay),
     Scan(Scan),
+    Blocked(Blocked),
+    NearLimit(NearLimit),
+    Skewed(Skewed),
 }
 
 /// A store operation of a client or a worker, once it answered.
@@ -63,6 +69,36 @@ pub struct Replay {
 pub struct Scan {
     pub workflow: String,
     pub due: u32,
+}
+
+/// A replay blocked: its code raised an error that is no end, or diverged from the history. The
+/// run is tried again after a backoff.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Blocked {
+    pub workflow: String,
+    pub run: String,
+    pub error: Failure,
+}
+
+/// A commit took a run past the warning share of one of its history limits: `limit` is
+/// `history_bytes`, `history_events`, `replay_inbox` or `seen`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NearLimit {
+    pub workflow: String,
+    pub run: String,
+    pub limit: String,
+    pub used: u64,
+    pub max: u64,
+}
+
+/// A worker left a chain alone, `run` the chain and `current` its current run: its clock, `now`, is
+/// behind the time of the run's last segment by more than `claim_skew`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Skewed {
+    pub run: String,
+    pub current: String,
+    pub segment_at: chrono::DateTime<chrono::Utc>,
+    pub now: chrono::DateTime<chrono::Utc>,
 }
 
 pub(crate) type Observe = Arc<dyn Fn(&Observed) + Send + Sync>;
@@ -137,16 +173,38 @@ impl Store for Observing {
         self.inner.open()
     }
 
-    fn create<'a>(&'a self, key: &'a str, bytes: Bytes) -> StoreFuture<'a, Create> {
-        Box::pin(
-            self.observed("create", self.inner.create(key, bytes), |c| match c {
-                Create::Created => "created",
-                Create::Exists => "exists",
-            }),
-        )
+    fn create<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Create> {
+        let created = self.inner.create(key, bytes, expiry);
+        Box::pin(self.observed("create", created, |c| match c {
+            Create::Created { .. } => "created",
+            Create::Exists => "exists",
+        }))
     }
 
-    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Bytes>> {
+    fn cas<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Bytes,
+        etag: &'a str,
+        expiry: Option<u32>,
+    ) -> StoreFuture<'a, Cas> {
+        let written = self.inner.cas(key, bytes, etag, expiry);
+        Box::pin(self.observed("cas", written, |c| match c {
+            Cas::Written { .. } => "written",
+            Cas::Mismatch => "mismatch",
+        }))
+    }
+
+    fn check_expiry<'a>(&'a self, days: &'a [u32]) -> BoxFuture<'a, Result<()>> {
+        self.inner.check_expiry(days)
+    }
+
+    fn get<'a>(&'a self, key: &'a str) -> StoreFuture<'a, Option<Object>> {
         Box::pin(self.observed("get", self.inner.get(key), |g| match g {
             Some(_) => "found",
             None => "missing",

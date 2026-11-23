@@ -47,13 +47,21 @@ test("the named prices and what prices refuse", () => {
   const named = new s.Prices(S3);
   assert.deepEqual(
     { ...named },
-    { currency: "USD", create: 5_000_000n, get: 400_000n, list: 5_000_000n, delete: 0n },
+    {
+      currency: "USD",
+      create: 5_000_000n,
+      cas: 5_000_000n,
+      get: 400_000n,
+      list: 5_000_000n,
+      delete: 0n,
+    },
   );
   assert.deepEqual(
     named,
     new s.Prices({
       currency: "USD",
       create: 5_000_000n,
+      cas: 5_000_000n,
       get: 400_000n,
       list: 5_000_000n,
       delete: 0n,
@@ -66,6 +74,7 @@ test("the named prices and what prices refuse", () => {
   );
   assert.equal(new s.Prices(S3, { create: MAX }).create, MAX);
   assert.deepEqual(priceOf(named, "create", 2), new s.Amount("USD", 10_000n));
+  assert.deepEqual(priceOf(named, "cas", 1), new s.Amount("USD", 5_000n));
   assert.deepEqual(priceOf(named, "get", 1), new s.Amount("USD", 400n));
   assert.deepEqual(priceOf(named, "delete", 3), new s.Amount("USD", 0n));
   assert.equal(priceOf(new s.Prices(S3, { get: 1001n }), "get", 1).nano, 2n, "a share rounds up");
@@ -123,7 +132,7 @@ test("charges reach the cost by step and in total", async () => {
   assert.ok(store > 0n, JSON.stringify(cost));
   assert.deepEqual(cost.amounts, { EUR: "3", USD: String(store + 11n) });
   assert.ok(cost.requests > 0 && cost.requests === cost.store.requests, JSON.stringify(cost));
-  assert.equal(cost.requests, cost.create + cost.get + cost.list + cost.delete);
+  assert.equal(cost.requests, cost.create + cost.cas + cost.get + cost.list + cost.delete);
   assert.equal(cost.children.requests, 0);
   await env.check();
 });
@@ -207,8 +216,8 @@ test(
 );
 
 test("costs read the core JSON", () => {
-  const meters = { create: 1, get: 2, list: 3, delete: 0, requests: 6 };
-  const none = { create: 0, get: 0, list: 0, delete: 0, requests: 0, amounts: {} };
+  const meters = { create: 1, cas: 1, get: 2, list: 3, delete: 0, requests: 7 };
+  const none = { create: 0, cas: 0, get: 0, list: 0, delete: 0, requests: 0, amounts: {} };
   const cost = costOf({
     ...meters,
     amounts: { USD: "9007199254740993" },
@@ -219,7 +228,7 @@ test("costs read the core JSON", () => {
   assert.ok(cost instanceof s.Cost && cost.store instanceof s.Meters);
   assert.deepEqual(cost.amounts, { USD: 9_007_199_254_740_993n });
   assert.deepEqual(cost.steps, { pay: { USD: 5n } });
-  assert.deepEqual(cost.store, new s.Meters(1, 2, 3, 0, 6, {}));
+  assert.deepEqual(cost.store, new s.Meters(1, 1, 2, 3, 0, 7, {}));
   assert.equal(cost.children.requests, 0);
 });
 

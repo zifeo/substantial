@@ -44,7 +44,7 @@ impl Context {
         workflow: &W,
         input: impl Serialize,
     ) -> StartChild<W::Output> {
-        // § bxb0ygj7m@rwh17
+        // § bxb0ygj7m@32mhd
         let workflow = workflow.workflow();
         StartChild {
             ctx: self.clone(),
@@ -55,6 +55,7 @@ impl Context {
             id: None,
             // § one evdz71nzb@rnddn
             budget: workflow.budget().cloned(),
+            abandon: false,
             output: PhantomData,
         }
     }
@@ -138,10 +139,17 @@ pub struct StartChild<O> {
     input: Result<Vec<u8>>,
     id: Option<String>,
     budget: Option<Budget>,
+    abandon: bool,
     output: PhantomData<fn() -> O>,
 }
 
 impl<O> StartChild<O> {
+    /// Lets the child go on when this run ends, which otherwise cancels it.
+    pub fn abandon(mut self) -> Self {
+        self.abandon = true;
+        self
+    }
+
     /// Starts the child under this id instead of one derived from the parent's.
     pub fn id(mut self, id: &str) -> Self {
         self.id = Some(id.to_owned());
@@ -171,6 +179,7 @@ impl<O: 'static> IntoFuture for StartChild<O> {
                 input: Some(json(self.input?)?),
                 id: self.id,
                 budget: self.budget.as_ref().map(Budget::to_proto).transpose()?,
+                abandon: self.abandon,
             };
             match self.ctx.call(Call::Start(start)).await? {
                 Answer::Called(Called::Run(chain)) => Ok(Child {

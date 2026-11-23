@@ -18,26 +18,28 @@ async def run_undos(shared: Shared, undos: run.Called.Undos) -> None:
         found = shared.undos.get(u.call)
         if found is None:
             raise shared.protocol(f"undo of call {u.call} without an undo")
-        make, step_options = found
-        # § a5c1mfs8d.a@v05hn
+        make, step_options, heartbeat_ms = found
+        # § a5c1mfs8d.a@fs0dw
         options = run.StepOptions()
         options.CopyFrom(step_options)
         options.occurrence = u.occurrence
         # § end a5c1mfs8d.a
         call = run.Call(step=run.Call.Step(name=u.name, options=options))
         value = decode_json(u.value if u.HasField("value") else None)
-        # § one j5gf2r47g@hhkr1
+        # § one vvp37rp40.b@hs1y5
+        spec = StepSpec(make(value), None, heartbeat_ms)
+        # § one j5gf2r47g@nn4ns
         try:
-            await shared.future(call, decode_json, StepSpec(make(value)))
+            await shared.future(call, decode_json, spec)
         except StepFailed as e:
             raise UndoFailed(u.name, e.failure) from None
 
 
 async def rollback(shared: Shared, reason: str) -> None:
-    # § zjw5cess8@xdqm4
+    # § zjw5cess8@p4gqr
     undos = shared.expect(run.Call(rollback=boundary.Empty()), "undos")
     await run_undos(shared, undos)
-    # § one g039jvy6k.c@atzgr
+    # § one dxgjekysz.c@4q973
     raise RolledBack(reason)
 
 
@@ -75,7 +77,7 @@ class Saga:
         if parent is not None:
             fields["parent"] = parent
         end = run.Call(saga_end=run.Call.SagaEnd(**fields))
-        # § ctp0q370t@4e5pf
+        # § ctp0q370t@ew96x
         if failed:
             await run_undos(self._shared, self._shared.expect(end, "undos"))
         else:

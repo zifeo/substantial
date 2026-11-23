@@ -1,6 +1,6 @@
 {
   "name": "@substantial/substantial",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MPL-2.0",
   "exports": "./typescript/src/mod.ts",
   "publish": {
@@ -9,6 +9,7 @@
       "wasm/substantial.wasm",
       "wasm/SHA256SUMS",
       "redis/create.lua",
+      "redis/cas.lua",
       "redis/delete.lua",
       "README.md",
       "LICENSE"

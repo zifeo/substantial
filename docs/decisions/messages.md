@@ -1,6 +1,6 @@
 # Messages and handlers
 
-A message is a name and a JSON value sent to a chain, by a client or by a workflow ([Interfaces](../interfaces.md#i-9-messages), "A message is a name and a JSON value"). How a message reaches a run is the core's: a resend with the same id is delivered once within the dedup window ([r1nrgn5h8](core/messages.md#r1nrgn5h8)), a workflow's send survives its run's crash without doubling ([b7g8bsqaq](core/messages.md#b7g8bsqaq)), its id derived from the call when it gives none ([b7g8bsqaq.c](core/messages.md#b7g8bsqaq)), a replay consumes every waiting message in order and records it ([vcgwgaf4n](core/messages.md#vcgwgaf4n)), and a run consumes them in the order of their senders' ULIDs ([a1qvxtaj6](core/messages.md#a1qvxtaj6)). The window is a fixed value of every worker ([ry26kkc7v](workers.md#ry26kkc7v)), and a client draws the ids and the order of its own sends ([Clients](clients.md)).
+A message is a name and a JSON value sent to a chain, by a client or by a workflow ([Interfaces](../interfaces.md#i-9-messages), "A message is a name and a JSON value"). How a message reaches a run is the core's: a resend with the same id is delivered once within the dedup window ([r1nrgn5h8](core/messages.md#r1nrgn5h8)), a workflow's send survives its run's crash without doubling ([b7g8bsqaq](core/messages.md#b7g8bsqaq)), its id derived from the call when it gives none ([b7g8bsqaq.c](core/messages.md#b7g8bsqaq)), a replay consumes every message handed to it in order and records it ([dnxwdv0ac](core/messages.md#dnxwdv0ac)), and a run consumes them in the order of their senders' ULIDs ([a1qvxtaj6](core/messages.md#a1qvxtaj6)). The window is a fixed value of every worker ([ry26kkc7v](workers.md#ry26kkc7v)), and a client draws the ids and the order of its own sends ([Clients](clients.md)).
 
 What each host decides is how code binds to messages and which names it refuses.
 
@@ -10,11 +10,15 @@ What each host decides is how code binds to messages and which names it refuses.
 
 **§ <a id="aeby9bgqd">aeby9bgqd</a> `c.handle(name, cb)` first delivers every message of its name the run consumed so far, in order, then each new one as it is consumed.**
 
-- (a) A message a handler cannot decode fails the run with `MessageDecode`, and so does a handler that raises, in Rust that panics.
+- (a) ~~A message a handler cannot decode fails the run with `MessageDecode`, and so does a handler that raises, in Rust that panics.~~
 
 - (b) A handler is a plain function: in Python and TypeScript an async one raises `InvalidArgument` when it is bound.
 
-- (c) In Python and TypeScript a handler that returns an awaitable, a promise in TypeScript, fails the run with `MessageDecode`.
+- (c) ~~In Python and TypeScript a handler that returns an awaitable, a promise in TypeScript, fails the run with `MessageDecode`.~~
+
+- (d) A message a handler cannot decode blocks the run with `MessageDecode`, and so does a handler that raises, in Rust that panics.
+
+- (e) In Python and TypeScript a handler that returns an awaitable, a promise in TypeScript, blocks the run with `MessageDecode`.
 
 ## Reserved names
 

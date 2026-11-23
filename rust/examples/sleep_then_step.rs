@@ -56,6 +56,7 @@ const ONCE: s::Retry = s::Retry {
     initial: std::time::Duration::from_secs(1),
     max: std::time::Duration::from_secs(1),
     multiplier: 1.0,
+    deadline: None,
 };
 
 #[s::step(retry = ONCE, timeout = std::time::Duration::from_millis(200))]

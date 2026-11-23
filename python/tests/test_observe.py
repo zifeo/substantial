@@ -73,9 +73,10 @@ async def test_every_kind_of_event_with_its_fields() -> None:
         assert await run.result() == 2
 
     ops = seen.store_ops()
-    per = {"create": 5000, "list": 5000, "get": 400, "delete": 0}
+    per = {"create": 5000, "cas": 5000, "list": 5000, "get": 400, "delete": 0}
     outcomes = {
         "create": {"created", "exists"},
+        "cas": {"written", "mismatch"},
         "get": {"found", "missing"},
         "list": {"listed"},
         "delete": {"deleted"},
@@ -214,8 +215,11 @@ async def test_an_observer_that_raises_stops_the_worker_or_fails_the_client_call
 
 
 async def test_a_store_operation_of_a_worker_whose_observer_raises_stops_it() -> None:
+    # Armed once the namespace is created, as its probes delete a key too.
+    armed = [False]
+
     def on_deletes(event: s.StoreOp | s.Attempt | s.Replay | s.Scan) -> None:
-        if isinstance(event, s.StoreOp) and event.op == "delete":
+        if armed[0] and isinstance(event, s.StoreOp) and event.op == "delete":
             raise ObserverDown("observer down")
 
     @s.workflow
@@ -224,6 +228,7 @@ async def test_a_store_operation_of_a_worker_whose_observer_raises_stops_it() ->
         return 0
 
     async with s.testing.Env.open(now=T0, observe=on_deletes) as env:
+        armed[0] = True
         worker = env.worker([w], preset="service")
         with pytest.raises(ObserverDown, match="observer down"):
             async with worker:

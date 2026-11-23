@@ -6,17 +6,25 @@ A sender retries after a lost answer, so a message is deduplicated by an id the 
 
 ## Delivery
 
-**§ <a id="vcgwgaf4n">vcgwgaf4n</a> A message is an inbox key of the chain's last run, `runs/<run>/inbox/<ord>-<id>`, and a replay consumes every message waiting there, in key order, whether the code asks for it yet or not, and records it, so on every replay the code sees the same messages at the same place.**
+**§ <a id="vcgwgaf4n">vcgwgaf4n</a> ~~A message is an inbox key of the chain's last run, `runs/<run>/inbox/<ord>-<id>`, and a replay consumes every message waiting there, in key order, whether the code asks for it yet or not, and records it, so on every replay the code sees the same messages at the same place.~~**
 
 A message sent while its run ends may be accepted and left unconsumed ([Architecture](../../architecture.md#when-something-goes-wrong), "a client send races the run's end").
 
-- (a) A message that reaches a run as it continues as new is forwarded to the next run of the chain, none lost, and may be consumed there after a message sent later.
+- (a) ~~A message that reaches a run as it continues as new is forwarded to the next run of the chain, none lost, and may be consumed there after a message sent later.~~
 
-A message sent to a collected chain raises `RunNotFound` ([ja67c3az7.a](lifecycle.md#ja67c3az7)), so within its tombstone none reaches a new run under the same id (I-16).
+A message is its own wakeup: its entry sits in the queue of the chain's workflow, holding its body, so a send is one create, and a worker that lists the queue finds it. Its key is the sender's time first, so a chain's messages sort in send order, and its entry is due at the epoch, so no sender's clock delays it. A message a run was handed and did not consume moves into the chain's head, so an entry wakes its chain once.
+
+**§ <a id="dnxwdv0ac">dnxwdv0ac</a> A message is an entry `<ord>-<id>` of its chain in the queue of its current run's workflow, holding its body, and a replay consumes every message handed to it, in key order, whether the code asks for it yet or not, and records it, so every replay shows the code the same messages at the same place.**
+
+- (a) A message a run did not consume is kept in its chain's head and goes on to the chain's next run, none lost, and may be consumed there after a message sent later.
+
+A message sent to a chain its retention removed raises `RunNotFound`, and while the chain is kept its id starts no new run, so no message meant for a run reaches another under the same id (I-16).
 
 **§ <a id="dva6cx6nb">dva6cx6nb</a> A `send` or a `cancel` to a chain whose last run ended raises `RunEnded`, and to a chain that does not exist `RunNotFound`, from a client as from a workflow.**
 
-- (a) A client's `send` or `cancel` returns once the message's inbox key and the run's due entry exist in the store.
+- (a) ~~A client's `send` or `cancel` returns once the message's inbox key and the run's due entry exist in the store.~~
+
+- (c) A client's `send` or `cancel` returns once the message's entry, which is also its chain's wakeup, exists in the store.
 
 - (b) A workflow's send the core refused leaves the store as it was.
 

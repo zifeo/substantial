@@ -2,8 +2,14 @@
 //! workflow and its steps, written as for the Rust host, compiled to a WebAssembly component that
 //! a worker of the Rust host loads at run time.
 //!
-//! ```ignore
+//! ```
+//! # extern crate substantial_wasm_sdk as substantial;
 //! use substantial as s;
+//!
+//! #[derive(serde::Deserialize)]
+//! struct Input {
+//!     name: String,
+//! }
 //!
 //! #[s::step]
 //! async fn greet(name: &str) -> Result<String, std::io::Error> {
@@ -17,6 +23,7 @@
 //! }
 //!
 //! s::export!(hello, steps = [greet]);
+//! # fn main() {}
 //! ```
 //!
 //! Built with `cargo build --target wasm32-unknown-unknown`, then made a component with
@@ -62,4 +69,7 @@ pub struct Retry {
     pub initial: std::time::Duration,
     pub max: std::time::Duration,
     pub multiplier: f64,
+    /// The native host's total deadline of the step's attempts, which a Wasm workflow's step
+    /// does not have yet: `Some` raises `InvalidArgument` at the step's call.
+    pub deadline: Option<std::time::Duration>,
 }

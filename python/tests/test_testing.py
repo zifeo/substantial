@@ -146,8 +146,12 @@ async def test_two_sends_in_a_row_reach_the_run_together(env: s.testing.Env) -> 
         await apart.send("event", 2)
         assert await together.result() == await apart.result() == 2
         # One replay took both messages, in one segment; the other run woke for each.
-        assert len(env._world.keys("runs/together/log/")) == 1
-        assert len(env._world.keys("runs/apart/log/")) == 2
+
+        async def segments(run: s.Run[int]) -> set[int]:
+            return {e.segment for e in await run.history() if e.kind == "message"}
+
+        assert len(await segments(together)) == 1
+        assert len(await segments(apart)) == 2
 
 
 async def test_a_client_shares_the_namespace_and_the_clock(env: s.testing.Env) -> None:

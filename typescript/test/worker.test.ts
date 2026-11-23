@@ -2,23 +2,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createOn, openOn } from "../src/client.ts";
+import { createOn, type Host, openOn } from "../src/client.ts";
+import { RealClock } from "../src/clock.ts";
 import {
   ConfigError,
+  Fail,
   InvalidArgument,
   LayoutError,
   milliseconds,
   type Observed,
   RunFailed,
+  Skewed,
   StoreOp,
   Substantial,
   seconds,
   step,
   workflow,
 } from "../src/mod.ts";
+import { ulid } from "../src/plan.ts";
+import { Run } from "../src/run.ts";
 import { MemoryStore } from "../src/stores/memory.ts";
-import type { Listing, ListOptions, ListWait } from "../src/stores/store.ts";
-import { wake } from "../src/worker.ts";
+import type { Create, Listing, ListOptions, ListWait } from "../src/stores/store.ts";
+import { Worker, wake } from "../src/worker.ts";
 import { eachAdapter, eventually, LONG, Recording, script } from "./helpers.ts";
 
 const example = workflow("example", async () => 1);
@@ -93,18 +98,26 @@ eachAdapter("create and open check the layout", async (store) => {
   await createOn(store);
   await createOn(store);
   await openOn(store);
-  const marker = new TextDecoder().decode((await store.get("substantial.json")) ?? undefined);
-  assert.equal(marker, '{"layout":2,"encoding":"protobuf"}');
+  const marker = new TextDecoder().decode((await store.get("substantial.json"))?.data);
+  assert.equal(marker, '{"layout":3,"encoding":"protobuf"}');
 });
 
 test("a namespace of the layout before is refused", async () => {
   // With its partitions: drained by the version that wrote it, never opened by this one.
   const old = new MemoryStore("worker-layout-1");
-  await old.create("probe/exclusive", new Uint8Array());
+  await old.create("probe/exclusive", new Uint8Array(), undefined);
   const marker = '{"layout":1,"encoding":"protobuf","partitions":4,"hash":"xxh3-64"}';
-  await old.create("substantial.json", new TextEncoder().encode(marker));
+  await old.create("substantial.json", new TextEncoder().encode(marker), undefined);
   for (const opened of [openOn(old), createOn(old)]) {
     await assert.rejects(opened, (e) => e instanceof LayoutError && /has layout 1/.test(e.message));
+  }
+  // Layout 2, Substantial 0.3, is never read.
+  const second = new MemoryStore("worker-layout-2");
+  await second.create("probe/exclusive", new Uint8Array(), undefined);
+  const layout2 = '{"layout":2,"encoding":"protobuf"}';
+  await second.create("substantial.json", new TextEncoder().encode(layout2), undefined);
+  for (const opened of [openOn(second), createOn(second)]) {
+    await assert.rejects(opened, (e) => e instanceof ConfigError && /layout 2/.test(e.message));
   }
 });
 
@@ -126,12 +139,53 @@ test("create and open take a URL and its credentials only", async () => {
 
 test("a store that accepts two creates fails the probe", async () => {
   class Overwriting extends MemoryStore {
-    override async create(key: string, data: Uint8Array): Promise<"created" | "exists"> {
+    override async create(
+      key: string,
+      data: Uint8Array,
+      expiry: number | undefined,
+    ): Promise<Create> {
       await this.delete(key);
-      return super.create(key, data);
+      return super.create(key, data, expiry);
     }
   }
-  await assert.rejects(createOn(new Overwriting("probe-overwrite")), LayoutError);
+  await assert.rejects(
+    createOn(new Overwriting("probe-overwrite")),
+    (e) => e instanceof ConfigError && /its creates are not exclusive/.test(e.message),
+  );
+});
+
+test("openers at once each probe keys of their own", async () => {
+  const store = new Recording(new MemoryStore("probe-own"));
+  await createOn(store);
+  await Promise.all(Array.from({ length: 4 }, () => openOn(store)));
+  // § mgfgmd25p.e@rn5dg
+  const probes = store.writes.filter(([key]) => key.startsWith("probe/"));
+  const ids = new Set(probes.map(([key]) => key.split("/")[1]));
+  assert.equal(ids.size, 5, `one id per opener: ${JSON.stringify(probes)}`);
+  assert.ok(
+    [...ids].every((id) => id?.length === 26),
+    JSON.stringify([...ids]),
+  );
+  assert.deepEqual((await store.list("probe/", { maxKeys: 10 })).keys, []);
+  // § end mgfgmd25p.e
+  // § mgfgmd25p.g@3m38r
+  const unexpiring = probes.filter(([, expiry]) => expiry !== 1);
+  assert.deepEqual(unexpiring, []);
+  // § end mgfgmd25p.g
+});
+
+test("a worker checks the rule of the probe keys at start", async () => {
+  const store = new Recording(new MemoryStore("probe-rule"));
+  const sub = await createOn(store);
+  const worker = script(sub, [example], { retention: 30 });
+  const run = await sub.start(example);
+  assert.equal(await run.result({ timeout: LONG }), 1);
+  await worker.shutdown();
+  // § cfdckf61n.c@sdhnf
+  assert.equal(store.checked.length, 1, JSON.stringify(store.checked));
+  const [days] = store.checked;
+  assert.ok(days?.includes(30) && days.includes(1), JSON.stringify(days));
+  // § end cfdckf61n.c
 });
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
@@ -260,7 +314,7 @@ class Waiting extends MemoryStore {
     const { wait, signal, ...rest } = options;
     const listing = await super.list(prefix, rest);
     if (wait !== undefined) {
-      if (prefix.endsWith("/result")) this.resultWaits.push(options);
+      if (prefix.startsWith("runs/")) this.resultWaits.push(options);
       await sleep(20, undefined, signal === undefined ? {} : { signal });
     }
     return { keys: listing.keys, etag: "etag" };
@@ -307,7 +361,7 @@ test("a run that ends failed or cancelled logs one warning", async () => {
     const failing = workflow("ends-failed", async (c) => {
       await c.sleep(milliseconds(50));
       await c.step("work", () => null);
-      throw new RangeError("boom");
+      throw new Fail("Boom", "boom");
     });
     const waiting = workflow("ends-cancelled", async (c) => {
       await c.step("first", () => null);
@@ -327,7 +381,7 @@ test("a run that ends failed or cancelled logs one warning", async () => {
   }
   assert.deepEqual(
     warnings.filter((w) => w.startsWith("run ")),
-    ["run warn-failed failed: RangeError: boom", "run warn-cancelled cancelled: not needed"],
+    ["run warn-failed failed: Boom: boom", "run warn-cancelled cancelled: not needed"],
   );
 });
 
@@ -353,4 +407,91 @@ test("result polls up to max interval", async () => {
     run.result({ maxInterval: milliseconds(0) }),
     (e) => e instanceof InvalidArgument && /maxInterval/.test(e.message),
   );
+});
+
+/** The real clock `by` ms ahead. */
+class Ahead extends RealClock {
+  readonly by: number;
+
+  constructor(by: number) {
+    super();
+    this.by = by;
+  }
+
+  override now(): number {
+    return super.now() + this.by;
+  }
+}
+
+/** A host whose workers run on the real clock `by` ms ahead. */
+function aheadBy(by: number): Host {
+  return {
+    now: () => Date.now(),
+    ulid,
+    worker: (module, s, workflows, settings, hooks, metering) =>
+      new Worker(
+        { core: module.instantiate(), store: s, clock: new Ahead(by), id: "ahead" },
+        workflows,
+        settings,
+        hooks,
+        metering,
+      ),
+    handle: (ns, w, chain) => new Run(ns, w, chain),
+  };
+}
+
+test("a worker whose clock is behind a run's last segment leaves it alone", async () => {
+  const told: Skewed[] = [];
+  const store = new MemoryStore(`skewed-${crypto.randomUUID()}`);
+  const sub = await createOn(store, {
+    observe: (e: Observed) => {
+      if (e instanceof Skewed) told.push(e);
+    },
+  });
+  const waiting = workflow("waiting", async (c) => await c.receive<number>("go"));
+  // A minute ahead, past `claim_skew`, 5 s in the script preset: its segment is in the future of
+  // every right clock.
+  const early = await openOn(store, {}, aheadBy(60_000));
+  const ahead = script(early, [waiting]);
+  const run = await sub.start(waiting);
+  await eventually("the wait", async () => (await run.status()) === "suspended");
+  await ahead.shutdown();
+  const right = script(sub, [waiting]);
+  await run.send("go", 1);
+  // § kr6b4hm8k@2h5qg
+  await eventually("the skew told", () => told.length > 0);
+  const [skew] = told;
+  assert.equal(skew?.run, run.chain);
+  // Not continued: the chain's current run is its first.
+  assert.equal(skew.current, run.chain);
+  assert.ok(skew.segmentAt.getTime() - skew.now.getTime() > 55_000, String(skew.segmentAt));
+  assert.equal(await run.status(), "suspended", "left alone");
+  // § end kr6b4hm8k
+  await right.shutdown();
+  await early.close();
+  await sub.close();
+});
+
+test("a message from a sender whose clock is ahead is consumed at once", async () => {
+  const store = new MemoryStore(`sender-ahead-${crypto.randomUUID()}`);
+  const sub = await createOn(store);
+  const waiting = workflow("waiting_for_go", async (c) => await c.receive<number>("go"));
+  const sending = workflow("sending_go", async (c, input: { to: string }) => {
+    await c.send(input.to, "go", 7);
+    return 0;
+  });
+  const right = script(sub, [waiting]);
+  // An hour ahead: a message keyed by its sender's time would not be due for an hour.
+  const early = await openOn(store, {}, aheadBy(3_600_000));
+  const ahead = script(early, [sending]);
+  const run = await sub.start(waiting);
+  const sender = await sub.start(sending, { to: run.chain });
+  await sender.result({ timeout: LONG });
+  // § d9vmk6y6y.e@79v7r
+  assert.equal(await run.result({ timeout: LONG }), 7);
+  // § end d9vmk6y6y.e
+  await ahead.shutdown();
+  await right.shutdown();
+  await early.close();
+  await sub.close();
 });

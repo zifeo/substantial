@@ -7,6 +7,7 @@ from google.protobuf import message as _message
 from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+RUN_STATUS_BLOCKED: RunStatus
 RUN_STATUS_CANCELLED: RunStatus
 RUN_STATUS_COMPLETED: RunStatus
 RUN_STATUS_FAILED: RunStatus
@@ -14,6 +15,7 @@ RUN_STATUS_PENDING: RunStatus
 RUN_STATUS_RUNNING: RunStatus
 RUN_STATUS_SUSPENDED: RunStatus
 RUN_STATUS_UNSPECIFIED: RunStatus
+WAITING_BLOCKED: Waiting
 WAITING_INBOX: Waiting
 WAITING_MESSAGE: Waiting
 WAITING_START: Waiting
@@ -37,10 +39,12 @@ class CancelPlan(_message.Message):
     def __init__(self, prefix: _Optional[str] = ..., chain: _Optional[str] = ..., reason: _Optional[str] = ..., id: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., ord: _Optional[str] = ...) -> None: ...
 
 class CreatePlan(_message.Message):
-    __slots__ = ["prefix"]
+    __slots__ = ["prefix", "probe"]
     PREFIX_FIELD_NUMBER: _ClassVar[int]
+    PROBE_FIELD_NUMBER: _ClassVar[int]
     prefix: str
-    def __init__(self, prefix: _Optional[str] = ...) -> None: ...
+    probe: str
+    def __init__(self, prefix: _Optional[str] = ..., probe: _Optional[str] = ...) -> None: ...
 
 class History(_message.Message):
     __slots__ = ["events", "failed", "no_chain"]
@@ -82,26 +86,28 @@ class HistoryPlan(_message.Message):
     def __init__(self, prefix: _Optional[str] = ..., chain: _Optional[str] = ...) -> None: ...
 
 class NoChain(_message.Message):
-    __slots__ = ["collected_until"]
-    COLLECTED_UNTIL_FIELD_NUMBER: _ClassVar[int]
-    collected_until: _layout_pb2.Time
-    def __init__(self, collected_until: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ...) -> None: ...
+    __slots__ = []
+    def __init__(self) -> None: ...
 
 class OpenPlan(_message.Message):
-    __slots__ = ["prefix"]
+    __slots__ = ["prefix", "probe"]
     PREFIX_FIELD_NUMBER: _ClassVar[int]
+    PROBE_FIELD_NUMBER: _ClassVar[int]
     prefix: str
-    def __init__(self, prefix: _Optional[str] = ...) -> None: ...
+    probe: str
+    def __init__(self, prefix: _Optional[str] = ..., probe: _Optional[str] = ...) -> None: ...
 
 class Opened(_message.Message):
-    __slots__ = ["failed", "layout_error", "open"]
+    __slots__ = ["config_error", "failed", "layout_error", "open"]
+    CONFIG_ERROR_FIELD_NUMBER: _ClassVar[int]
     FAILED_FIELD_NUMBER: _ClassVar[int]
     LAYOUT_ERROR_FIELD_NUMBER: _ClassVar[int]
     OPEN_FIELD_NUMBER: _ClassVar[int]
+    config_error: str
     failed: _boundary_pb2.StoreFailure
     layout_error: str
     open: _boundary_pb2.Empty
-    def __init__(self, open: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., layout_error: _Optional[str] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
+    def __init__(self, open: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., layout_error: _Optional[str] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ..., config_error: _Optional[str] = ...) -> None: ...
 
 class PlanInput(_message.Message):
     __slots__ = ["cancel", "create", "history", "open", "read", "result", "retry", "runs", "send", "start", "status"]
@@ -230,36 +236,38 @@ class Retried(_message.Message):
     def __init__(self, created: _Optional[_Union[Retried.Retry, _Mapping]] = ..., existing: _Optional[_Union[Retried.Retry, _Mapping]] = ..., not_retryable: _Optional[_Union[Retried.NotRetryable, _Mapping]] = ..., no_chain: _Optional[_Union[NoChain, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
 
 class RetryPlan(_message.Message):
-    __slots__ = ["budget", "chain", "now", "prefix"]
+    __slots__ = ["budget", "chain", "keep", "now", "prefix"]
     BUDGET_FIELD_NUMBER: _ClassVar[int]
     CHAIN_FIELD_NUMBER: _ClassVar[int]
+    KEEP_FIELD_NUMBER: _ClassVar[int]
     NOW_FIELD_NUMBER: _ClassVar[int]
     PREFIX_FIELD_NUMBER: _ClassVar[int]
     budget: _layout_pb2.Budget
     chain: str
+    keep: int
     now: _layout_pb2.Time
     prefix: str
-    def __init__(self, prefix: _Optional[str] = ..., chain: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., budget: _Optional[_Union[_layout_pb2.Budget, _Mapping]] = ...) -> None: ...
+    def __init__(self, prefix: _Optional[str] = ..., chain: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., budget: _Optional[_Union[_layout_pb2.Budget, _Mapping]] = ..., keep: _Optional[int] = ...) -> None: ...
 
 class RunExists(_message.Message):
-    __slots__ = ["collected_until"]
-    COLLECTED_UNTIL_FIELD_NUMBER: _ClassVar[int]
-    collected_until: _layout_pb2.Time
-    def __init__(self, collected_until: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ...) -> None: ...
+    __slots__ = []
+    def __init__(self) -> None: ...
 
 class RunInfo(_message.Message):
-    __slots__ = ["chain", "due_at", "run", "version", "waiting"]
+    __slots__ = ["blocked", "chain", "due_at", "run", "version", "waiting"]
+    BLOCKED_FIELD_NUMBER: _ClassVar[int]
     CHAIN_FIELD_NUMBER: _ClassVar[int]
     DUE_AT_FIELD_NUMBER: _ClassVar[int]
     RUN_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     WAITING_FIELD_NUMBER: _ClassVar[int]
+    blocked: _layout_pb2.Blocked
     chain: str
     due_at: _layout_pb2.Time
     run: str
     version: int
     waiting: Waiting
-    def __init__(self, chain: _Optional[str] = ..., run: _Optional[str] = ..., version: _Optional[int] = ..., due_at: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., waiting: _Optional[_Union[Waiting, str]] = ...) -> None: ...
+    def __init__(self, chain: _Optional[str] = ..., run: _Optional[str] = ..., version: _Optional[int] = ..., due_at: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., waiting: _Optional[_Union[Waiting, str]] = ..., blocked: _Optional[_Union[_layout_pb2.Blocked, _Mapping]] = ...) -> None: ...
 
 class RunResult(_message.Message):
     __slots__ = ["ended", "failed", "no_chain", "not_ended"]
@@ -290,12 +298,14 @@ class RunResult(_message.Message):
 class RunState(_message.Message):
     __slots__ = ["failed", "no_chain", "status"]
     class Of(_message.Message):
-        __slots__ = ["run", "status"]
+        __slots__ = ["blocked", "run", "status"]
+        BLOCKED_FIELD_NUMBER: _ClassVar[int]
         RUN_FIELD_NUMBER: _ClassVar[int]
         STATUS_FIELD_NUMBER: _ClassVar[int]
+        blocked: _layout_pb2.Blocked
         run: str
         status: RunStatus
-        def __init__(self, run: _Optional[str] = ..., status: _Optional[_Union[RunStatus, str]] = ...) -> None: ...
+        def __init__(self, run: _Optional[str] = ..., status: _Optional[_Union[RunStatus, str]] = ..., blocked: _Optional[_Union[_layout_pb2.Blocked, _Mapping]] = ...) -> None: ...
     FAILED_FIELD_NUMBER: _ClassVar[int]
     NO_CHAIN_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -371,35 +381,62 @@ class Sent(_message.Message):
     refused: Sent.Refused
     def __init__(self, accepted: _Optional[_Union[Sent.Accepted, _Mapping]] = ..., refused: _Optional[_Union[Sent.Refused, _Mapping]] = ..., no_chain: _Optional[_Union[NoChain, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
 
+class StartMessage(_message.Message):
+    __slots__ = ["id", "name", "ord", "value"]
+    ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    ORD_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    name: str
+    ord: str
+    value: _layout_pb2.Value
+    def __init__(self, name: _Optional[str] = ..., value: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ..., ord: _Optional[str] = ...) -> None: ...
+
 class StartPlan(_message.Message):
-    __slots__ = ["budget", "id", "input", "now", "prefix", "version", "workflow"]
+    __slots__ = ["budget", "id", "input", "message", "now", "prefix", "upgrade", "version", "workflow"]
     BUDGET_FIELD_NUMBER: _ClassVar[int]
     ID_FIELD_NUMBER: _ClassVar[int]
     INPUT_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
     NOW_FIELD_NUMBER: _ClassVar[int]
     PREFIX_FIELD_NUMBER: _ClassVar[int]
+    UPGRADE_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_FIELD_NUMBER: _ClassVar[int]
     budget: _layout_pb2.Budget
     id: str
     input: _layout_pb2.Value
+    message: StartMessage
     now: _layout_pb2.Time
     prefix: str
+    upgrade: bool
     version: int
     workflow: str
-    def __init__(self, prefix: _Optional[str] = ..., workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., budget: _Optional[_Union[_layout_pb2.Budget, _Mapping]] = ...) -> None: ...
+    def __init__(self, prefix: _Optional[str] = ..., workflow: _Optional[str] = ..., version: _Optional[int] = ..., input: _Optional[_Union[_layout_pb2.Value, _Mapping]] = ..., id: _Optional[str] = ..., now: _Optional[_Union[_layout_pb2.Time, _Mapping]] = ..., budget: _Optional[_Union[_layout_pb2.Budget, _Mapping]] = ..., upgrade: bool = ..., message: _Optional[_Union[StartMessage, _Mapping]] = ...) -> None: ...
 
 class Started(_message.Message):
-    __slots__ = ["created", "existing", "failed", "run_exists"]
+    __slots__ = ["created", "existing", "failed", "run_exists", "sent", "versioned"]
+    class Versioned(_message.Message):
+        __slots__ = ["run", "version"]
+        RUN_FIELD_NUMBER: _ClassVar[int]
+        VERSION_FIELD_NUMBER: _ClassVar[int]
+        run: str
+        version: int
+        def __init__(self, run: _Optional[str] = ..., version: _Optional[int] = ...) -> None: ...
     CREATED_FIELD_NUMBER: _ClassVar[int]
     EXISTING_FIELD_NUMBER: _ClassVar[int]
     FAILED_FIELD_NUMBER: _ClassVar[int]
     RUN_EXISTS_FIELD_NUMBER: _ClassVar[int]
+    SENT_FIELD_NUMBER: _ClassVar[int]
+    VERSIONED_FIELD_NUMBER: _ClassVar[int]
     created: _boundary_pb2.Empty
     existing: _boundary_pb2.Empty
     failed: _boundary_pb2.StoreFailure
     run_exists: RunExists
-    def __init__(self, created: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., existing: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., run_exists: _Optional[_Union[RunExists, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ...) -> None: ...
+    sent: Sent
+    versioned: Started.Versioned
+    def __init__(self, created: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., existing: _Optional[_Union[_boundary_pb2.Empty, _Mapping]] = ..., run_exists: _Optional[_Union[RunExists, _Mapping]] = ..., failed: _Optional[_Union[_boundary_pb2.StoreFailure, _Mapping]] = ..., versioned: _Optional[_Union[Started.Versioned, _Mapping]] = ..., sent: _Optional[_Union[Sent, _Mapping]] = ...) -> None: ...
 
 class StatusPlan(_message.Message):
     __slots__ = ["chain", "now", "prefix"]

@@ -43,18 +43,21 @@ def is_budget_exceeded(e: s.RunFailed) -> bool:
 def test_the_named_prices_and_what_prices_refuse() -> None:
     named = s.Prices(S3)
     assert named == s.Prices(
-        currency="USD", create=5_000_000, get=400_000, list=5_000_000, delete=0
+        currency="USD", create=5_000_000, cas=5_000_000, get=400_000, list=5_000_000, delete=0
     )
     overridden = s.Prices(S3, get=500_000)
     assert (overridden.currency, overridden.get, overridden.list) == ("USD", 500_000, 5_000_000)
     assert s.Prices(S3, create=MAX).create == MAX
     assert named._of("create", 2) == s.Amount("USD", 10_000)
+    assert s.Prices(S3, cas=3000)._of("cas", 2) == s.Amount("USD", 6)
     assert named._of("get", 1) == s.Amount("USD", 400)
     assert named._of("delete", 3) == s.Amount("USD", 0)
     assert s.Prices(S3, get=1001)._of("get", 1).nano == 2, "a share rounds up"
     refused: list[dict[str, Any]] = [
         {"name": "zero"},
         {"currency": "USD", "create": 1, "get": 1, "list": 1},
+        {"currency": "USD", "create": 1, "get": 1, "list": 1, "delete": 1},
+        {"name": S3, "cas": -1},
         {"name": S3, "currency": "usd"},
         {"name": S3, "currency": "US1"},
         {"name": S3, "currency": "USDT"},
@@ -109,7 +112,7 @@ async def test_charges_reach_the_cost_by_step_and_in_total() -> None:
         assert store > 0, cost
         assert cost["amounts"] == {"USD": store + 11, "EUR": 3}
         assert cost["requests"] > 0 and cost["requests"] == cost["store"]["requests"], cost
-        assert cost["requests"] == sum(cost[k] for k in ("create", "get", "list", "delete"))
+        assert cost["requests"] == sum(cost[k] for k in ("create", "cas", "get", "list", "delete"))
         assert cost["children"]["requests"] == 0
         await env.check()
 
@@ -190,7 +193,7 @@ async def test_cost_is_recorded_and_replays_the_same() -> None:
 
 
 def test_costs_read_the_core_json() -> None:
-    meters = {"create": 1, "get": 2, "list": 3, "delete": 0, "requests": 6}
+    meters = {"create": 1, "cas": 1, "get": 2, "list": 3, "delete": 0, "requests": 7}
     cost = cost_of(
         {
             **meters,
@@ -202,11 +205,12 @@ def test_costs_read_the_core_json() -> None:
     )
     assert cost.amounts == {"USD": 9_007_199_254_740_993}
     assert cost.steps == {"pay": {"USD": 5}}
-    assert cost.store == s.Meters(1, 2, 3, 0, 6, {})
+    assert cost.store == s.Meters(1, 1, 2, 3, 0, 7, {})
     assert cost.children.requests == 0
 
 
-async def test_a_budget_on_requests_passed_raises_and_fails_the_run() -> None:
+@pytest.mark.parametrize(("meter", "limit"), [("requests", 20), ("cas", 3)])
+async def test_a_budget_on_requests_passed_raises_and_fails_the_run(meter: str, limit: int) -> None:
     @s.workflow
     async def spender(c: s.Context) -> int:
         def ident(i: int) -> int:
@@ -222,15 +226,15 @@ async def test_a_budget_on_requests_passed_raises_and_fails_the_run() -> None:
         return 0
 
     async with s.testing.Env.open(now=T0) as env, env.worker([spender], preset="service"):
-        run = await env.start(spender, budget={"requests": 20})
+        run = await env.start(spender, budget={meter: limit})
         await env.advance(s.minutes(30))
         with pytest.raises(s.RunFailed) as failed:
             await run.result()
         assert is_budget_exceeded(failed.value), failed.value
         assert await run.status() == s.RunStatus.FAILED
-        meter, limit, used = await run.read("over")
-        assert (meter, limit) == ("requests", 20)
-        assert used > 20
+        over, at, used = await run.read("over")
+        assert (over, at) == (meter, limit)
+        assert used > limit
         await env.check()
 
 

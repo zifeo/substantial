@@ -47,10 +47,11 @@ class Script:
         return Script(text, hashlib.sha1(text).hexdigest())
 
 
-# § htbc4k715.e@05b7v
+# § htbc4k715.f@j0v7q
 CREATE = Script.shipped("create.lua")
+CAS = Script.shipped("cas.lua")
 DELETE = Script.shipped("delete.lua")
-# § end htbc4k715.e
+# § end htbc4k715.f
 
 
 class ProviderFailed(Exception):

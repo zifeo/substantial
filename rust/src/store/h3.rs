@@ -14,9 +14,9 @@ use super::retry::Fault;
 use super::s3::PAGE;
 use super::{ListWait, Store, StoreFailure};
 
-const WAIT_SECONDS: &str = "x-substantial-wait-seconds";
-const WAIT_ETAG: &str = "x-substantial-wait-etag";
-const LISTING_ETAG: &str = "x-substantial-listing-etag";
+const WAIT_SECONDS: &str = "x-herald-wait-seconds";
+const WAIT_ETAG: &str = "x-herald-wait-etag";
+const LISTING_ETAG: &str = "x-herald-listing-etag";
 /// The longest an h3 server holds a listing.
 const MAX_WAIT_SECONDS: u32 = 20;
 
@@ -94,25 +94,20 @@ pub(super) fn wait(list: List, max_keys: u32, wait: &ListWait) -> Result<(List, 
     Ok((list, answer))
 }
 
-/// Returns once the run's `result` exists, holding waiting listings that take its key as their
-/// prefix: a result waited on is seen as soon as it is created, in one request per
-/// `MAX_WAIT_SECONDS` meanwhile.
-pub(crate) async fn result_created(store: &dyn Store, key: &str) -> Result<(), StoreFailure> {
-    let mut wait = ListWait {
-        etag: None,
-        seconds: 0,
-    };
-    loop {
-        let page = store.list(key, None, 1, Some(wait)).await?;
-        if page.keys.iter().any(|k| k == key) {
-            return Ok(());
-        }
-        let etag = page.etag.ok_or_else(|| {
-            StoreFailure::new(format!("a waiting listing answered without {LISTING_ETAG}"))
-        })?;
-        wait = ListWait {
-            etag: Some(etag),
-            seconds: MAX_WAIT_SECONDS,
-        };
-    }
+/// The etag of a listing of `key` alone, waited on until it differs from `etag` or for
+/// `MAX_WAIT_SECONDS`, and answered at once without one. A rewrite of the key changes the etag, so
+/// a wait on a chain's head sees each commit as it lands, in one request per `MAX_WAIT_SECONDS`
+/// meanwhile.
+pub(crate) async fn listing_changed(
+    store: &dyn Store,
+    key: &str,
+    etag: Option<String>,
+) -> Result<String, StoreFailure> {
+    let seconds = if etag.is_some() { MAX_WAIT_SECONDS } else { 0 };
+    let page = store
+        .list(key, None, 1, Some(ListWait { etag, seconds }))
+        .await?;
+    page.etag.ok_or_else(|| {
+        StoreFailure::new(format!("a waiting listing answered without {LISTING_ETAG}"))
+    })
 }

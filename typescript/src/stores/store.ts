@@ -1,6 +1,24 @@
-// The store contract (I-26): four operations, the only ones Substantial performs on a store.
+// The store contract (I-26): six operations, the only ones Substantial performs on a store, the
+// expiry in whole days being part of every write.
+import { createHash } from "node:crypto";
+import { ConfigError } from "../errors.ts";
 
-export type Create = "created" | "exists";
+/** Created, with the ETag of the value written, which a later `cas` names, or "exists". */
+export type Create = { readonly etag: string } | "exists";
+
+/** A key's value and its ETag, which a later `cas` names. */
+export interface StoreObject {
+  readonly data: Uint8Array;
+  readonly etag: string;
+}
+
+/** Written, with the new ETag, or "mismatch": the key's value is not the one named, or there is
+ * none. */
+export type Cas = { readonly etag: string } | "mismatch";
+
+/** The longest expiry a write may carry, 100 years of days. */
+export const EXPIRY_MAX_DAYS = 36_500;
+export const DAY_MS = 86_400_000;
 
 export interface Capabilities {
   /** Whether `list` can wait for a change. */
@@ -27,19 +45,23 @@ export interface Listing {
 
 /** An adapter scoped to its namespace: keys are relative to it. */
 export interface Store {
-  // § w89qkqkaj@0b3n5
+  // § karttrcdb@05gbd
   readonly capabilities: Capabilities;
   /** Connects, throwing `ConfigError` on a store the adapter cannot use; the operations connect
    * too when it was not called. */
   open(): Promise<void>;
-  /** Atomic and exclusive: of concurrent creates of a key, exactly one gets "created". */
-  // § one kwvhb7ehw@d945n
-  create(key: string, data: Uint8Array): Promise<Create>;
-  get(key: string): Promise<Uint8Array | undefined>;
+  /** Atomic and exclusive: of concurrent creates of a key, exactly one is created. */
+  create(key: string, data: Uint8Array, expiry: number | undefined): Promise<Create>;
+  /** Replaces the value whose ETag is `etag`, atomically with every other operation on `key`. */
+  // § one kkad6aqxp@2yzxz
+  cas(key: string, data: Uint8Array, etag: string, expiry: number | undefined): Promise<Cas>;
+  get(key: string): Promise<StoreObject | undefined>;
   /** Keys under `prefix` and after `startAfter`, in byte order of the full key. */
   list(prefix: string, options: ListOptions): Promise<Listing>;
   /** Removes a key; deleting a missing key succeeds. */
   delete(key: string): Promise<void>;
+  /** Throws `ConfigError` unless the store expires a key written with each of `days`. */
+  checkExpiry(days: readonly number[]): Promise<void>;
   /** Releases what the adapter holds; it is not used after. */
   close(): Promise<void>;
 }
@@ -88,4 +110,33 @@ export function refuseWait(wait: ListWait | undefined): void {
   if (wait !== undefined) {
     throw new StoreFailure("this store cannot wait on a listing");
   }
+}
+
+/** Refuses an expiry outside 1 to `EXPIRY_MAX_DAYS` days, which no store could keep. */
+export function checkDays(expiry: number | undefined): void {
+  // § r4rsq6spn.c@zsph4
+  if (
+    expiry !== undefined &&
+    !(Number.isInteger(expiry) && expiry >= 1 && expiry <= EXPIRY_MAX_DAYS)
+  ) {
+    throw new StoreFailure(`an expiry of ${expiry} days is outside 1 to ${EXPIRY_MAX_DAYS}`);
+  }
+}
+
+/** `checkDays` for every expiry of `days`, as `ConfigError`. */
+export function checkAllDays(days: readonly number[]): void {
+  for (const d of days) {
+    try {
+      checkDays(d);
+    } catch (e) {
+      if (e instanceof StoreFailure) throw new ConfigError(e.message);
+      throw e;
+    }
+  }
+}
+
+/** The ETag of the stores that make their own: the hex of the first 16 bytes of the SHA-256 of
+ * the value. */
+export function digestEtag(data: Uint8Array): string {
+  return createHash("sha256").update(data).digest().subarray(0, 16).toString("hex");
 }

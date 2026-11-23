@@ -14,7 +14,7 @@ use tokio::task::AbortHandle;
 use super::hold::{Held, Holding};
 use super::store::FaultStore;
 use super::world::World;
-use crate::clock::{Clock, Ready, Task};
+use crate::clock::{Clock, Heartbeat, Late, Ready, Task};
 use crate::error::{Error, Result};
 use crate::proto::boundary::v1::outcome::Outcome;
 use crate::proto::layout::v1::Time;
@@ -99,6 +99,14 @@ impl Incarnation {
         abort
     }
 
+    pub(crate) fn checks_only(&self) -> bool {
+        self.world.checks_only()
+    }
+
+    pub(crate) fn checked(&self, run: &str, diverged: Option<String>) {
+        self.world.checked(run, diverged);
+    }
+
     pub(crate) fn replayed(&self, run: &str) {
         self.world.time.replayed(run);
     }
@@ -155,17 +163,16 @@ impl Incarnation {
         key: &str,
         body: BoxFuture<'static, Outcome>,
         timeout: Option<Duration>,
-    ) -> Option<Outcome> {
+        heartbeat: Option<Heartbeat>,
+    ) -> Result<Outcome, Late> {
         let world = &self.world;
         let deadline = timeout.map(|t| world.time.now() + millis(t) as i64);
         let (body, threaded) = world
             .time
             .body(format!("step {key}"), AssertUnwindSafe(body).catch_unwind());
         let _abandoned = Abandoned(&body, threaded);
-        self.wait(&[body.done()], deadline).await;
-        if !body.is_done() {
-            return None;
-        }
+        self.until(body.done(), deadline, heartbeat.as_ref())
+            .await?;
         // On another thread, a task of a crashed incarnation may run on to its next await.
         if self.is_dead() {
             return std::future::pending().await;
@@ -188,14 +195,40 @@ impl Incarnation {
             let _holding = Holding(hold.clone(), held.clone());
             lock(&hold.held).push(held.clone());
             let released: Arc<dyn Ready> = held.released.clone();
-            self.wait(std::slice::from_ref(&released), deadline).await;
-            if !held.released.is_set() {
-                return None;
-            }
+            self.until(released, deadline, heartbeat.as_ref()).await?;
         }
         match body.take().expect("a body that returned has its value") {
-            Ok(outcome) => Some(outcome),
+            Ok(outcome) => Ok(outcome),
             Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    /// Waits until `ready`, or until the attempt is late: past `deadline`, or silent past its
+    /// heartbeat timeout.
+    async fn until(
+        self: &Arc<Self>,
+        ready: Arc<dyn Ready>,
+        deadline: Option<i64>,
+        heartbeat: Option<&Heartbeat>,
+    ) -> Result<(), Late> {
+        // § vvp37rp40@0ygpc
+        loop {
+            let silent = heartbeat.map(Heartbeat::silent_at);
+            let at = [deadline, silent].into_iter().flatten().min();
+            self.wait(std::slice::from_ref(&ready), at).await;
+            if ready.ready() {
+                return Ok(());
+            }
+            let now = self.world.time.now();
+            match heartbeat {
+                Some(h) => {
+                    if let Some(late) = h.late(now, deadline) {
+                        return Err(late);
+                    }
+                }
+                None if deadline.is_some_and(|d| now >= d) => return Err(Late::Timeout),
+                None => {}
+            }
         }
     }
 }

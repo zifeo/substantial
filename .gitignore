@@ -41,4 +41,3 @@ logs
 target/
 node_modules/
 substantial-*.tgz
-.coverage

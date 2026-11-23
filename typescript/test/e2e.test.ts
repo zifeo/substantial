@@ -16,7 +16,7 @@ import {
   WaitTimeout,
   workflow,
 } from "../src/mod.ts";
-import { eachAdapter, eventually, LONG, script } from "./helpers.ts";
+import { blockedBy, eachAdapter, eventually, LONG, script } from "./helpers.ts";
 
 const roulette = step("roulette", () => 100, {
   retry: { maxAttempts: 6, initial: seconds(1), max: minutes(1), multiplier: 2 },
@@ -201,18 +201,15 @@ eachAdapter(
   ["file", "s3"],
 );
 
-eachAdapter("a step name outside the rules fails the run", async (store) => {
+eachAdapter("a step name outside the rules blocks the run", async (store) => {
   const bad = workflow("bad-step", async (c: Context) => await c.step("a step", () => 1));
   const sub = await createOn(store);
   await using _ = script(sub, [bad]);
   const run = await sub.start(bad);
-  const failed = await run.result({ timeout: LONG }).catch((e) => e);
-  assert.ok(failed instanceof RunFailed);
-  assert.equal(failed.status, "failed");
-  assert.equal(failed.error.type, "InvalidArgument");
+  assert.equal((await blockedBy(sub, bad, run)).type, "InvalidArgument");
 });
 
-eachAdapter("a message its decode refuses fails the run", async (store) => {
+eachAdapter("a message its decode refuses blocks the run", async (store) => {
   const asNumber = (value: unknown): number => {
     if (typeof value !== "number") throw new TypeError(`${JSON.stringify(value)} is not a number`);
     return value;
@@ -227,7 +224,5 @@ eachAdapter("a message its decode refuses fails the run", async (store) => {
   const run = await sub.start(typed);
   await run.send("n", 1);
   await run.send("n", "not a number");
-  const failed = await run.result({ timeout: LONG }).catch((e) => e);
-  assert.ok(failed instanceof RunFailed, String(failed));
-  assert.equal(failed.error.type, "TypeError");
+  assert.equal((await blockedBy(sub, typed, run)).type, "TypeError");
 });

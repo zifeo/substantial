@@ -17,7 +17,7 @@ from substantial.cost import Prices
 from substantial.durations import millis
 from substantial.errors import ConfigError, CoreError, InvalidArgument, ProtocolError
 from substantial.machines import AgentMachine
-from substantial.observe import Metering, ObserverRaised, Scan
+from substantial.observe import Metering, ObserverRaised, Scan, Skewed, rfc3339, time_of
 from substantial.replay import Channel, Replay, dropped, replay
 from substantial.settings import Settings
 from substantial.stores import Store, perform
@@ -32,8 +32,8 @@ REPLAY = "replay of "
 OP_RETRIES = 5
 
 
-def retention(r: timedelta) -> run.Retention:
-    return run.Retention(ms=millis(r))
+def retention(days: int) -> run.Retention:
+    return run.Retention(days=days)
 
 
 def agent_config(
@@ -60,9 +60,8 @@ def agent_config(
         max_idle_ms=millis(s.max_idle),
         due_page=s.due_page,
         due_pages=s.due_pages,
-        snapshot_every=s.snapshot_every,
         op_retries=OP_RETRIES,
-        # § one gpzydmca3.a@gntpn
+        # § one gpzydmca3.a@djrjm
         seed=secrets.token_bytes(32) if seed is None else seed,
         settings=run.RunSettings(
             commit_every_ms=millis(s.commit_every),
@@ -71,12 +70,17 @@ def agent_config(
             dedup_window_ms=millis(s.dedup_window),
             retention=retention(s.retention),
             prices=None if prices is None else prices.proto(),
+            max_history_bytes=s.max_history_bytes,
+            max_history_events=s.max_history_events,
+            max_replay_inbox=s.max_replay_inbox,
+            max_seen=s.max_seen,
+            history_warn_percent=s.history_warn_percent,
         ),
         store_waits=store_waits,
         wait_seconds=s.wait // timedelta(seconds=1),
-        tombstone_ms=millis(s.tombstone),
-        retention_min_ms=millis(s.retention_min),
-        recheck_ms=millis(s.recheck),
+        blocked_initial_ms=millis(s.blocked_initial),
+        blocked_max_ms=millis(s.blocked_max),
+        blocked_multiplier=float(s.blocked_multiplier),
     )
 
 
@@ -96,43 +100,50 @@ class _Replays:
         self.replay = Replay(core, store, clock, events.put_nowait, step_timeout, metering)
         self.workflows = workflows
         self.events = events
+        # By chain, as the agent names a replay.
         self.running: dict[str, tuple[Channel, asyncio.Task]] = {}
 
-    def spawn(self, run_id: str, data: run.RunInput, due_at: layout.Time | None) -> None:
+    def spawn(self, chain: str, data: run.RunInput, due_at: layout.Time | None) -> None:
+        """A replay of `chain`, whose current run is `data.run`, which logs and observers name."""
         start = data.start
-        # § pjrbw31h4@pkz5m
+        # § pjrbw31h4@3swh0
         version = start.version if start.HasField("version") else None
         workflow = self.workflows.get(start.workflow, version)
         # § end pjrbw31h4
         if workflow is None:
             log.error(
                 "replay of %s: this worker does not serve %s version %s",
-                run_id,
+                data.run,
                 start.workflow,
                 version,
             )
-            self.events.put_nowait(("ended", run_id, dropped()))
+            self.events.put_nowait(("ended", chain, dropped()))
             return
-        if run_id in self.running:
-            log.error("a second replay of %s, in replay", run_id)
+        if chain in self.running:
+            log.error("a second replay of %s, in replay", data.run)
         channel = Channel()
         task = self.replay.clock.spawn(
-            replay(self.replay, workflow, data, due_at, channel), f"{REPLAY}{run_id}"
+            replay(self.replay, chain, workflow, data, due_at, channel), f"{REPLAY}{data.run}"
         )
-        self.running[run_id] = (channel, task)
+        self.running[chain] = (channel, task)
 
     def committed(self, c: agent.AgentCommand.Committed) -> None:
-        run_id = c.run
-        if run_id not in self.running:
-            log.warning("committed for %s, which has no replay", run_id)
+        if c.run not in self.running:
+            log.warning("committed for chain %s, which has no replay", c.run)
             return
-        self.running[run_id][0].committed.put_nowait(c)
+        self.running[c.run][0].committed.put_nowait(c)
 
-    def stop(self, run_id: str) -> None:
-        if run_id not in self.running:
-            log.warning("stop for %s, which has no replay", run_id)
+    def claimed(self, chain: str) -> None:
+        if chain not in self.running:
+            log.warning("claimed for chain %s, which has no replay", chain)
             return
-        self.running[run_id][0].stop_replay()
+        self.running[chain][0].claimed.put_nowait(chain)
+
+    def stop(self, chain: str) -> None:
+        if chain not in self.running:
+            log.warning("stop for chain %s, which has no replay", chain)
+            return
+        self.running[chain][0].stop_replay()
 
     def stop_all(self) -> None:
         for channel, _ in self.running.values():
@@ -246,7 +257,7 @@ class Worker:
         of a crashed worker whose claim expires by then, then stops as `shutdown` does once
         nothing is due by then and nothing is in flight; raises the worker's error if it died.
         Starts the worker if it was not."""
-        # § cjtegwkna@f1y96
+        # § cjtegwkna@9qvvx
         if not isinstance(within, timedelta) or within < timedelta(0):
             raise InvalidArgument(f"within is a timedelta, not negative, not {within!r}")
         task = self._task if self._task is not None else self._start()
@@ -262,7 +273,7 @@ class Worker:
 
     async def serve(self) -> None:
         """Runs until a SIGTERM or a Ctrl-C (SIGINT), or until cancelled, then shuts down."""
-        # § dh7y75pvn.a@43yec
+        # § dh7y75pvn.a@s5ga7
         task = self._start()
         loop = asyncio.get_running_loop()
         # § one k6m3smdpk@ky9m4
@@ -276,6 +287,23 @@ class Worker:
         finally:
             for sig in (signal.SIGTERM, signal.SIGINT):
                 loop.remove_signal_handler(sig)
+
+    def _skewed(self, skewed: agent.AgentCommand.Skewed) -> None:
+        """The agent left a chain alone for a worker whose clock is right."""
+        segment_at, now = time_of(skewed.segment_at), time_of(skewed.now)
+        # § yp7fv5sa7.c@43b00
+        log.error(
+            "run %s of chain %s left alone: this worker's clock, %s, is behind its last segment, "
+            "%s, by more than claim_skew",
+            skewed.current,
+            skewed.run,
+            rfc3339(now),
+            rfc3339(segment_at),
+        )
+        self._metering.tell(
+            Skewed(run=skewed.run, current=skewed.current, segment_at=segment_at, now=now)
+        )
+        # § end yp7fv5sa7.c
 
     async def _run(self, core: Core, machine: AgentMachine) -> None:
         clock, events = self._clock, self._events
@@ -299,6 +327,13 @@ class Worker:
                 events.put_nowait(("died", e.error))
 
         try:
+            # § cfdckf61n.c@66yxa
+            retentions = [r for r in self._workflows.retentions.values() if r is not None]
+            # Before it serves anything: a run written with a retention no rule expires would
+            # never be removed. A `create` or `open` a crash stops halfway leaves its probe keys,
+            # `probe/<id>/`, which only their expiry of 1 day removes.
+            await self._store.check_expiry([*retentions, self._settings.retention, 1])
+            # § end cfdckf61n.c
             while True:
                 command = machine.next(clock.now())
                 which = command.WhichOneof("command")
@@ -311,9 +346,13 @@ class Worker:
                     replays.spawn(r.run, r.input, r.due_at if r.HasField("due_at") else None)
                 elif which == "committed":
                     replays.committed(command.committed)
+                elif which == "claimed":
+                    replays.claimed(command.claimed)
                 elif which == "scanned":
                     scanned = command.scanned
                     self._metering.tell(Scan(workflow=scanned.workflow, due=scanned.due))
+                elif which == "skewed":
+                    self._skewed(command.skewed)
                 elif which == "stop_replay":
                     replays.stop(command.stop_replay)
                 elif which == "wait_until":
@@ -326,7 +365,7 @@ class Worker:
                         await clock.wait({events.signal()}, at)
                     if events.empty():
                         if past_grace and clock.elapsed() >= grace_ends:  # type: ignore[operator]
-                            # § dh7y75pvn.b@rgya1
+                            # § dh7y75pvn.b@vg22v
                             replays.stop_all()
                             grace_ends = clock.elapsed() + grace
                         continue
@@ -336,6 +375,8 @@ class Worker:
                         machine.feed(event[1], event[2])
                     elif kind == "commit":
                         machine.commit(event[1], event[2])
+                    elif kind == "claim":
+                        machine.claim(event[1])
                     elif kind == "ended":
                         replays.running.pop(event[1], None)
                         machine.replay_ended(event[1], event[2])
@@ -349,7 +390,7 @@ class Worker:
                     elif kind == "drain":
                         machine.drain(layout.Time(ms=event[1]))
                     elif kind == "shutdown" and grace_ends is None:
-                        # § dh7y75pvn@d39hx
+                        # § dh7y75pvn@ajgz3
                         grace = millis(self._settings.shutdown_grace)
                         grace_ends = clock.elapsed() + grace
                         machine.shutdown()

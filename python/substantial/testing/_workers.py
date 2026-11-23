@@ -11,7 +11,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from substantial._proto import layout, run
-from substantial.clock import Attempt, Clock, Inbox
+from substantial.clock import Attempt, Clock, Heartbeat, Inbox, Late
 from substantial.durations import millis
 from substantial.errors import InvalidArgument
 from substantial.settings import Settings
@@ -58,7 +58,7 @@ class WorkerClock(Clock):
             self.scan_keys.add(key)
 
     def now(self) -> layout.Time:
-        # § x55x5yqy4.c@gzw2b
+        # § x55x5yqy4.c@63zk9
         return layout.Time(ms=self.world.time.ms)
 
     def elapsed(self) -> int:
@@ -66,6 +66,14 @@ class WorkerClock(Clock):
 
     def seconds(self) -> float:
         return self.world.time.ms / 1000
+
+    @property
+    def checks_only(self) -> bool:
+        return self.world.checks is not None
+
+    def checked(self, run: str, diverged: str | None) -> None:
+        if self.world.checks is not None:
+            self.world.checks[run] = diverged
 
     async def wait(self, futures: Any, at: layout.Time | None) -> None:
         await self.world.time.wait(self, futures, None if at is None else at.ms)
@@ -77,20 +85,20 @@ class WorkerClock(Clock):
         return task
 
     async def attempt(
-        self, name: str, key: str, body: Attempt, timeout_ms: int | None
-    ) -> run.Outcome | None:
+        self, name: str, key: str, body: Attempt, timeout_ms: int | None, heartbeat: Heartbeat
+    ) -> run.Outcome | Late:
         world = self.world
-        deadline = None if timeout_ms is None else layout.Time(ms=world.time.ms + timeout_ms)
+        deadline = None if timeout_ms is None else world.time.ms + timeout_ms
         task = world.time.body(body(), f"step {key}")
         try:
-            await self.wait({task}, deadline)
+            late = await self._until(task, deadline, heartbeat)
         finally:
             # Abandoned, by its timeout or its worker's crash or shutdown: interrupted, as in
             # production, unless it runs in a thread, which `settle` waits for.
             if not task.done() and task not in THREADED:
                 task.cancel()
-        if not task.done():
-            return None
+        if late is not None:
+            return late
         if world.draw("crash", key, self):
             world.counts.crashed += 1
             self.worker._replace()
@@ -100,13 +108,31 @@ class WorkerClock(Clock):
             held = Held(self, asyncio.get_running_loop().create_future(), key.split("/")[0])
             hold._held.append(held)
             try:
-                await self.wait({held.released}, deadline)
+                late = await self._until(held.released, deadline, heartbeat)
             finally:
                 if held in hold._held:
                     hold._held.remove(held)
-            if not held.released.done():
-                return None
+            if late is not None:
+                return late
         return task.result()
+
+    async def _until(
+        self, ready: asyncio.Future[Any], deadline: int | None, heartbeat: Heartbeat
+    ) -> Late | None:
+        """Waits until `ready` is done, or until the attempt is late: past `deadline`, or silent
+        past its heartbeat timeout."""
+        if heartbeat.timeout_ms is None:
+            await self.wait({ready}, None if deadline is None else layout.Time(ms=deadline))
+            return None if ready.done() else "timeout"
+        # § vvp37rp40@wef52
+        while True:
+            at = min(t for t in (deadline, heartbeat.silent_at()) if t is not None)
+            await self.wait({ready}, layout.Time(ms=at))
+            if ready.done():
+                return None
+            late = heartbeat.late(self.world.time.ms, deadline)
+            if late is not None:
+                return late
 
     def failure_read(self, chain: str) -> None:
         self.world.checked.add(chain)

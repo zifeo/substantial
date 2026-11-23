@@ -75,6 +75,12 @@ def _decode_none(_: layout.Value | None) -> None:
     return None
 
 
+def _upgrade(upgrade: object) -> bool:
+    if not isinstance(upgrade, bool):
+        raise InvalidArgument(f"upgrade is a bool, not {upgrade!r}")
+    return upgrade
+
+
 class Context:
     """The context a workflow's code calls, its first argument."""
 
@@ -98,6 +104,7 @@ class Context:
         *args: *Ts,
         retry: Retry | None = None,
         timeout: timedelta | None = None,
+        heartbeat_timeout: timedelta | None = None,
         undo: Callable[..., Any] | None = None,
     ) -> asyncio.Future[R]: ...
     @overload
@@ -109,6 +116,7 @@ class Context:
         *args: *Ts,
         retry: Retry | None = None,
         timeout: timedelta | None = None,
+        heartbeat_timeout: timedelta | None = None,
         undo: Callable[..., Any] | None = None,
     ) -> asyncio.Future[R]: ...
     def step(
@@ -119,13 +127,14 @@ class Context:
         *args: Any,
         retry: Retry | None = None,
         timeout: timedelta | None = None,
+        heartbeat_timeout: timedelta | None = None,
         undo: Callable[..., Any] | None = None,
     ) -> asyncio.Future[Any]:
         """Runs `fn(*args)` as the step `name`; an awaitable it returns is awaited."""
         check_step_name(name)
         if not callable(fn):
             raise InvalidArgument(f"a step runs a function, not {fn!r}")
-        return call_step(self._shared, name, fn, args, {}, retry, timeout, undo)
+        return call_step(self._shared, name, fn, args, {}, retry, timeout, undo, heartbeat_timeout)
 
     @overload
     async def poll[*Ts, R](
@@ -181,11 +190,12 @@ class Context:
                 return None
             await self.sleep(min(every, left))
 
-    def schedule(self) -> AsyncIterator[datetime]:
+    def schedule(self, *, upgrade: bool = False) -> AsyncIterator[datetime]:
         """`async for at in c.schedule()`: each fire time of the schedule `sub.schedule`
         configures, the workflow's one `iterate`; fires missed while no worker ran come oldest
-        first, at most `backfill` of them."""
-        return schedule.schedule(self)
+        first, at most `backfill` of them. With `upgrade`, the loop continues into the highest
+        version of its workflow the worker serves, as `iterate` does."""
+        return schedule.schedule(self, _upgrade(upgrade))
 
     def now(self) -> asyncio.Future[datetime]:
         """The time, UTC, recorded."""
@@ -311,6 +321,16 @@ class Context:
         core derives from this call when none is given."""
         return child.send(self._shared, run, name, value, id)
 
+    def patched(self, id: str) -> bool:
+        """Whether the run takes the code of patch `id`: true where it first reaches this call
+        live, and at every replay of a history that recorded it; false at a replay of a history
+        recorded before the code asked."""
+        check_str("a patch id", id)
+        value = decode_json(self._shared.expect(run.Call(patched=id), "value"))
+        if not isinstance(value, bool):
+            raise ProtocolError(f"patched answered {value!r}")
+        return value
+
     def publish(self, key: str, value: Any) -> None:
         """Makes `value` the last one published under `key` by the chain (`run.read(key)`)."""
         published = layout.Published(key=key, value=json_value(child.encode(value, "the value")))
@@ -333,10 +353,12 @@ class Context:
         *,
         id: str | None = None,
         budget: Mapping[str, int] | None = None,
+        abandon: bool = False,
     ) -> asyncio.Future[Child[R]]:
         """Starts a child run of `workflow`, under `id`, or an id the core derives from this
-        run's, with `budget`, else its workflow's."""
-        return child.start(self._shared, workflow, input, id, budget)
+        run's, with `budget`, else its workflow's. The run's end, completed, failed or
+        cancelled, cancels the child still running, unless `abandon`."""
+        return child.start(self._shared, workflow, input, id, budget, abandon)
 
     def result(self, chain: str, *, timeout: timedelta | None = None) -> asyncio.Future[Any]:
         """The value the chain `chain` ended with, a child of this run or not; `RunFailed` if it
@@ -344,9 +366,11 @@ class Context:
         passed first."""
         return child.chain_result(self._shared, chain, timeout)
 
-    def iterate[S](self, init: S) -> iterate.Iteration:
-        """`async for s in c.iterate(State())`: compresses at each boundary past the threshold."""
-        return iterate.Iteration(self._shared, init)
+    def iterate[S](self, init: S, *, upgrade: bool = False) -> iterate.Iteration:
+        """`async for s in c.iterate(State())`: compresses at each boundary past the threshold.
+        With `upgrade`, it also continues at a boundary into the highest version of its workflow
+        the worker serves once that is higher than the run's."""
+        return iterate.Iteration(self._shared, init, _upgrade(upgrade))
 
     async def continue_as_new(
         self, input: dict[str, Any] | None, *, workflow: Workflow[..., Any] | None = None
@@ -356,7 +380,7 @@ class Context:
         # § aaev3rs1q.b@8r9y6
         data = child.input_object(input)
         # § end aaev3rs1q.b
-        # § gjnefe4w6@qt388
+        # § gjnefe4w6@zw0d2
         if workflow is None:
             raise ContinuedAsNew(None, None, data)
         if not isinstance(workflow, Workflow):
@@ -365,5 +389,5 @@ class Context:
 
     async def cancel(self, reason: str) -> None:
         """Ends the run cancelled; it does not return."""
-        # § g039jvy6k.c@nvxyz
+        # § dxgjekysz.c@rm32s
         raise Cancelled(check_str("a reason", reason))

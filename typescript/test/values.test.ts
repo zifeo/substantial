@@ -6,7 +6,6 @@ import {
   type Context,
   InvalidArgument,
   milliseconds,
-  RunFailed,
   StepFailed,
   Substantial,
   ValueTooLarge,
@@ -14,7 +13,7 @@ import {
 } from "../src/mod.ts";
 import { MAX_VALUE } from "../src/proto.ts";
 import { MemoryStore } from "../src/stores/memory.ts";
-import { LONG, Recording, script, token } from "./helpers.ts";
+import { blockedBy, LONG, Recording, script, token } from "./helpers.ts";
 
 // Its JSON is the string and its two quotes: one byte over the cap.
 const over = () => "x".repeat(MAX_VALUE - 1);
@@ -76,13 +75,13 @@ test("workflow values over the cap fail, the core never sees them", async () => 
   assert.match(String(message), /^step big failed after 1 attempt: the step's value is /);
   assert.match(String(message), LIMIT);
   assert.equal(await (await sub.start(largest)).result({ timeout: LONG }), MAX_VALUE - 2);
-  const failed = await (await sub.start(result)).result({ timeout: LONG }).catch((e) => e);
-  assert.ok(failed instanceof RunFailed, String(failed));
-  assert.equal(failed.error.type, "ValueTooLarge");
+  // § h8wg39cct.e@g3756
+  const ended = await blockedBy(sub, result, await sub.start(result));
+  assert.deepEqual([ended.type, ended.retryable], ["ValueTooLarge", false]);
+  // § end h8wg39cct.e
   assert.equal(await (await sub.start(published)).result({ timeout: LONG }), "refused");
-  const state = await (await sub.start(looping)).result({ timeout: LONG }).catch((e) => e);
-  assert.ok(state instanceof RunFailed, String(state));
-  assert.equal(state.error.type, "ValueTooLarge");
+  const state = await blockedBy(sub, looping, await sub.start(looping));
+  assert.equal(state.type, "ValueTooLarge");
 });
 
 // What JSON.stringify would write as another value: a Date through its toJSON, a Map as {},
@@ -116,16 +115,13 @@ test("a value JSON cannot hold is refused, never written as another", async () =
   }
   await using _ = script(sub, [holding]);
   for (let i = 0; i < NOT_JSON().length; i++) {
-    const failed = await (await sub.start(holding, { i }))
-      .result({ timeout: LONG })
-      .catch((e) => e);
-    assert.ok(failed instanceof RunFailed, String(failed));
-    assert.equal(failed.error.type, "Json", failed.error.message);
+    const error = await blockedBy(sub, holding, await sub.start(holding, { i }));
+    assert.equal(error.type, "Json", error.message);
   }
 });
 
 test("a duration past the longest is refused", () => {
-  // § b60bm4szk@7n23r
+  // § b60bm4szk@n69fc
   const longest = 2 ** 53 - 1;
   assert.equal(milliseconds(longest).ms, longest);
   assert.throws(() => milliseconds(longest + 1), InvalidArgument);

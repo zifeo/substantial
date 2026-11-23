@@ -5,8 +5,12 @@ import {
   abandonedReplay,
   type Clock,
   Future,
+  type Heartbeat,
   Interrupt,
+  late,
+  pastHeartbeat,
   pastTimeout,
+  silentAt,
 } from "../clock.ts";
 import type { CoreModule } from "../core.ts";
 import type { Metering } from "../observe.ts";
@@ -60,6 +64,14 @@ export class WorkerClock implements Clock, Owner {
     this.world.checked.add(chain);
   }
 
+  checksOnly(): boolean {
+    return this.world.checks !== undefined;
+  }
+
+  checked(run: string, diverged: string | undefined): void {
+    this.world.checks?.set(run, diverged);
+  }
+
   /** Records a listing of due entries, drawn as `key`, made when the store had seen `writes`
    * writes. */
   listed(key: string, writes: number): void {
@@ -102,7 +114,8 @@ export class WorkerClock implements Clock, Owner {
     body: Attempt,
     timeoutMs: number | undefined,
     abandoned: AbortSignal,
-  ): Promise<run.Outcome | undefined> {
+    heartbeat?: Heartbeat,
+  ): Promise<run.Outcome | "silent" | undefined> {
     const world = this.world;
     const deadline = timeoutMs === undefined ? undefined : world.time.ms + timeoutMs;
     const interrupt = new Interrupt(abandoned);
@@ -117,15 +130,18 @@ export class WorkerClock implements Clock, Owner {
     outcome = world.time.body(body(interrupt.signal), `step ${key}`);
     if (interrupt.signal.aborted) world.time.forget(outcome);
     const stopped = Future.of(interrupt.aborted);
+    let due: "timeout" | "silent" | undefined;
     try {
-      await this.wait([outcome, stopped], deadline);
+      due = await this.#until([outcome, stopped], deadline, heartbeat);
     } finally {
       this.#interrupts.delete(abort);
       interrupt.close();
     }
     if (!outcome.done) {
-      abort(stopped.done ? interrupt.signal.reason : pastTimeout(timeoutMs ?? 0));
-      return undefined;
+      if (stopped.done) abort(interrupt.signal.reason);
+      else if (due === "silent") abort(pastHeartbeat(heartbeat?.timeoutMs ?? 0));
+      else abort(pastTimeout(timeoutMs ?? 0));
+      return stopped.done || due !== "silent" ? undefined : "silent";
     }
     if (world.draw("crash", key, this)) {
       world.counts.crashed += 1;
@@ -137,14 +153,31 @@ export class WorkerClock implements Clock, Owner {
       const held: Held = { clock: this, released: new Future(), run: key.split("/")[0] ?? "" };
       hold.entries.push(held);
       try {
-        await this.wait([held.released], deadline);
+        due = await this.#until([held.released], deadline, heartbeat);
       } finally {
         const i = hold.entries.indexOf(held);
         if (i >= 0) hold.entries.splice(i, 1);
       }
-      if (!held.released.done) return undefined;
+      if (!held.released.done) return due === "silent" ? "silent" : undefined;
     }
     return outcome.result();
+  }
+
+  /** Waits until one of `futures` is done, or until the attempt is late: past `deadline`, or
+   * silent past its heartbeat timeout. */
+  async #until(
+    futures: Future<unknown>[],
+    deadline: number | undefined,
+    heartbeat: Heartbeat | undefined,
+  ): Promise<"timeout" | "silent" | undefined> {
+    // § vvp37rp40@71k2j
+    for (;;) {
+      const at = [deadline, silentAt(heartbeat)].filter((t) => t !== undefined);
+      await this.wait(futures, at.length === 0 ? undefined : Math.min(...at));
+      if (futures.some((f) => f.done)) return undefined;
+      const due = late(this.world.time.ms, deadline, heartbeat);
+      if (due !== undefined) return due;
+    }
   }
 
   crash(): void {

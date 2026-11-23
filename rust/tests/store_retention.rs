@@ -1,17 +1,17 @@
-//! Retention on every store, on the real clock: the collection's deletes and the tombstone, with
-//! retention and tombstone shortened through the settings a worker does not take publicly. The
-//! port of `python/tests/test_store_retention.py`, under the same name.
+//! Retention on every store, on the real clock: an ended run's head is written with its retention
+//! as its expiry, which the store then removes it by. The port of
+//! `python/tests/test_store_retention.py`, under the same names.
 
 mod common;
 
 use std::time::Duration;
 
-use common::{Hidden, LONG, Recording, namespaces, script};
+use common::{LONG, Recording, namespaces, script};
 use substantial::__internal::{self as internal, Store};
-use substantial::{Error, Substantial, Worker, Workflow};
+use substantial::{Error, RunStatus, Workflow};
 
 fn quick() -> Workflow<u32> {
-    Workflow::without_input("quick", |_c| async { Ok(1) })
+    Workflow::without_input("quick", |_c| async { Ok(1) }).with_retention(1)
 }
 
 async fn keys(store: &dyn Store, prefix: &str) -> Vec<String> {
@@ -31,49 +31,34 @@ async fn eventually(what: &str, within: Duration, mut check: impl AsyncFnMut() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_run_is_collected_and_its_id_taken_until_the_tombstone_ends() {
+async fn an_ended_run_is_written_to_expire_after_its_retention() {
     for ns in namespaces() {
-        let store = ns.store.clone();
-        // The tombstone's end held until the checks made during it are done; dropped on a panic,
-        // the sender releases it.
-        let (release, held) = tokio::sync::watch::channel(false);
         let recording = Recording::new(ns.store);
-        *recording.hold_delete.lock().unwrap() = Some(("runs/q/gone".into(), held));
-        let sub = internal::create(recording).await.unwrap();
-        let worker = script(&sub, quick())
-            .hidden("retention_min", "300ms")
-            .hidden("retention", "300ms")
-            .hidden("tombstone", "2s")
-            .hidden("recheck", "200ms")
-            .start()
-            .unwrap();
+        let sub = internal::create(recording.clone()).await.unwrap();
+        let worker = script(&sub, quick()).start().unwrap();
         let run = sub.start(&quick(), ()).id("q").await.unwrap();
         assert_eq!(run.result().timeout(LONG).await.unwrap(), 1, "{}", ns.name);
-        eventually("the collection", Duration::from_secs(10), async || {
-            keys(&*store, "runs/q/").await == ["runs/q/gone"]
-        })
-        .await;
-        match run.status().await {
-            Err(Error::RunNotFound { collected, .. }) => assert!(collected, "{}", ns.name),
-            other => panic!("{}: {other:?}", ns.name),
-        }
-        match sub.start(&quick(), ()).id("q").await {
-            Err(Error::RunExists { collected, .. }) => assert!(collected, "{}", ns.name),
-            other => panic!("{}: {:?}", ns.name, other.map(|_| ())),
-        }
-        release.send(true).unwrap();
-        eventually("the tombstone's end", Duration::from_secs(10), async || {
-            keys(&*store, "runs/q/").await.is_empty()
-        })
-        .await;
-        let again = sub.start(&quick(), ()).id("q").await.unwrap();
-        assert_eq!(
-            again.result().timeout(LONG).await.unwrap(),
-            1,
-            "{}",
+        worker.shutdown().await.unwrap();
+        // § a1ys7at7p.a@zarg9
+        let expiries: Vec<Option<u32>> = (recording.writes().into_iter())
+            .filter(|(k, _)| k == "runs/q")
+            .map(|(_, expiry)| expiry)
+            .collect();
+        let (end, before) = expiries.split_last().unwrap();
+        assert_eq!(*end, Some(1), "{}: {expiries:?}", ns.name);
+        assert!(
+            before.iter().all(Option::is_none),
+            "{}: {expiries:?}",
             ns.name
         );
-        worker.shutdown().await.unwrap();
+        // § end a1ys7at7p.a
+        assert_eq!(run.status().await.unwrap(), RunStatus::Completed);
+        assert_eq!(run.result().await.unwrap(), 1, "{}", ns.name);
+        let other = Workflow::without_input("other", |_c| async { Ok(2) });
+        match sub.start(&other, ()).id("q").await {
+            Err(Error::RunExists { id }) => assert_eq!(id, "q", "{}", ns.name),
+            other => panic!("{}: {:?}", ns.name, other.map(|_| ())),
+        }
     }
 }
 
@@ -85,139 +70,41 @@ fn late_wakeup(workflow: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_keys_of_a_collected_run_never_come_back() {
+async fn the_keys_of_a_removed_run_never_come_back() {
     let publishing = Workflow::without_input("publishing", |c| async move {
         c.publish("p", 1)?;
         c.step("s", || async { Ok::<_, Error>(1) }).await
-    });
+    })
+    .with_retention(1);
     for ns in namespaces() {
         let store = ns.store.clone();
         let sub = internal::create(ns.store).await.unwrap();
-        let worker = script(&sub, &publishing)
-            .hidden("retention_min", "300ms")
-            .hidden("retention", "300ms")
-            .hidden("tombstone", "2s")
-            .hidden("recheck", "200ms")
-            .start()
-            .unwrap();
+        let worker = script(&sub, &publishing).start().unwrap();
         let run = sub.start(&publishing, ()).id("q").await.unwrap();
         assert_eq!(run.result().timeout(LONG).await.unwrap(), 1, "{}", ns.name);
-        assert!(!keys(&*store, "pub/q/").await.is_empty(), "{}", ns.name);
-        eventually("the collection", Duration::from_secs(10), async || {
-            keys(&*store, "runs/q/").await == ["runs/q/gone"]
-        })
-        .await;
-        // § nmpjmw8mf.b@yg43z
-        let served = async |expected: &[&str]| {
-            let late = late_wakeup("publishing");
-            store.create(&late, Default::default()).await.unwrap();
-            internal::wake(&worker);
-            eventually(
-                "the late wakeup served",
-                Duration::from_secs(10),
-                async || {
-                    !keys(&*store, "queues/publishing/due/")
-                        .await
-                        .contains(&late)
-                },
-            )
-            .await;
-            assert!(run.read::<u32>("p").await.unwrap().is_none(), "{}", ns.name);
-            assert_eq!(keys(&*store, "runs/q/").await, expected, "{}", ns.name);
-            assert!(keys(&*store, "pub/q/").await.is_empty(), "{}", ns.name);
-        };
-        served(&["runs/q/gone"]).await;
-        eventually("the tombstone's end", Duration::from_secs(10), async || {
-            keys(&*store, "runs/q/").await.is_empty()
-        })
-        .await;
-        served(&[]).await;
-        // § end nmpjmw8mf.b
-        worker.shutdown().await.unwrap();
-    }
-}
-
-fn collecting(sub: &Substantial) -> Worker {
-    script(sub, quick())
-        .hidden("retention_min", "300ms")
-        .hidden("retention", "300ms")
-        .hidden("tombstone", "3s")
-        .hidden("recheck", "200ms")
-        .start()
-        .unwrap()
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_collector_stopped_halfway_leaves_the_tombstone_with_its_time() {
-    for ns in namespaces() {
-        let store = ns.store.clone();
-        // The first collector stops at its delete of the run's `start`, after `gone`, as one
-        // that crashed there would; dropped on a panic, the sender releases it.
-        let (release, held) = tokio::sync::watch::channel(false);
-        let recording = Recording::new(ns.store);
-        *recording.hold_delete.lock().unwrap() = Some(("runs/q/start".into(), held));
-        let stalled = internal::create(recording).await.unwrap();
-        let first = collecting(&stalled);
-        // A client and a second worker on a handle of their own, which nothing holds.
-        let sub = internal::open_store(store.clone()).await.unwrap();
-        let run = sub.start(&quick(), ()).id("q").await.unwrap();
-        assert_eq!(run.result().timeout(LONG).await.unwrap(), 1, "{}", ns.name);
+        assert_eq!(run.read::<u32>("p").await.unwrap(), Some(1), "{}", ns.name);
+        // As its expiry removes it.
+        store.delete("runs/q").await.unwrap();
+        // § rbvr70kyv.b@tqym7
+        let late = late_wakeup("publishing");
+        // § qkh68yrf1.a@ck2m1
+        store.create(&late, Default::default(), None).await.unwrap();
+        internal::wake(&worker);
         eventually(
-            "the collection's `gone`",
+            "the late wakeup served",
             Duration::from_secs(10),
             async || {
-                keys(&*store, "runs/q/")
+                !keys(&*store, "queues/publishing/due/")
                     .await
-                    .contains(&"runs/q/gone".to_owned())
+                    .contains(&late)
             },
         )
         .await;
-        // § ja67c3az7.b@844vn
-        assert!(
-            keys(&*store, "runs/q/")
-                .await
-                .contains(&"runs/q/start".to_owned()),
-            "{}: the collection stopped halfway",
-            ns.name
-        );
-        let taken = |started: substantial::Result<_>| match started {
-            Err(Error::RunExists {
-                collected: true,
-                until: Some(until),
-                ..
-            }) => until,
-            other => panic!("{}: {:?}", ns.name, other.map(|_| ())),
-        };
-        let until = taken(sub.start(&quick(), ()).id("q").await);
-        let second = collecting(&sub);
-        eventually(
-            "the collection's end",
-            Duration::from_secs(10),
-            async || keys(&*store, "runs/q/").await == ["runs/q/gone"],
-        )
-        .await;
-        assert_eq!(taken(sub.start(&quick(), ()).id("q").await), until);
-        match run.status().await {
-            Err(Error::RunNotFound {
-                collected: true,
-                until: Some(kept),
-                ..
-            }) => assert_eq!(kept, until, "{}", ns.name),
-            other => panic!("{}: {other:?}", ns.name),
-        }
-        eventually("the tombstone's end", Duration::from_secs(10), async || {
-            keys(&*store, "runs/q/").await.is_empty()
-        })
-        .await;
-        let now = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
-        assert!(
-            now >= until,
-            "{}: ended at {now}, not before {until}",
-            ns.name
-        );
-        // § end ja67c3az7.b
-        release.send(true).unwrap();
-        first.shutdown().await.unwrap();
-        second.shutdown().await.unwrap();
+        assert!(run.read::<u32>("p").await.unwrap().is_none(), "{}", ns.name);
+        assert!(keys(&*store, "runs/q").await.is_empty(), "{}", ns.name);
+        assert!(keys(&*store, "archives/").await.is_empty(), "{}", ns.name);
+        // § end qkh68yrf1.a
+        // § end rbvr70kyv.b
+        worker.shutdown().await.unwrap();
     }
 }

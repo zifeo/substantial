@@ -154,7 +154,7 @@ eachAdapter("two workers racing for a commit", async (store) => {
     thawed.resolve();
   }
   await eventually("the frozen commit", () =>
-    slow.created.some(([k, c]) => k.includes("/log/") && c === "exists"),
+    slow.cased.some(([k, c]) => k === `runs/${run.chain}` && c === "mismatch"),
   );
 });
 

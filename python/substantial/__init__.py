@@ -8,7 +8,7 @@ from the loop's thread. The code of each replay runs on a loop of its own that t
 
 from substantial import testing
 from substantial.child import Child
-from substantial.client import HistoryEvent, Run, RunInfo, RunStatus, Substantial
+from substantial.client import HistoryEvent, Message, Run, RunInfo, RunStatus, Substantial
 from substantial.context import Context
 from substantial.cost import Amount, Cost, Meters, Prices
 from substantial.durations import days, hours, minutes, seconds
@@ -17,8 +17,10 @@ from substantial.errors import (
     Cancelled,
     ConfigError,
     ContinuedAsNew,
+    Fail,
     Failed,
     Failure,
+    HistoryTooLarge,
     InvalidArgument,
     LayoutError,
     NonDeterminism,
@@ -36,10 +38,19 @@ from substantial.errors import (
     ValueTooLarge,
     WaitTimeout,
 )
-from substantial.observe import Attempt, Observed, Replay, Scan, StoreOp
+from substantial.observe import (
+    Attempt,
+    Blocked,
+    NearLimit,
+    Observed,
+    Replay,
+    Scan,
+    Skewed,
+    StoreOp,
+)
 from substantial.schedule import Cron
 from substantial.settings import ContinueAsNewAfter
-from substantial.step import Step, charge, step, step_key
+from substantial.step import Step, charge, heartbeat, step, step_key
 from substantial.stores import Credentials, Password
 from substantial.worker import Worker
 from substantial.workflow import Permanent, Retry, Workflow, workflow
@@ -47,6 +58,7 @@ from substantial.workflow import Permanent, Retry, Workflow, workflow
 __all__ = [
     "Amount",
     "Attempt",
+    "Blocked",
     "BudgetExceeded",
     "Cancelled",
     "Child",
@@ -57,12 +69,16 @@ __all__ = [
     "Cost",
     "Credentials",
     "Cron",
+    "Fail",
     "Failed",
     "Failure",
     "HistoryEvent",
+    "HistoryTooLarge",
     "InvalidArgument",
     "LayoutError",
+    "Message",
     "Meters",
+    "NearLimit",
     "NonDeterminism",
     "NotCompressible",
     "NotInWorkflow",
@@ -81,6 +97,7 @@ __all__ = [
     "RunNotFound",
     "RunStatus",
     "Scan",
+    "Skewed",
     "Step",
     "StepFailed",
     "StoreError",
@@ -94,6 +111,7 @@ __all__ = [
     "Workflow",
     "charge",
     "days",
+    "heartbeat",
     "hours",
     "minutes",
     "seconds",

@@ -85,7 +85,7 @@ fn interleaved() -> Workflow<Value> {
         let second: u32 = c.receive("n").timeout(minutes(5)).await?;
         let timed_out = match c.receive::<u32>("n").timeout(minutes(5)).await {
             Err(Error::WaitTimeout) => true,
-            other => return Err(Error::failed("Unexpected", format!("{other:?}"))),
+            other => return Err(Error::fail("Unexpected", format!("{other:?}"))),
         };
         let third: u32 = c.receive("n").await?;
         let fourth: u32 = c.receive("n").timeout(minutes(1)).await?;

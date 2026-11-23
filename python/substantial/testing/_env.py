@@ -30,7 +30,7 @@ from substantial.testing import _time
 from substantial.testing._store import Chaos, Faults
 from substantial.testing._time import Stuck
 from substantial.testing._workers import EnvWorker, Hold
-from substantial.testing._world import ClientClock, World, due_ms
+from substantial.testing._world import ClientClock, World, due_ms, ended, head_of
 from substantial.workflow import Workflow, Workflows
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -51,7 +51,7 @@ class _Client(Substantial):
         self._ulid = world.ulids
 
     def _worker(self, workflows: Iterable[Workflow[..., Any]], settings: Settings) -> EnvWorker:
-        worker = EnvWorker(self._world, Workflows(workflows, settings.retention_min), settings)
+        worker = EnvWorker(self._world, Workflows(workflows), settings)
         self._workers.add(worker)
         return worker
 
@@ -109,42 +109,55 @@ def _serves(world: World, start: layout.Start) -> bool:
     )
 
 
-def _start(world: World, run: str) -> layout.Start:
-    return layout.Start.FromString(world.memory._objects[f"runs/{run}/start"])
-
-
 def _named(start: layout.Start) -> str:
     version = f" version {start.version}" if start.HasField("version") else ""
     return f"{start.workflow}{version}"
 
 
 def _waits_on(world: World, run: str) -> str:
-    start = _start(world, run)
+    head = head_of(world, run)
+    start = head.start
     what = []
     if not _serves(world, start):
         what.append(f"workflow {_named(start)}, which no worker serves")
+    if head.HasField("blocked"):
+        error = head.blocked.error
+        what.append(f"a fix of its code, blocked by {error.type}: {error.message}")
     for hold in world.holds:
         what += [f"step {hold._step}, held" for h in hold._held if h.run == run]
     for key in world.keys(f"queues/{start.workflow}/due/"):
         entry = key.rpartition("/")[2]
-        if entry.split("~")[1] == run:
+        _, chain, tag = entry.split("~", 2)
+        # A message's entry, at the epoch, is no timer.
+        if chain == start.chain and tag.startswith("s"):
             at = _EPOCH + timedelta(milliseconds=due_ms(entry))
             what.append(f"a timer due at {at.isoformat()}")
     if not what:
         what.append("a message, or the end of a run it started")
     unserved = [
         f"{other} ({_named(s)})"
-        for other in _pending(world)
-        if other != run and not _serves(world, s := _start(world, other))
+        for other, s in _pending(world)
+        if other != run and not _serves(world, s)
     ]
     if unserved:
         what.append(f"while runs of workflows no worker serves wait: {', '.join(unserved)}")
     return "; ".join(what)
 
 
-def _pending(world: World) -> list[str]:
-    runs = {key.split("/")[1] for key in world.keys("runs/") if key.endswith("/start")}
-    return sorted(r for r in runs if f"runs/{r}/result" not in world.memory._objects)
+def _pending(world: World) -> list[tuple[str, layout.Start]]:
+    """The current runs of the chains not ended, with their start."""
+    found = []
+    for key in world.keys("runs/"):
+        data = world.memory.object(key)
+        if data is None:
+            continue
+        run = layout.Run.FromString(data)
+        if run.WhichOneof("kind") != "head":
+            continue
+        head = run.head
+        if key == f"runs/{head.start.chain}" and not ended(head):
+            found.append((head.run, head.start))
+    return found
 
 
 class Env(_Client):
@@ -178,7 +191,7 @@ class Env(_Client):
     async def _opened_env(cls, ms: int, chaos: Chaos | None, metering: Metering) -> Env:
         world = World(f"testing-{secrets.token_hex(8)}", ms, chaos, metering)
         store = world.store(None)
-        # § bsw9tpftr@fbjpy
+        # § bsw9tpftr@a7kk3
         env = await cls._create(store, prices=metering.prices, observe=metering.observe)
         assert isinstance(env, Env)
         env._attach(world)

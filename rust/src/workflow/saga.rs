@@ -38,7 +38,7 @@ impl Context {
             failed,
             parent: self.saga,
         }))?;
-        // § ctp0q370t@xa0g9
+        // § ctp0q370t@c4akr
         match (failed, ended) {
             (true, ended) => self.run_undos(undos(ended)?).await?,
             (false, Called::Done(_)) => {}
@@ -51,13 +51,13 @@ impl Context {
     /// Runs the undos of every step so far, most recent first; return the error it gives to end
     /// the run failed with `RolledBack`: `return Err(c.rollback(..).await)`.
     pub async fn rollback(&self, reason: &str) -> Error {
-        // § zjw5cess8@3q9jy
+        // § zjw5cess8@0nckf
         let undone = async {
             let undos = undos(self.shared.call(Call::Rollback(b::Empty {}))?)?;
             self.run_undos(undos).await
         };
         match undone.await {
-            // § one g039jvy6k.c@9063s
+            // § one dxgjekysz.c@nksq6
             Ok(()) => Error::RolledBack(reason.to_owned()),
             Err(e) => e,
         }
@@ -65,10 +65,10 @@ impl Context {
 
     async fn run_undos(&self, undos: Vec<b::Undo>) -> Result<()> {
         for u in undos {
-            let (undo, retry, timeout) = self.shared.undo(u.call).ok_or_else(|| {
+            let (undo, retry, timeout, heartbeat) = self.shared.undo(u.call).ok_or_else(|| {
                 Error::Protocol(format!("undo of call {} without an undo", u.call))
             })?;
-            // § a5c1mfs8d.a@h7h0d
+            // § a5c1mfs8d.a@mwhw0
             let options = b::StepOptions {
                 retry,
                 timeout_ms: Some(timeout),
@@ -82,12 +82,13 @@ impl Context {
             });
             let spec = StepSpec {
                 body: undo(u.value),
+                heartbeat,
                 undo: None,
             };
             match CallFuture::new(self.shared.clone(), call, Some(spec)).await {
                 Ok(_) => {}
                 Err(Error::StepFailed { error, .. }) => {
-                    // § j5gf2r47g@qvh06
+                    // § j5gf2r47g@wfazw
                     return Err(Error::UndoFailed {
                         step: u.name,
                         error,

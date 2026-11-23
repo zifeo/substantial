@@ -47,22 +47,38 @@ pub enum Error {
     WaitTimeout,
     NonDeterminism(String),
     InvalidArgument(String),
-    /// A value of the code that does not encode or decode.
+    /// A value of the code that does not encode or decode: returned, it blocks the run until a
+    /// fix of the code is deployed.
     Json(String),
-    /// A failure of the code's own, which fails the run with it.
-    Failed(Failure),
+    /// A failure the code raises on purpose, [`Error::fail`]: the run ends failed with it.
+    Fail(Failure),
+    /// The run passed a limit of its history: it ends failed with `HistoryTooLarge`, whatever
+    /// the code does next.
+    HistoryTooLarge(String),
     /// Any other error a verb raised.
     Raised(Raised),
 }
 
 impl Error {
-    /// The failure type the run ends with when the code returns this error.
+    /// A failure the code raises on purpose: returned, the run ends failed with `kind` as its
+    /// error type.
+    pub fn fail(kind: impl Into<String>, message: impl Into<String>) -> Self {
+        Error::Fail(Failure {
+            kind: kind.into(),
+            message: message.into(),
+            retryable: false,
+            details: None,
+        })
+    }
+
+    /// The failure type of the error, which ends or blocks the run when the code returns it.
     pub fn kind(&self) -> &str {
         match self {
             Error::StepFailed { .. } => "StepFailed",
             Error::Cancelled(_) => "Cancelled",
             Error::Json(_) => "Json",
-            Error::Failed(f) => &f.kind,
+            Error::Fail(f) => &f.kind,
+            Error::HistoryTooLarge(_) => "HistoryTooLarge",
             Error::WaitTimeout => "WaitTimeout",
             Error::NonDeterminism(_) => "NonDeterminism",
             Error::InvalidArgument(_) => "InvalidArgument",
@@ -80,7 +96,8 @@ impl Error {
                 retryable: false,
                 details: None,
             }),
-            Error::Failed(f) => End::Failed(f.into()),
+            Error::Fail(f) => End::Failed(f.into()),
+            Error::HistoryTooLarge(m) => End::Failed(raised_as("HistoryTooLarge", Some(m)).into()),
             Error::WaitTimeout => End::Failed(raised_as("WaitTimeout", None).into()),
             Error::NonDeterminism(m) => End::Failed(raised_as("NonDeterminism", Some(m)).into()),
             Error::InvalidArgument(m) => End::Failed(raised_as("InvalidArgument", Some(m)).into()),
@@ -116,7 +133,8 @@ impl fmt::Display for Error {
             Error::StepFailed { error, cause } => write!(f, "{error} (cause: {cause})"),
             Error::Cancelled(reason) => write!(f, "Cancelled: {reason}"),
             Error::Json(message) => write!(f, "Json: {message}"),
-            Error::Failed(failure) => failure.fmt(f),
+            Error::Fail(failure) => failure.fmt(f),
+            Error::HistoryTooLarge(m) => write!(f, "HistoryTooLarge: {m}"),
             Error::WaitTimeout => write!(f, "WaitTimeout"),
             Error::NonDeterminism(m) => write!(f, "NonDeterminism: {m}"),
             Error::InvalidArgument(m) => write!(f, "InvalidArgument: {m}"),
@@ -142,11 +160,15 @@ impl From<wit::Raised> for Error {
                 cause: Box::new(cause.into()),
             },
             ("Cancelled", _) => Error::Cancelled(failure.message),
-            (kind @ ("WaitTimeout" | "NonDeterminism" | "InvalidArgument"), _) => {
+            (
+                kind @ ("WaitTimeout" | "NonDeterminism" | "InvalidArgument" | "HistoryTooLarge"),
+                _,
+            ) => {
                 let message = failure.message.clone();
                 let error = match kind {
                     "WaitTimeout" => Error::WaitTimeout,
                     "NonDeterminism" => Error::NonDeterminism(message),
+                    "HistoryTooLarge" => Error::HistoryTooLarge(message),
                     _ => Error::InvalidArgument(message),
                 };
                 RAISED.with(|r| r.borrow_mut().push(failure));

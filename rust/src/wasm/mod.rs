@@ -245,7 +245,7 @@ fn linking(e: wasmtime::Error) -> Error {
 
 /// The failure of a module's trap, with its panic's message when it panicked.
 fn trapped(panic: Option<String>, e: &wasmtime::Error) -> Failure {
-    // § cy53pm5cn@amvjh
+    // § jy9pjegjy@abgqe
     Failure {
         kind: "WasmTrap".into(),
         message: match panic {
@@ -255,12 +255,12 @@ fn trapped(panic: Option<String>, e: &wasmtime::Error) -> Failure {
         retryable: false,
         details: None,
     }
-    // § end cy53pm5cn
+    // § end jy9pjegjy
 }
 
 /// A module's JSON, checked as a value of the host's own code.
 fn module_value(json: &str) -> std::result::Result<serde_json::Value, serde_json::Error> {
-    // § ea0fw6qrw@77hye
+    // § ea0fw6qrw@326q5
     let value: serde_json::Value = serde_json::from_str(json)?;
     crate::workflow::to_json(&value)?;
     Ok(value)

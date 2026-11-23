@@ -29,11 +29,6 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      AWS_ACCESS_KEY_ID: substantial
-      AWS_SECRET_ACCESS_KEY: substantial-secret
-      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
-      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -41,8 +36,7 @@ jobs:
           # The Wasm workflows of rust/tests/wasm.rs.
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
-      - run: docker compose -f dev/redis.compose.yaml up -d --wait
+      - run: docker compose -f dev/compose.yaml up -d --wait
       - run: cargo test --workspace --all-features
 
   python:
@@ -50,18 +44,12 @@ jobs:
     strategy:
       matrix:
         python: ["3.12", "3.13"]
-    env:
-      AWS_ACCESS_KEY_ID: substantial
-      AWS_SECRET_ACCESS_KEY: substantial-secret
-      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
-      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
-      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
-      - run: docker compose -f dev/redis.compose.yaml up -d --wait
+      - run: docker compose -f dev/compose.yaml up -d --wait
       - run: uv sync --locked
       - run: uv run ruff format --check
       - run: uv run ruff check
@@ -80,35 +68,23 @@ jobs:
     strategy:
       matrix:
         python: ["3.12", "3.13"]
-    env:
-      AWS_ACCESS_KEY_ID: substantial
-      AWS_SECRET_ACCESS_KEY: substantial-secret
-      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
-      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
-      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
-      - run: docker compose -f dev/redis.compose.yaml up -d --wait
+      - run: docker compose -f dev/compose.yaml up -d --wait
       - run: uv run --resolution lowest-direct pytest
 
   typescript:
     runs-on: ubuntu-latest
-    env:
-      AWS_ACCESS_KEY_ID: substantial
-      AWS_SECRET_ACCESS_KEY: substantial-secret
-      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
-      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
-      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
-      - run: docker compose -f dev/redis.compose.yaml up -d --wait
+      - run: docker compose -f dev/compose.yaml up -d --wait
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx biome ci
@@ -129,19 +105,13 @@ jobs:
   # silently become wrong.
   typescript-floors:
     runs-on: ubuntu-latest
-    env:
-      AWS_ACCESS_KEY_ID: substantial
-      AWS_SECRET_ACCESS_KEY: substantial-secret
-      SUBSTANTIAL_S3_URL: s3+http://127.0.0.1:39400/substantial/tests?region=us-east-1
-      SUBSTANTIAL_REDIS_URL: redis://127.0.0.1:39501/tests?db=0&replicas=0
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
-      - run: docker compose -f dev/rustfs.compose.yaml up -d --wait
-      - run: docker compose -f dev/redis.compose.yaml up -d --wait
+      - run: docker compose -f dev/compose.yaml up -d --wait
       - run: npm ci
       - name: Install every dependency at its floor
         run: >-

@@ -1,8 +1,9 @@
-// What the Redis adapter does beyond the shared contract; all but URL parsing and credentials run
-// only when `SUBSTANTIAL_REDIS_URL` names a standalone server (see `dev/redis.compose.yaml`), or,
-// for the last one, `SUBSTANTIAL_REDIS_SENTINEL_URL` a Sentinel. The checks at open, which
-// change the server's configuration, are in `serial/redis_checks.test.ts`.
+// What the Redis adapter does beyond the shared contract; all but URL parsing and credentials on
+// the standalone server `SUBSTANTIAL_REDIS_URL` names, the last one on the Sentinel of
+// `SUBSTANTIAL_REDIS_SENTINEL_URL` (see `dev/compose.yaml`). The checks at open, which change the
+// server's configuration, are in `serial/redis_checks.test.ts`.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import * as redis from "@redis/client";
 import { createClient } from "@redis/client";
@@ -20,7 +21,7 @@ import { openStore } from "../src/stores/open.ts";
 import { parseRedisUrl, type RedisLocation, WAITAOF_MS } from "../src/stores/redis.ts";
 import { RedisStore } from "../src/stores/redis_store.ts";
 import { StoreFailure } from "../src/stores/store.ts";
-import { eventually, LONG, noRedis, redisUrl, script, token } from "./helpers.ts";
+import { eachAdapter, eventually, LONG, redisUrl, script, token, value } from "./helpers.ts";
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 
@@ -124,19 +125,17 @@ test("credentials are a password", async () => {
 
 /** A client of the standalone server, for what the tests check or change on it. */
 async function admin(): Promise<ReturnType<typeof createClient>> {
-  const [[host, port]] = parseRedisUrl(redisUrl("redis")).nodes as [[string, number]];
+  const [[host, port]] = parseRedisUrl(await redisUrl("redis")).nodes as [[string, number]];
   const client = createClient({ socket: { host, port } });
   await client.connect();
   return client as ReturnType<typeof createClient>;
 }
 
-const skip = noRedis("redis");
-
-test("a password reaches the server", { skip }, async () => {
+test("a password reaches the server", async () => {
   const server = await admin();
   const user = `substantial-test-${token(4)}`;
   await server.sendCommand(["ACL", "SETUSER", user, "on", ">right", "~*", "&*", "+@all"]);
-  const url = redisUrl("redis");
+  const url = await redisUrl("redis");
   let calls = 0;
   const provider = () => {
     calls += 1;
@@ -159,8 +158,8 @@ test("a password reaches the server", { skip }, async () => {
   }
 });
 
-test("a waiting listing returns as a key lands without polling", { skip }, async () => {
-  const url = redisUrl("redis");
+test("a waiting listing returns as a key lands without polling", async () => {
+  const url = await redisUrl("redis");
   const index = `{${parseRedisUrl(url).namespace}}:i`;
   // MONITOR, not the server's command counts: other tests list on the same server meanwhile.
   const server = await admin();
@@ -172,7 +171,7 @@ test("a waiting listing returns as a key lands without polling", { skip }, async
   });
   const store = await openStore(url, undefined);
   try {
-    await store.create("q/a", bytes("a"));
+    await store.create("q/a", bytes("a"), undefined);
     const first = await store.list("q/", { maxKeys: 10, wait: { seconds: 0 } });
     assert.deepEqual(first.keys, ["q/a"]);
     assert.ok(first.etag);
@@ -192,10 +191,10 @@ test("a waiting listing returns as a key lands without polling", { skip }, async
         done = true;
       });
     await new Promise((resolve) => setTimeout(resolve, 500));
-    await store.create("other/x", bytes("x"));
+    await store.create("other/x", bytes("x"), undefined);
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.ok(!done, "a key under another prefix does not end the wait");
-    await store.create("q/b", bytes("b"));
+    await store.create("q/b", bytes("b"), undefined);
     // At its deadline the wait answers the page it listed before `q/b` landed: `q/b` in the
     // answer is the key's notification waking it, however long the machine takes to get there.
     const woken = await held;
@@ -208,8 +207,27 @@ test("a waiting listing returns as a key lands without polling", { skip }, async
   }
 });
 
-test("a waiting listing on a closed store fails at once", { skip }, async () => {
-  const store = await openStore(redisUrl("redis"), undefined);
+eachAdapter(
+  "a waiting listing wakes on a cas of its key",
+  async (store) => {
+    const created = await store.create("runs/c", bytes("one"), undefined);
+    assert.notEqual(created, "exists");
+    const first = await store.list("runs/c", { maxKeys: 1, wait: { seconds: 0 } });
+    const began = performance.now();
+    const held = store.list("runs/c", { maxKeys: 1, wait: { seconds: 20, etag: first.etag } });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const etag = (created as { etag: string }).etag;
+    assert.notEqual(await store.cas("runs/c", bytes("two"), etag, undefined), "mismatch");
+    const woken = await held;
+    assert.ok(performance.now() - began < 10_000, "woken by the cas, not at the deadline");
+    assert.deepEqual(woken.keys, ["runs/c"]);
+    assert.notEqual(woken.etag, first.etag);
+  },
+  ["redis", "redis-sentinel", "redis-cluster"],
+);
+
+test("a waiting listing on a closed store fails at once", async () => {
+  const store = await openStore(await redisUrl("redis"), undefined);
   await store.list("q/", { maxKeys: 10, wait: { seconds: 1 } });
   await store.close();
   const began = performance.now();
@@ -222,9 +240,9 @@ test("a waiting listing on a closed store fails at once", { skip }, async () => 
 
 const sockets = () => process.getActiveResourcesInfo().filter((r) => r === "TCPSocketWrap").length;
 
-test("a store closed while its connections open leaves none open", { skip }, async () => {
+test("a store closed while its connections open leaves none open", async () => {
   const before = sockets();
-  const store = await openStore(redisUrl("redis"), undefined);
+  const store = await openStore(await redisUrl("redis"), undefined);
   let pending: Promise<unknown>[] = [];
   try {
     await store.open();
@@ -256,12 +274,12 @@ async function user(
   return { name, drop: async () => void (await server.sendCommand(["ACL", "DELUSER", name])) };
 }
 
-test("a user denied waitaof is refused as such", { skip }, async () => {
+test("a user denied waitaof is refused as such", async () => {
   const server = await admin();
   const { name, drop } = await user(server, "+@all", "-waitaof");
   try {
     await assert.rejects(
-      Substantial.create(redisUrl("redis"), {
+      Substantial.create(await redisUrl("redis"), {
         credentials: new Password({ password: "right", username: name }),
       }),
       (e) => e instanceof StoreError && /no permissions/.test(e.message),
@@ -281,14 +299,14 @@ async function subscribers(server: ReturnType<typeof createClient>, user: string
     .map((line) => Number(/^id=([0-9]+)/.exec(line)?.[1]));
 }
 
-test("a subscription lost again resubscribes at once", { skip }, async () => {
+test("a subscription lost again resubscribes at once", async () => {
   const server = await admin();
   const { name, drop } = await user(server, "+@all");
   // Not reset by a subscription, a backoff doubling from 100 ms would pause 51 s before the
   // tenth: far beyond a reconnection, seconds at most on a loaded machine.
   const retry = { attempts: 5, initial: milliseconds(100), max: minutes(60) };
   const password = new Password({ password: "right", username: name });
-  const location = parseRedisUrl(redisUrl("redis"));
+  const location = parseRedisUrl(await redisUrl("redis"));
   const store = new RedisStore(location, password, retry, redis, WAITAOF_MS);
   try {
     await store.list("q/", { maxKeys: 10, wait: { seconds: 1 } });
@@ -313,9 +331,9 @@ test("a subscription lost again resubscribes at once", { skip }, async () => {
   }
 });
 
-test("a start from another client comes through the wait", { skip }, async () => {
+test("a start from another client comes through the wait", async () => {
   const answer = workflow("answer", async (_c: Context) => 42);
-  const url = redisUrl("redis");
+  const url = await redisUrl("redis");
   const sub = await Substantial.create(url);
   try {
     await using _ = script(sub, [answer], { maxIdle: minutes(5) });
@@ -334,9 +352,9 @@ test("a start from another client comes through the wait", { skip }, async () =>
   }
 });
 
-test("a run ends on redis through a script worker", { skip }, async () => {
+test("a run ends on redis through a script worker", async () => {
   const double = workflow("double", async (_c: Context, input: { n: number }) => input.n * 2);
-  const sub = await Substantial.create(redisUrl("redis"));
+  const sub = await Substantial.create(await redisUrl("redis"));
   try {
     await using _ = script(sub, [double]);
     assert.equal(await (await sub.start(double, { n: 21 })).result({ timeout: LONG }), 42);
@@ -345,10 +363,8 @@ test("a run ends on redis through a script worker", { skip }, async () => {
   }
 });
 
-test("a primary without a replica online answers nothing", {
-  skip: noRedis("redis-sentinel"),
-}, async () => {
-  const url = redisUrl("redis-sentinel");
+test("a primary without a replica online answers nothing", async () => {
+  const url = await redisUrl("redis-sentinel");
   const store = (await openStore(url, undefined)) as RedisStore;
   try {
     await store.open();
@@ -356,7 +372,7 @@ test("a primary without a replica online answers nothing", {
     // As just promoted, its replicas still syncing.
     store.current.replicas = 0;
     for (const answer of [
-      () => store.create("k", bytes("v")),
+      () => store.create("k", bytes("v"), undefined),
       () => store.get("k"),
       () => store.delete("k"),
     ]) {
@@ -370,8 +386,47 @@ test("a primary without a replica online answers nothing", {
   }
   const counted = await openStore(url, undefined);
   try {
-    assert.equal(await counted.get("k"), undefined, "nothing written");
+    assert.equal(await value(counted, "k"), undefined, "nothing written");
   } finally {
     await counted.close();
+  }
+});
+
+test("an expiry is the server's own", async () => {
+  const url = await redisUrl("redis");
+  const ns = parseRedisUrl(url).namespace;
+  const store = await openStore(url, undefined);
+  const server = await admin();
+  const [object, expiries] = [`{${ns}}:o:runs/e`, `{${ns}}:e`];
+  try {
+    // § hxvcx7f2a@psbm6
+    await store.create("runs/e", new TextEncoder().encode("one"), 1);
+    const day = 86_400_000;
+    const left = await server.pTTL(object);
+    assert.ok(left > day - 60_000 && left <= day, String(left));
+    assert.notEqual(await server.zScore(expiries, "runs/e"), null);
+    const read = await store.get("runs/e");
+    assert.ok(read !== undefined);
+    assert.equal(read.etag, createHash("sha1").update("one").digest("hex"));
+    const written = await store.cas(
+      "runs/e",
+      new TextEncoder().encode("two"),
+      read.etag,
+      undefined,
+    );
+    assert.notEqual(written, "mismatch");
+    assert.equal(await server.pTTL(object), -1, "a write without an expiry clears it");
+    assert.equal(await server.zScore(expiries, "runs/e"), null);
+    // A key the server expired leaves the index at the next write of an expiry.
+    await server.pExpire(object, 1);
+    await server.zAdd(expiries, { score: 0, value: "runs/e" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual((await store.list("runs/", { maxKeys: 10 })).keys, ["runs/e"]);
+    await store.create("runs/f", new TextEncoder().encode("f"), 1);
+    assert.deepEqual((await store.list("runs/", { maxKeys: 10 })).keys, ["runs/f"]);
+    assert.equal(await store.get("runs/e"), undefined);
+  } finally {
+    await store.close();
+    server.destroy();
   }
 });

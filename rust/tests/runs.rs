@@ -1,5 +1,7 @@
-//! Listing a workflow's live runs, reading a run's history, and retrying a failed run, in the
-//! test environment.
+//! Listing a workflow's live runs, reading a run's history, retrying a failed run, resetting an
+//! ended one and starting with a message, in the test environment. The reset and message tests
+//! port `python/tests/test_reset.py` and `python/tests/test_signal_with_start.py`, under the same
+//! names.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -77,6 +79,7 @@ async fn runs_lists_the_live_runs_of_a_workflow_with_what_each_waits_on() {
         version: Some(3),
         due_at,
         waiting_on,
+        error: None,
     };
     assert_eq!(
         listed(&env).await,
@@ -129,7 +132,7 @@ async fn history_gives_the_events_of_the_last_run_in_order() {
 
     let unknown = env.run(&stepped, "nobody").history().await;
     assert!(
-        matches!(&unknown, Err(Error::RunNotFound { chain, collected: false, .. }) if chain == "nobody"),
+        matches!(&unknown, Err(Error::RunNotFound { chain }) if chain == "nobody"),
         "{unknown:?}"
     );
     worker.shutdown().await.unwrap();
@@ -263,20 +266,22 @@ async fn a_retry_runs_the_failed_runs_version_and_has_no_parent() {
     // A handle of version 1: the retry takes the failed run's version, not the handle's.
     let child = env.run(&one, "kid");
     child.retry().await.unwrap();
-    // § vb6krfmej.c@yjwc8
+    // § vb6krfmej.c@kz7tm
     assert_eq!(child.result().await.unwrap(), "v2");
     let history = child.history().await.unwrap();
     let retry = &history.last().unwrap().run;
     assert_ne!(retry, "kid", "{history:?}");
     let objects = env.__objects();
-    let start = |run: &str| {
-        let (_, bytes) = (objects.iter())
-            .find(|(k, _)| *k == format!("runs/{run}/start"))
-            .unwrap();
-        layout::Start::decode(bytes.as_slice()).unwrap()
+    // The first run's archive, and the chain's head, which holds the retry.
+    let start = |key: &str, run: &str| {
+        let (_, bytes) = objects.iter().find(|(k, _)| k == key).unwrap();
+        match layout::Run::decode(bytes.as_slice()).unwrap().kind {
+            Some(layout::run::Kind::Head(head)) if head.run == run => head.start.unwrap(),
+            other => panic!("{key}: {other:?}"),
+        }
     };
-    assert_eq!(start("kid").parent.unwrap().run, "p");
-    let start = start(retry);
+    assert_eq!(start("archives/kid", "kid").parent.unwrap().run, "p");
+    let start = start("runs/kid", retry);
     assert_eq!(start.resumes.as_deref(), Some("kid"));
     assert_eq!(start.version, Some(2));
     assert_eq!(start.parent, None, "{start:?}");
@@ -330,6 +335,150 @@ async fn a_failed_run_whose_saga_ran_undos_is_not_retried() {
         matches!(&still, Err(Error::RunFailed { run, .. }) if run == "undone"),
         "{still:?}"
     );
+    worker.shutdown().await.unwrap();
+    done(env).await;
+}
+
+#[derive(Deserialize)]
+struct Count {
+    n: usize,
+}
+
+fn collecting() -> Workflow<Vec<String>> {
+    Workflow::new("collecting", |c: Context, Count { n }: Count| async move {
+        let mut got = Vec::new();
+        for _ in 0..n {
+            got.push(c.receive::<String>("add").await?);
+        }
+        Ok(got)
+    })
+}
+
+#[tokio::test]
+async fn a_start_with_a_message_sends_it_once_the_run_is_created_or_found() {
+    let env = Env::open(t0()).await.unwrap();
+    let worker = env
+        .worker(collecting())
+        .preset(Preset::Script)
+        .start()
+        .unwrap();
+    let start = |message: substantial::Message| {
+        env.start(collecting(), json!({"n": 2}))
+            .id("cart")
+            .message(message)
+    };
+    let first = || substantial::Message::new("add", "a").id("m-a");
+    // § fqv5ts8vg@bqsyd
+    let run = start(first()).await.unwrap();
+    start(first()).await.unwrap();
+    start(substantial::Message::new("add", "b")).await.unwrap();
+    assert_eq!(
+        run.result().await.unwrap(),
+        ["a", "b"],
+        "the same id delivered once"
+    );
+    // § fqv5ts8vg.a@cbyex
+    let ended = start(substantial::Message::new("add", "c")).await;
+    assert!(matches!(ended, Err(Error::RunEnded { .. })), "{ended:?}");
+    // § end fqv5ts8vg.a
+    // § end fqv5ts8vg
+    worker.shutdown().await.unwrap();
+    done(env).await;
+}
+
+#[tokio::test]
+async fn a_start_refuses_a_message_outside_the_rules() {
+    let env = Env::open(t0()).await.unwrap();
+    let refused = [
+        substantial::Message::new("substantial.x", ()),
+        substantial::Message::new("add", ()).id("Upper"),
+        substantial::Message::new("add", f64::NAN),
+    ];
+    for message in refused {
+        let start = env.start(collecting(), json!({"n": 1})).message(message);
+        let refused = start.await;
+        assert!(
+            matches!(refused, Err(Error::InvalidArgument(_))),
+            "{refused:?}"
+        );
+    }
+    done(env).await;
+}
+
+fn ordered(ran: &Arc<Mutex<Vec<&'static str>>>) -> Workflow<Vec<String>> {
+    let ran = ran.clone();
+    Workflow::without_input("ordered", move |c| {
+        let ran = ran.clone();
+        async move {
+            let note = |name: &'static str| {
+                let ran = ran.clone();
+                c.step(name, move || {
+                    ran.lock().unwrap().push(name);
+                    async move { Ok::<_, Error>(name.to_owned()) }
+                })
+            };
+            let a = note("a").await?;
+            let go: String = c.receive("go").await?;
+            let b = note("b").await?;
+            Ok(vec![a, go, b])
+        }
+    })
+}
+
+#[tokio::test]
+async fn a_reset_replays_the_first_events_of_an_ended_run() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let env = Env::open(t0()).await.unwrap();
+    let worker = env
+        .worker(ordered(&ran))
+        .preset(Preset::Script)
+        .start()
+        .unwrap();
+    let run = env.start(ordered(&ran), ()).id("o").await.unwrap();
+    env.settle().await.unwrap();
+    run.send("go", "now").await.unwrap();
+    assert_eq!(run.result().await.unwrap(), ["a", "now", "b"]);
+    let kinds: Vec<String> = (run.history().await.unwrap().into_iter())
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(kinds, ["step", "message", "step", "completed"]);
+    // § grzez328c@62ps0
+    run.retry().keep(1).await.unwrap();
+    let again = run.result().await.unwrap();
+    assert_eq!(
+        again,
+        ["a", "now", "b"],
+        "the message after the point given back"
+    );
+    assert_eq!(
+        *ran.lock().unwrap(),
+        ["a", "b", "b"],
+        "the kept step not again"
+    );
+    // § end grzez328c
+    worker.shutdown().await.unwrap();
+    done(env).await;
+}
+
+#[tokio::test]
+async fn a_reset_refuses_a_point_past_the_end_and_a_live_run() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let env = Env::open(t0()).await.unwrap();
+    let worker = env
+        .worker(ordered(&ran))
+        .preset(Preset::Script)
+        .start()
+        .unwrap();
+    let run = env.start(ordered(&ran), ()).await.unwrap();
+    env.settle().await.unwrap();
+    // § grzez328c.a@9e7pf
+    let live = run.retry().keep(0).await;
+    assert!(matches!(live, Err(Error::InvalidArgument(_))), "{live:?}");
+    run.send("go", "now").await.unwrap();
+    run.result().await.unwrap();
+    let past = run.retry().keep(99).await;
+    assert!(matches!(past, Err(Error::InvalidArgument(_))), "{past:?}");
+    // § end grzez328c.a
     worker.shutdown().await.unwrap();
     done(env).await;
 }

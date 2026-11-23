@@ -3,7 +3,7 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { ulids } from "../plan.ts";
 import { layout } from "../proto.ts";
-import { dropNamespace, MemoryStore, objectsOf } from "../stores/memory.ts";
+import { dropNamespace, expiriesOf, MemoryStore, objectsOf } from "../stores/memory.ts";
 import { pending } from "../worker.ts";
 import type { Env } from "./env.ts";
 import { type Chaos, derive, FaultStore, unit } from "./store.ts";
@@ -23,7 +23,7 @@ export function idlePhase(seed: Uint8Array, maxIdle: number): number {
 }
 
 /** The earliest due entries of a workflow: of any kind, and of those that wake a run, a timer or
- * a message; a collection entry sets no worker's timer, the next scan serves it. */
+ * a message, which every due entry is. */
 interface Due {
   readonly any: number;
   readonly wake: number | undefined;
@@ -34,16 +34,23 @@ function earlier(a: number | undefined, b: number | undefined): number | undefin
   return b === undefined ? a : Math.min(a, b);
 }
 
-/** The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<run>~<tag>`. */
+/** The time of a due entry, `<yyyymmdd>t<hhmmssmmm>z~<chain>~<tag>`. */
 export function dueMs(entry: string): number {
   const n = (from: number, to: number) => Number(entry.slice(from, to));
   return Date.UTC(n(0, 4), n(4, 6) - 1, n(6, 8), n(9, 11), n(11, 13), n(13, 15), n(15, 18));
 }
 
+/** Whether a head's run ended: its last segment holds an end. */
+export function endedHead(head: layout.Head): boolean {
+  const ends = ["completed", "failed", "cancelled", "continued"];
+  return head.segments.at(-1)?.events.some((e) => ends.includes(e.kind.case ?? "")) ?? false;
+}
+
 export class World {
   readonly ns: string;
   readonly memory: MemoryStore;
-  readonly objects: ReadonlyMap<string, Uint8Array>;
+  readonly #objects: ReadonlyMap<string, Uint8Array>;
+  readonly #expiries: ReadonlyMap<string, number>;
   readonly time: Time;
   readonly chaos: Chaos | undefined;
   readonly seed: number;
@@ -62,21 +69,26 @@ export class World {
   readonly failed: Map<string, { chain: string; failure: string }> = new Map();
   env!: Env;
   #due: { writes: number; due: Map<string, Due> } = { writes: -1, due: new Map() };
+  /** For the replay tester: each run its replays checked against their history, with the
+   * divergence they met; `undefined` in every other environment, whose replays go on. */
+  checks: Map<string, string | undefined> | undefined;
   /** Off only in the test that compares a scenario with and without skipping. */
   skipping = true;
   skipped = 0;
 
   constructor(ns: string, ms: number, chaos: Chaos | undefined) {
     this.ns = ns;
-    this.memory = new MemoryStore(ns);
-    const objects = objectsOf(ns);
-    if (objects === undefined) throw new Error(`no namespace ${ns}`);
-    this.objects = objects;
     this.time = new Time(ms);
+    this.memory = new MemoryStore(ns, () => this.time.ms);
+    const objects = objectsOf(ns);
+    const expiring = expiriesOf(ns);
+    if (objects === undefined || expiring === undefined) throw new Error(`no namespace ${ns}`);
+    this.#objects = objects;
+    this.#expiries = expiring;
     this.time.skip = (target) => this.skipScans(target);
     this.chaos = chaos;
     this.seed = chaos?.seed ?? 0;
-    // § hz0ve24df@s70eb
+    // § hz0ve24df@8h6yk
     this.coreSeed = derive(this.seed, "core");
     this.ulid = ulids((at) => BigInt(`0x${derive(this.seed, "ulid", at).toString("hex", 0, 10)}`));
     // § end hz0ve24df
@@ -87,17 +99,56 @@ export class World {
     return new FaultStore(this, this.memory, clock);
   }
 
-  /** Records a failed end as its result is written: retention may collect it before `check`. */
+  /** Records a failed end as its head is written: its expiry may remove it before `check`. */
   written(key: string, data: Uint8Array): void {
-    const [root, run, leaf, ...rest] = key.split("/");
-    if (root !== "runs" || run === undefined || leaf !== "result" || rest.length > 0) return;
-    const result = fromBinary(layout.ResultSchema, data);
-    if (result.status !== layout.Status.FAILED) return;
-    const start = this.objects.get(`runs/${run}/start`);
-    if (start === undefined) throw new Error(`run ${run} has no start`);
-    const { chain } = fromBinary(layout.StartSchema, start);
-    const failure = `${run} (${result.error?.type}: ${result.error?.message})`;
-    this.failed.set(run, { chain, failure });
+    const [root, id, ...rest] = key.split("/");
+    if (root !== "runs" || id === undefined || rest.length > 0) return;
+    const found = fromBinary(layout.RunSchema, data);
+    if (found.kind.case !== "head") return;
+    const head = found.kind.value;
+    const events = head.segments.at(-1)?.events ?? [];
+    const failed = events.find((e) => e.kind.case === "failed")?.kind;
+    if (failed?.case !== "failed") return;
+    const error = failed.value.error;
+    const failure = `${head.run} (${error?.type}: ${error?.message})`;
+    this.failed.set(head.run, { chain: head.start?.chain ?? "", failure });
+  }
+
+  /** The value of `key` unless it expired, as a test sees what the store keeps. */
+  object(key: string): Uint8Array | undefined {
+    const at = this.#expiries.get(key);
+    return at !== undefined && this.time.ms >= at ? undefined : this.#objects.get(key);
+  }
+
+  /** The head of the run `id`, its chain's through the pointer of a later run. */
+  head(id: string): layout.Head {
+    const found = this.#run(`runs/${id}`);
+    if (found.kind.case === "head") return found.kind.value;
+    if (found.kind.case !== "pointer") throw new Error(`runs/${id}: neither head nor pointer`);
+    const chain = this.#run(`runs/${found.kind.value.chain}`);
+    if (chain.kind.case !== "head") throw new Error(`runs/${found.kind.value.chain}: no head`);
+    return chain.kind.value;
+  }
+
+  #run(key: string): layout.Run {
+    const bytes = this.object(key);
+    if (bytes === undefined) throw new Error(`no ${key}`);
+    return fromBinary(layout.RunSchema, bytes);
+  }
+
+  /** The current runs of the chains not ended, with their start. */
+  pending(): [string, layout.Start][] {
+    const found: [string, layout.Start][] = [];
+    for (const key of this.keys("runs/")) {
+      const run = this.#run(key);
+      if (run.kind.case !== "head") continue;
+      const head = run.kind.value;
+      const start = head.start;
+      if (start !== undefined && key === `runs/${start.chain}` && !endedHead(head)) {
+        found.push([head.run, start]);
+      }
+    }
+    return found;
   }
 
   drop(): void {
@@ -142,24 +193,32 @@ export class World {
     return undefined;
   }
 
+  /** Every key that did not expire and its value. */
+  snapshot(): Map<string, Uint8Array> {
+    return new Map(this.keys("").map((k) => [k, this.object(k) as Uint8Array]));
+  }
+
+  /** The keys under `prefix` that did not expire, in order, as a test sees what the store
+   * keeps. */
   keys(prefix: string): string[] {
-    return [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+    return [...this.#objects.keys()]
+      .filter((k) => k.startsWith(prefix) && this.object(k) !== undefined)
+      .sort();
   }
 
   /** The earliest due entries of each workflow, as of the last write. */
   earliestDue(): Map<string, Due> {
     if (this.#due.writes !== this.writes) {
       const due = new Map<string, Due>();
-      for (const key of this.objects.keys()) {
+      for (const key of this.#objects.keys()) {
         if (!key.startsWith("queues/")) continue;
         const workflow = key.split("/")[1] ?? "";
         const entry = key.slice(key.lastIndexOf("/") + 1);
         const at = dueMs(entry);
-        const wakes = !entry.endsWith("~c") && !entry.endsWith("~g");
         const was = due.get(workflow);
         due.set(workflow, {
           any: Math.min(was?.any ?? at, at),
-          wake: earlier(was?.wake, wakes ? at : undefined),
+          wake: earlier(was?.wake, at),
         });
       }
       this.#due = { writes: this.writes, due };

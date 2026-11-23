@@ -252,9 +252,7 @@ def create_app(
         stable = {"event": event["id"], "kind": event["type"], "data": event["data"]}
         try:
             await engine(request).start(provider_event, stable, id=run_id("evt", event["id"]))
-        except s.RunExists as e:
-            if e.collected:
-                return Response(status_code=200)
+        except s.RunExists:
             return JSONResponse({"error": "this event id came with another body"}, 409)
         return Response(status_code=200)
 
@@ -288,9 +286,7 @@ def create_app(
         await sub.start(account_actor, {"account": account}, id=f"account-{account}")
         try:
             run = await sub.start(pay_order, body, id=f"order-{body['order']}")
-        except s.RunExists as e:
-            if e.collected:
-                return Response(status_code=200)
+        except s.RunExists:
             return JSONResponse({"error": "this order id came with another body"}, 409)
         try:
             return JSONResponse({"paid": await run.result(timeout=s.seconds(5))})

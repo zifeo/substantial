@@ -29,6 +29,9 @@ pub enum RunStatus {
     Completed,
     Failed,
     Cancelled,
+    /// Its code raised an error that is no end, or diverged from its history: it records nothing
+    /// and is tried again after a backoff, until code that runs it is deployed.
+    Blocked,
 }
 
 impl std::fmt::Display for RunStatus {
@@ -40,6 +43,7 @@ impl std::fmt::Display for RunStatus {
             RunStatus::Completed => "completed",
             RunStatus::Failed => "failed",
             RunStatus::Cancelled => "cancelled",
+            RunStatus::Blocked => "blocked",
         })
     }
 }
@@ -55,6 +59,7 @@ impl TryFrom<b::RunStatus> for RunStatus {
             b::RunStatus::Completed => RunStatus::Completed,
             b::RunStatus::Failed => RunStatus::Failed,
             b::RunStatus::Cancelled => RunStatus::Cancelled,
+            b::RunStatus::Blocked => RunStatus::Blocked,
             b::RunStatus::Unspecified => {
                 return Err(Error::Protocol("unspecified run status".into()));
             }
@@ -164,8 +169,8 @@ impl<O> Run<O> {
         check_key("run id", &self.chain)
     }
 
-    fn not_found(&self, no_chain: b::NoChain) -> Error {
-        not_found(&self.chain, no_chain)
+    fn not_found(&self) -> Error {
+        not_found(&self.chain)
     }
 
     pub async fn status(&self) -> Result<RunStatus> {
@@ -178,7 +183,7 @@ impl<O> Run<O> {
         let status = match self.sub.plan(Plan::Status(status)).await? {
             Step::Status(b::RunState { state: Some(state) }) => match state {
                 run_state::State::Status(of) => of.status().try_into(),
-                run_state::State::NoChain(n) => Err(self.not_found(n)),
+                run_state::State::NoChain(_) => Err(self.not_found()),
                 run_state::State::Failed(f) => Err(Error::StoreError(f.message)),
             },
             other => Err(plan::unexpected("status", other)),
@@ -205,7 +210,7 @@ impl<O> Run<O> {
                 history::History::Events(e) => {
                     e.events.into_iter().map(TryInto::try_into).collect()
                 }
-                history::History::NoChain(n) => Err(self.not_found(n)),
+                history::History::NoChain(_) => Err(self.not_found()),
                 history::History::Failed(f) => Err(Error::StoreError(f.message)),
             },
             other => Err(plan::unexpected("history", other)),
@@ -221,6 +226,7 @@ impl<O> Run<O> {
             sub: self.sub.clone(),
             chain: self.chain.clone(),
             budget: None,
+            keep: None,
         }
     }
 
@@ -249,7 +255,6 @@ impl<O> Run<O> {
             run: self.clone(),
             timeout: None,
             max_interval: None,
-            refollow: REFOLLOW,
         }
     }
 
@@ -276,7 +281,7 @@ impl<O> Run<O> {
                     (e.run, result)
                 }
                 run_result::Result::NotEnded(live) => return Ok(Ended::Live(live)),
-                run_result::Result::NoChain(n) => return Err(self.not_found(n)),
+                run_result::Result::NoChain(_) => return Err(self.not_found()),
                 run_result::Result::Failed(f) => return Err(Error::StoreError(f.message)),
             },
             other => return Err(plan::unexpected("result", other)),
@@ -319,16 +324,13 @@ impl<O> Run<O> {
 
 enum Ended<O> {
     Value(O),
-    /// The run to poll next, and its `result` key to wait on.
+    /// The run to poll next, and its chain's head to wait on.
     Live(run_result::NotEnded),
 }
 
-fn not_found(chain: &str, no_chain: b::NoChain) -> Error {
-    let until = no_chain.collected_until.map(|t| super::datetime(&t));
+fn not_found(chain: &str) -> Error {
     Error::RunNotFound {
         chain: chain.to_owned(),
-        collected: until.is_some(),
-        until,
     }
 }
 
@@ -336,19 +338,24 @@ async fn sent(sub: &Substantial, chain: &str, plan: Plan) -> Result<()> {
     match sub.plan(plan).await? {
         Step::Sent(b::Sent {
             sent: Some(outcome),
-        }) => match outcome {
-            sent::Sent::Accepted(accepted) => {
-                sub.wake_workers(&accepted.workflow);
-                Ok(())
-            }
-            sent::Sent::Refused(r) => Err(Error::RunEnded {
-                status: ended(r.status())?,
-                run: r.run,
-            }),
-            sent::Sent::NoChain(n) => Err(not_found(chain, n)),
-            sent::Sent::Failed(f) => Err(Error::StoreError(f.message)),
-        },
+        }) => sent_outcome(sub, chain, outcome),
         other => Err(plan::unexpected("send", other)),
+    }
+}
+
+/// What a send to `chain` answered: `Ok` once accepted, or the error it raises.
+pub(super) fn sent_outcome(sub: &Substantial, chain: &str, outcome: sent::Sent) -> Result<()> {
+    match outcome {
+        sent::Sent::Accepted(accepted) => {
+            sub.wake_workers(&accepted.workflow);
+            Ok(())
+        }
+        sent::Sent::Refused(r) => Err(Error::RunEnded {
+            status: ended(r.status())?,
+            run: r.run,
+        }),
+        sent::Sent::NoChain(_) => Err(not_found(chain)),
+        sent::Sent::Failed(f) => Err(Error::StoreError(f.message)),
     }
 }
 
@@ -358,6 +365,7 @@ pub struct RetryRun {
     sub: Substantial,
     chain: String,
     budget: Option<Budget>,
+    keep: Option<u64>,
 }
 
 impl RetryRun {
@@ -365,6 +373,13 @@ impl RetryRun {
     /// with another budget is `InvalidArgument`.
     pub fn budget(mut self, budget: impl Into<Budget>) -> Self {
         self.budget = Some(budget.into());
+        self
+    }
+
+    /// Resets the chain's last run, ended completed, failed or cancelled, to its first `keep`
+    /// events of `history()`: the new run replays them, and runs the code live from there.
+    pub fn keep(mut self, keep: u64) -> Self {
+        self.keep = Some(keep);
         self
     }
 }
@@ -381,6 +396,7 @@ impl IntoFuture for RetryRun {
                 chain: self.chain.clone(),
                 now: Some(self.sub.now()),
                 budget: self.budget.as_ref().map(Budget::to_proto).transpose()?,
+                keep: self.keep,
             };
             match self.sub.plan(Plan::Retry(plan)).await? {
                 Step::Retried(b::Retried {
@@ -391,7 +407,7 @@ impl IntoFuture for RetryRun {
                         Ok(())
                     }
                     retried::Retried::NotRetryable(n) => Err(Error::InvalidArgument(n.message)),
-                    retried::Retried::NoChain(n) => Err(not_found(&self.chain, n)),
+                    retried::Retried::NoChain(_) => Err(not_found(&self.chain)),
                     retried::Retried::Failed(f) => Err(Error::StoreError(f.message)),
                 },
                 other => Err(plan::unexpected("retry", other)),
@@ -449,14 +465,13 @@ impl IntoFuture for SendMessage {
     }
 }
 
-/// A wait for a run's result, polled until it exists, held on a waiting listing of it on a store
-/// that can wait; `timeout` bounds it with `WaitTimeout`.
+/// A wait for a chain's result, its head polled until it ended, held on a waiting listing of the
+/// head on a store that can wait; `timeout` bounds it with `WaitTimeout`.
 #[must_use = "a result does nothing until awaited"]
 pub struct ResultWait<T> {
     run: Run<T>,
     timeout: Option<Duration>,
     max_interval: Option<Duration>,
-    refollow: Duration,
 }
 
 impl<T> ResultWait<T> {
@@ -472,21 +487,12 @@ impl<T> ResultWait<T> {
         self.max_interval = Some(max_interval);
         self
     }
-
-    pub(crate) fn refollow(mut self, refollow: Duration) -> Self {
-        self.refollow = refollow;
-        self
-    }
 }
 
 // § y025f8qen@kkdg6
 const FIRST_POLL: Duration = Duration::from_millis(10);
 const MAX_POLL: Duration = Duration::from_secs(30);
 // § end y025f8qen
-/// A wait follows its chain from the first run again this often, as polling one run's `result`
-/// never sees that run collected (I-17).
-// § one y025f8qen.c@ge12p
-const REFOLLOW: Duration = Duration::from_secs(crate::settings::RETENTION_MIN.as_secs() / 2);
 
 impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
     type Output = Result<T>;
@@ -512,28 +518,30 @@ impl<T: DeserializeOwned + Send + 'static> IntoFuture for ResultWait<T> {
             // § y025f8qen.b@gc5pb
             let store = &*self.run.sub.0.store;
             let polled = async {
-                // § y025f8qen@avm71
-                let (mut delay, mut last) = (FIRST_POLL.min(cap), None);
-                let mut followed = tokio::time::Instant::now();
+                // § y025f8qen@jp635
+                let (mut delay, mut last, mut etag) = (FIRST_POLL.min(cap), None, None);
                 loop {
-                    if followed.elapsed() >= self.refollow {
-                        // § y025f8qen.c@btd82
-                        (last, followed) = (None, tokio::time::Instant::now());
-                    }
                     let live = match self.run.ended(last.take()).await? {
                         Ended::Value(value) => return Ok(value),
                         Ended::Live(live) => live,
                     };
                     last = Some(live.run);
                     if store.capabilities().wait {
-                        // § y025f8qen.a@qk5en
-                        let created = h3::result_created(store, &live.result_key);
-                        // § y025f8qen.d@mq8c6
-                        let left = self.refollow.saturating_sub(followed.elapsed());
-                        if let Ok(created) = tokio::time::timeout(left, created).await {
-                            created.map_err(|e| Error::StoreError(e.message))?;
+                        // The first listing waits for nothing: it takes the etag the next one waits
+                        // on, and the read after it sees any commit that landed before it. A wait
+                        // that ends on the same etag saw no write of the head: no read.
+                        // § y025f8qen.e@1esnd
+                        loop {
+                            let changed =
+                                h3::listing_changed(store, &live.result_key, etag.clone());
+                            let changed =
+                                changed.await.map_err(|e| Error::StoreError(e.message))?;
+                            let same = etag.as_ref() == Some(&changed);
+                            etag = Some(changed);
+                            if !same {
+                                break;
+                            }
                         }
-                        // § end y025f8qen.d
                     } else {
                         tokio::time::sleep(delay).await;
                         delay = (delay * 2).min(cap);

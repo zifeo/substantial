@@ -11,6 +11,7 @@ import {
   CoreError,
   Failed,
   type Failure,
+  HistoryTooLarge,
   InvalidArgument,
   makeFailure,
   messageOf,
@@ -46,16 +47,22 @@ export interface PendingStep {
   readonly name: string;
   readonly key: string;
   readonly maxAttempts: number;
+  /** Its heartbeat timeout in ms, none unless set. */
+  readonly heartbeatMs: number | undefined;
 }
 
 export interface StepSpec {
   readonly body: StepBody;
+  readonly heartbeatMs?: number | undefined;
   readonly undo?: {
     readonly body: UndoBody;
     readonly retry: run.RetryPolicy | undefined;
     readonly timeoutMs: bigint;
+    readonly heartbeatMs: number | undefined;
   };
 }
+
+const TOO_LARGE = "the run passed a limit of its history";
 
 /** The replay whose code is running, for declared steps; unset in step attempts. */
 export const current: AsyncLocalStorage<Shared> = new AsyncLocalStorage<Shared>();
@@ -72,6 +79,7 @@ const NAMED = new Set([
   "cancel",
   "publish",
   "iterate",
+  "patched",
 ]);
 
 interface Slot {
@@ -100,14 +108,11 @@ function settle(decode: Decode, value: layout.Value | undefined): Promise<unknow
 
 function runNotFound(f: layout.Failure): Error {
   const d = f.details?.kind.case === "json" ? decodeValue(f.details) : undefined;
-  const { run, until } = (d ?? {}) as Record<string, unknown>;
-  const at = typeof until === "string" ? new Date(until) : undefined;
-  if (
-    typeof run !== "string" ||
-    (until !== undefined && (at === undefined || Number.isNaN(at.getTime())))
-  )
+  const fields = (d ?? {}) as Record<string, unknown>;
+  const { run } = fields;
+  if (typeof run !== "string" || Object.keys(fields).length !== 1)
     return new ProtocolError(`RunNotFound with details ${JSON.stringify(d)}`);
-  return new RunNotFound(run, at);
+  return new RunNotFound(run);
 }
 
 function runFailed(f: layout.Failure): Error {
@@ -203,6 +208,8 @@ export class Shared {
   readonly start: layout.Start;
   /** The timeout of a step without its own: its workflow's, else its worker's. */
   readonly stepTimeout: Duration;
+  /** The heartbeat timeout of a step without its own: its workflow's, none unless set. */
+  readonly heartbeatTimeout: Duration | undefined;
   /** Whether the code went past the recorded history, so that its logs are written (I-14). */
   live: boolean;
   readonly slots: Map<bigint, Slot> = new Map();
@@ -220,7 +227,10 @@ export class Shared {
   /** A call the history does not answer: the core recorded the run's failure, so the code is
    * abandoned and every later call fails the same way. */
   diverged: string | undefined;
-  /** A failure outside the code's reach, a handler's or a predicate's: the run fails with it. */
+  /** The core ended the run past a limit of its history: the code is abandoned and every later
+   * call raises `HistoryTooLarge`. */
+  tooLarge = false;
+  /** A failure outside the code's reach, a handler's or a predicate's: the run blocks with it. */
   codeFailure: Failure | undefined;
   /** The run's end is recorded: nothing of the code runs again, as it cannot be stopped. */
   abandoned = false;
@@ -232,12 +242,14 @@ export class Shared {
     data: run.RunInput,
     start: layout.Start,
     stepTimeout: Duration,
+    heartbeatTimeout: Duration | undefined,
   ) {
     this.machine = machine;
     this.clock = clock;
     this.run = data.run;
     this.start = start;
     this.stepTimeout = stepTimeout;
+    this.heartbeatTimeout = heartbeatTimeout;
     this.live = data.history.length === 0;
   }
 
@@ -252,6 +264,7 @@ export class Shared {
   call(call: run.Call): run.Called {
     if (this.closed) throw new ProtocolError("a call of the code after its replay ended");
     if (this.diverged !== undefined) throw new NonDeterminism(this.diverged);
+    if (this.tooLarge) throw new HistoryTooLarge(TOO_LARGE);
     let called: run.Called;
     try {
       called = this.machine.call(call, time(this.clock.now()));
@@ -260,8 +273,15 @@ export class Shared {
         this.diverged = `${e.message}; ${NEW_VERSION}`;
         this.abandoned = true;
         this.waits = [];
-        console.warn(`substantial: run ${this.run}: ${this.diverged}`);
         throw new NonDeterminism(this.diverged);
+      }
+      // Only a history limit passed live ends the run while its code still runs: the core
+      // recorded the end, which the next `next` commits.
+      if (e instanceof CoreError && e.kind === "ENDED") {
+        this.tooLarge = true;
+        this.abandoned = true;
+        this.waits = [];
+        throw new HistoryTooLarge(TOO_LARGE);
       }
       const named = NAMED.has(call.call.case ?? "");
       if (e instanceof CoreError && e.kind === "INVALID" && named) {
@@ -301,7 +321,8 @@ export class Shared {
         const key = `${this.start.line ?? this.run}/${name}/${called.occurrence}`;
         // A step without a retry policy has one attempt (I-6).
         const maxAttempts = call.call.value.options?.retry?.maxAttempts ?? 1;
-        this.steps.set(answer.value, { body: spec.body, name, key, maxAttempts });
+        const heartbeatMs = spec.heartbeatMs;
+        this.steps.set(answer.value, { body: spec.body, name, key, maxAttempts, heartbeatMs });
         if (spec.undo !== undefined) this.undos.set(answer.value, spec.undo);
       }
     }
@@ -340,7 +361,7 @@ export class Shared {
   /** Binds `handler` to `names`: the messages consumed so far first, then each new one. */
   bind(names: string[], handler: Handler): void {
     const past = this.expect(makeCall({ case: "bind", value: { names } }), "messages");
-    // § aeby9bgqd@ds9ca
+    // § aeby9bgqd@p5cab
     try {
       for (const m of past.messages) handler(m);
     } catch (e) {
@@ -370,7 +391,7 @@ export class Shared {
 
   /** Tells the run machine of every wait whose predicate now holds. */
   evaluateWaits(): void {
-    // § k3zma9hjs.a@4rbw2
+    // § k3zma9hjs.a@zmds1
     if (this.abandoned) return;
     const pending: [bigint, Predicate][] = [];
     for (const [call, predicate] of this.waits) {

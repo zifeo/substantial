@@ -15,6 +15,7 @@ const attempts = new AsyncLocalStorage<{
   key: string;
   signal: AbortSignal;
   charges: layout.Amount[];
+  beat: () => void;
 }>();
 /** The saga the steps called here belong to, set by `c.saga`. */
 export const sagaScope: AsyncLocalStorage<bigint> = new AsyncLocalStorage<bigint>();
@@ -35,6 +36,15 @@ export function stepSignal(): AbortSignal {
   return running.signal;
 }
 
+/** Tells the worker that the step attempt running is alive: a step with a `heartbeatTimeout`
+ * fails its attempt with a retryable `StepTimeout` once that long passed without one. */
+export function heartbeat(): void {
+  // § vvp37rp40.a@v0tvp
+  const running = attempts.getStore();
+  if (running === undefined) throw new NotInWorkflow("heartbeat is called inside a step");
+  running.beat();
+}
+
 /** Adds `nano` nano-units of `currency` to the charges of the step attempt running, recorded with
  * its outcome and counted in the run's cost; a currency outside ISO 4217 fails the step at once
  * with `InvalidArgument`, once the attempt ended. `nano` is a bigint from 0n to 2n ** 63n - 1n. */
@@ -49,7 +59,7 @@ export function charge(currency: string, nano: bigint): void {
     const shown = typeof nano === "bigint" ? `${nano}n` : String(nano);
     throw new InvalidArgument(`a charge is a bigint from 0n to ${MAX}n, not ${shown}`);
   }
-  // § one cvnf47vy8@87ckw
+  // § one cvnf47vy8@3ccsy
   running.charges.push(create(layout.AmountSchema, { currency, nano }));
 }
 
@@ -59,6 +69,10 @@ interface CommonOptions<T> {
   /** Per attempt, the step's undo's too; the attempt fails with a retryable `StepTimeout`. It
    * wins over the workflow's `stepTimeout` and the worker's, larger or smaller. */
   readonly timeout?: Duration;
+  /** The longest an attempt may go without `s.heartbeat()`, the step's undo's too, over the
+   * workflow's `heartbeatTimeout`: an attempt silent for longer fails with a retryable
+   * `StepTimeout`. None unless set. */
+  readonly heartbeatTimeout?: Duration;
   /** Turns the recorded JSON into the value the code sees, the first time too. */
   readonly decode?: (value: unknown) => T;
 }
@@ -73,7 +87,7 @@ export interface DeclaredStepOptions<A extends unknown[], T> extends CommonOptio
   readonly undo?: (value: T, ...args: A) => unknown;
 }
 
-const KNOWN = new Set(["retry", "timeout", "decode", "undo"]);
+const KNOWN = new Set(["retry", "timeout", "heartbeatTimeout", "decode", "undo"]);
 
 /** Checks the options of a step, declared or inline. */
 export function checkOptions(options: DeclaredStepOptions<unknown[], unknown>): void {
@@ -85,10 +99,16 @@ export function checkOptions(options: DeclaredStepOptions<unknown[], unknown>): 
       throw new InvalidArgument(`unknown step option ${key}`);
     }
   }
-  const { retry, timeout, decode, undo } = options;
+  const { retry, timeout, heartbeatTimeout, decode, undo } = options;
   if (retry !== undefined) retryPolicy(retry);
   if (timeout !== undefined && !(timeout instanceof Duration)) {
     throw new InvalidArgument("timeout is a Duration");
+  }
+  if (
+    heartbeatTimeout !== undefined &&
+    !(heartbeatTimeout instanceof Duration && heartbeatTimeout.ms > 0)
+  ) {
+    throw new InvalidArgument("heartbeatTimeout is a positive Duration");
   }
   if (decode !== undefined && typeof decode !== "function") {
     throw new InvalidArgument("decode is a function");
@@ -106,13 +126,13 @@ export function callStep<T>(
   args: unknown[],
   options: DeclaredStepOptions<unknown[], unknown>,
 ): Promise<T> {
-  // § wv67rmrjm@bt5w5
+  // § wv67rmrjm@h7dg9
   if (typeof name !== "string") throw new InvalidArgument(`a step name is a string, not ${name}`);
   if (typeof fn !== "function") throw new InvalidArgument(`a step runs a function, not ${fn}`);
-  const { retry, timeout, decode, undo } = options;
+  const { retry, timeout, heartbeatTimeout, decode, undo } = options;
   const policy = retry === undefined ? undefined : retryPolicy(retry);
   const saga = sagaScope.getStore();
-  // § one aym52h8ch@v3t4w
+  // § one aym52h8ch@m9cxb
   const timeoutMs = BigInt((timeout ?? shared.stepTimeout).ms);
   const stepOptions = create(run.StepOptionsSchema, {
     undo: undo !== undefined,
@@ -121,20 +141,33 @@ export function callStep<T>(
     ...(policy === undefined ? {} : { retry: policy }),
   });
   const call = makeCall({ case: "step", value: { name, options: stepOptions } });
-  // § vjy5p3exq@4y1ee
+  // § vjy5p3exq@h7efq
   const decoded = (value: Parameters<typeof decodeValue>[0]) => {
     const json = decodeValue(value);
     return decode === undefined ? json : decode(json);
   };
   // § end vjy5p3exq
   const body: StepBody = () => fn(...args);
-  // § a5c1mfs8d@tej30
+  // § vvp37rp40@t2zza
+  const heartbeatMs = (heartbeatTimeout ?? shared.heartbeatTimeout)?.ms;
+  // § end vvp37rp40
+  // § a5c1mfs8d@pwf7k
   const undoSpec =
     undo === undefined
       ? undefined
-      : { body: (value: unknown) => () => undo(value, ...args), retry: policy, timeoutMs };
+      : {
+          body: (value: unknown) => () => undo(value, ...args),
+          retry: policy,
+          timeoutMs,
+          // § one vvp37rp40.b@8pgw7
+          heartbeatMs,
+        };
   // § end a5c1mfs8d
-  return shared.future<T>(call, decoded, { body, ...(undoSpec ? { undo: undoSpec } : {}) });
+  return shared.future<T>(call, decoded, {
+    body,
+    heartbeatMs,
+    ...(undoSpec ? { undo: undoSpec } : {}),
+  });
 }
 
 /** A declared step: calling it inside a workflow returns the promise of its value. */
@@ -179,21 +212,33 @@ export async function attempt(
   key: string,
   timeoutMs: number | undefined,
   abandoned: AbortSignal,
+  heartbeatMs?: number,
 ): Promise<Attempted> {
   const charges: layout.Amount[] = [];
+  const heartbeat =
+    heartbeatMs === undefined ? undefined : { timeoutMs: heartbeatMs, last: clock.elapsed() };
+  const beat = () => {
+    if (heartbeat !== undefined) heartbeat.last = clock.elapsed();
+  };
   const outcome = await clock.attempt(
     name,
     key,
-    (signal) => outcomeOf(body, { key, signal, charges }),
+    (signal) => outcomeOf(body, { key, signal, charges, beat }),
     timeoutMs,
     abandoned,
+    heartbeat,
   );
   // A copy: an attempt left running charges on, past its end.
-  // § cvnf47vy8@xxq0r
+  // § cvnf47vy8@h7sz5
   const charged = [...charges];
-  // § v4n6ja42e@dqdbh
+  if (outcome === "silent") {
+    // § vvp37rp40@zejv2
+    const silent = failure("StepTimeout", `no heartbeat within ${heartbeatMs} ms`, true);
+    return { outcome: silent, charges: charged, abandoned: false };
+  }
+  // § v4n6ja42e@g43mf
   if (outcome !== undefined) return { outcome, charges: charged, abandoned: false };
-  // § one aym52h8ch@bacsn, epxcjcz4s@gjkb7
+  // § one aym52h8ch@q82j5, epxcjcz4s@nv4p2
   const timedOut = failure("StepTimeout", `attempt past ${timeoutMs} ms`, true);
   return { outcome: timedOut, charges: charged, abandoned: abandoned.aborted };
   // § end v4n6ja42e
@@ -201,14 +246,14 @@ export async function attempt(
 
 async function outcomeOf(
   body: StepBody,
-  running: { key: string; signal: AbortSignal; charges: layout.Amount[] },
+  running: { key: string; signal: AbortSignal; charges: layout.Amount[]; beat: () => void },
 ): Promise<run.Outcome> {
-  // § epxcjcz4s@a84t0
+  // § epxcjcz4s@16116
   let value: unknown;
   try {
     value = await current.exit(() => attempts.run(running, async () => await body()));
   } catch (e) {
-    // § epxcjcz4s.a@3zn4v
+    // § epxcjcz4s.a@2vdk6
     return failure(typeName(e), messageOf(e), !(e instanceof Permanent));
   }
   let text: string;
@@ -221,7 +266,7 @@ async function outcomeOf(
   try {
     json = capped(new TextEncoder().encode(text), "the step's value");
   } catch (e) {
-    // § h8wg39cct.b@j1s2q
+    // § h8wg39cct.b@fad42
     return failure(typeName(e), messageOf(e), false);
   }
   return create(run.OutcomeSchema, { outcome: { case: "value", value: jsonValue(json) } });

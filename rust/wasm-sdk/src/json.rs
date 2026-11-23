@@ -35,7 +35,7 @@ type Checked = std::result::Result<(), Refused>;
 const SAFE: u128 = (1 << 53) - 1;
 
 fn integer(magnitude: u128, shown: impl fmt::Display) -> Checked {
-    // § .:ea0fw6qrw@hy57e
+    // § .:ea0fw6qrw@p4tn4
     if magnitude > SAFE {
         return Err(Refused(format!(
             "{shown} is past 2^53 - 1, the largest integer a JSON number holds exactly"
@@ -45,7 +45,7 @@ fn integer(magnitude: u128, shown: impl fmt::Display) -> Checked {
 }
 
 fn float(value: f64) -> Checked {
-    // § .:ea0fw6qrw@6fs03
+    // § .:ea0fw6qrw@zy478
     if !value.is_finite() {
         return Err(Refused(format!("{value} is not a JSON number")));
     }

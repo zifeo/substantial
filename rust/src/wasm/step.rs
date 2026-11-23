@@ -109,11 +109,11 @@ impl Module {
         // § s3vk5gvsj@x1ckk
         let instance = self.0.steps.instantiate_async(&mut store).await;
         // § end s3vk5gvsj
-        // § cy53pm5cn.b@q6j4p
+        // § jy9pjegjy.b@qexh7
         let trap = |store: &mut Store<StepState>, e: wasmtime::Error| {
             trapped(store.data_mut().panic.take(), &e)
         };
-        // § end cy53pm5cn.b
+        // § end jy9pjegjy.b
         let instance = instance.map_err(|e| trap(&mut store, e))?;
         let step = instance
             .get_typed_func::<(String, String), (Result<String, StepError>,)>(
@@ -145,7 +145,7 @@ impl Module {
                 details: None,
             }),
             // § end ztt9a58wy.c
-            // § one cy53pm5cn.c@cdtds
+            // § one jy9pjegjy.c@ec8yd
             Err(e) => Err(trap(&mut store, e)),
         }
         // § end ztt9a58wy

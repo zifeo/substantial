@@ -159,6 +159,11 @@ export class RunMachine extends Machine<run.RunRequest, run.RunResponse> {
       "done",
     );
   }
+
+  /** The answer to `Next.claim`, once the agent holds the run's claim. */
+  claimed(): void {
+    this.expect(create(run.RunRequestSchema, { request: { case: "claimed", value: {} } }), "done");
+  }
 }
 
 /** The agent machine of one worker. */
@@ -185,6 +190,10 @@ export class AgentMachine extends Machine<agent.AgentRequest, agent.AgentRespons
   commit(runId: string, commit: run.Commit): void {
     const value = create(agent.AgentRequest_RunCommitSchema, { run: runId, commit });
     this.#done({ case: "commit", value });
+  }
+
+  claim(runId: string): void {
+    this.#done({ case: "claim", value: runId });
   }
 
   replayEnded(runId: string, end: agent.ReplayEnd): void {

@@ -31,7 +31,7 @@ fn canceller() -> Workflow<(String, String, String)> {
             Err(Error::RunFailed { status, error, .. }) => {
                 Ok((child.chain().to_owned(), status.to_string(), error.message))
             }
-            other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+            other => Err(Error::fail("Unexpected", format!("{other:?}"))),
         }
     })
 }
@@ -72,7 +72,7 @@ fn late_canceller() -> Workflow<(String, String)> {
         child.result().await?;
         match child.cancel("too late").await {
             Err(e @ Error::RunEnded { .. }) => Ok((child.chain().to_owned(), e.to_string())),
-            other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+            other => Err(Error::fail("Unexpected", format!("{other:?}"))),
         }
     })
 }
@@ -85,7 +85,7 @@ async fn cancel_a_child_that_ended_raises_run_ended() {
         .start()
         .unwrap();
     let run = env.start(&late_canceller(), ()).await.unwrap();
-    // § t53k37khf.a@857af
+    // § t53k37khf.a@yxnez
     let (chain, message) = run.result().await.unwrap();
     assert_eq!(message, format!("run {chain} has ended, completed"));
     // § end t53k37khf.a
@@ -102,7 +102,7 @@ fn suspending_canceller() -> Workflow<(String, String)> {
             Err(Error::RunFailed { status, .. }) => {
                 Ok((child.chain().to_owned(), status.to_string()))
             }
-            other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+            other => Err(Error::fail("Unexpected", format!("{other:?}"))),
         }
     })
 }

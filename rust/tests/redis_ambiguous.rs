@@ -1,5 +1,5 @@
-//! Ambiguous creates on Redis (I-26), injected by a proxy that drops a connection; only when
-//! `SUBSTANTIAL_REDIS_URL` names a standalone server (see `dev/redis.compose.yaml`).
+//! Ambiguous creates on Redis (I-26), injected by a proxy that drops a connection, on the
+//! standalone server `SUBSTANTIAL_REDIS_URL` names (see `dev/compose.yaml`).
 
 mod common;
 
@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use common::{redis_url, retry};
+use common::{failover_lock, kind, redis_url, retry};
 use redis::aio::MultiplexedConnection;
 use substantial::__internal::{self as internal, Create, RedisLocation, RedisStore, Store};
 use substantial::Credentials;
@@ -87,8 +87,8 @@ struct Proxied {
     fence: String,
 }
 
-async fn proxied() -> Option<Proxied> {
-    let url = redis_url("redis")?;
+async fn proxied() -> Proxied {
+    let url = redis_url("redis");
     let location = RedisLocation::parse(&url).unwrap();
     let (host, port) = location.nodes[0].clone();
     let proxy = Arc::new(Dropping {
@@ -108,12 +108,12 @@ async fn proxied() -> Option<Proxied> {
     });
     let client = redis::Client::open(format!("redis://{host}:{port}")).unwrap();
     let admin = client.get_multiplexed_async_connection().await.unwrap();
-    Some(Proxied {
+    Proxied {
         url: url.replacen(&format!("{host}:{port}"), &format!("127.0.0.1:{local}"), 1),
         proxy,
         admin,
         fence: format!("{{{}}}:f", location.namespace),
-    })
+    }
 }
 
 async fn fence(p: &mut Proxied) -> i64 {
@@ -130,16 +130,14 @@ fn b(s: &str) -> Bytes {
 }
 
 async fn an_unanswered_create_is_resolved_by_a_fenced_get(forward: bool) {
-    let Some(mut p) = proxied().await else {
-        return;
-    };
+    let mut p = proxied().await;
     let store = internal::open(&p.url, &Credentials::None, retry()).unwrap();
     store.open().await.unwrap();
     let before = fence(&mut p).await;
     p.proxy.drop_next(b"EVALSHA", forward);
     assert_eq!(
-        store.create("runs/a/log/0", b("one")).await,
-        Ok(Create::Created)
+        kind(store.create("runs/a/log/0", b("one"), None).await),
+        Ok("created")
     );
     assert_eq!(p.proxy.dropped.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -147,20 +145,25 @@ async fn an_unanswered_create_is_resolved_by_a_fenced_get(forward: bool) {
         before + 1,
         "the get resolving it wrote the fence"
     );
-    assert_eq!(store.get("runs/a/log/0").await, Ok(Some(b("one"))));
     assert_eq!(
-        store.create("runs/a/log/0", b("two")).await,
+        store.get("runs/a/log/0").await.map(|o| o.map(|o| o.bytes)),
+        Ok(Some(b("one")))
+    );
+    assert_eq!(
+        store.create("runs/a/log/0", b("two"), None).await,
         Ok(Create::Exists)
     );
 }
 
 #[tokio::test]
 async fn an_unanswered_create_is_resolved_by_a_fenced_get_landed() {
+    let _shared = failover_lock(false);
     an_unanswered_create_is_resolved_by_a_fenced_get(true).await
 }
 
 #[tokio::test]
 async fn an_unanswered_create_is_resolved_by_a_fenced_get_lost() {
+    let _shared = failover_lock(false);
     an_unanswered_create_is_resolved_by_a_fenced_get(false).await
 }
 
@@ -173,11 +176,13 @@ fn unreplicated(url: &str) -> RedisStore {
 
 #[tokio::test]
 async fn a_create_the_replicas_never_fsync_is_not_acknowledged() {
-    let Some(mut p) = proxied().await else {
-        return;
-    };
+    let _shared = failover_lock(false);
+    let mut p = proxied().await;
     let store = unreplicated(&p.url);
-    let refused = store.create("runs/a/log/0", b("one")).await.unwrap_err();
+    let refused = store
+        .create("runs/a/log/0", b("one"), None)
+        .await
+        .unwrap_err();
     assert!(
         refused.message.contains("WAITAOF 1 1 answered [1, 0]"),
         "{}",
@@ -198,14 +203,19 @@ async fn a_create_the_replicas_never_fsync_is_not_acknowledged() {
 
 #[tokio::test]
 async fn reads_and_deletes_answer_once_what_they_saw_is_durable() {
-    let Some(mut p) = proxied().await else {
-        return;
-    };
+    let _shared = failover_lock(false);
+    let mut p = proxied().await;
     let store = internal::open(&p.url, &Credentials::None, retry()).unwrap();
-    store.create("runs/a/start", b("one")).await.unwrap();
+    store.create("runs/a/start", b("one"), None).await.unwrap();
     let before = fence(&mut p).await;
-    assert_eq!(store.get("runs/a/start").await, Ok(Some(b("one"))));
-    assert_eq!(store.get("runs/b/start").await, Ok(None));
+    assert_eq!(
+        store.get("runs/a/start").await.map(|o| o.map(|o| o.bytes)),
+        Ok(Some(b("one")))
+    );
+    assert_eq!(
+        store.get("runs/b/start").await.map(|o| o.map(|o| o.bytes)),
+        Ok(None)
+    );
     let listed = store.list("runs/", None, 10, None).await.unwrap();
     assert_eq!(listed.keys, ["runs/a/start"]);
     store.delete("runs/b/start").await.unwrap();

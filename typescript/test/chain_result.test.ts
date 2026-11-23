@@ -12,7 +12,7 @@ const quick = s.workflow("quick", async () => 1);
 const waiter = s.workflow("waiter", async (c) => await c.receive<string>("go"));
 
 const doomed = s.workflow("doomed", async (c) => {
-  throw new Error(await c.receive<string>("go"));
+  throw new s.Fail("Doomed", await c.receive<string>("go"));
 });
 
 /** Continues as new at each `go` while `left`, then ends with the last one's value. */
@@ -27,7 +27,7 @@ const watcher = s.workflow("watcher", async (c, { chain }: { chain: string }) =>
     return { value: await c.result(chain) };
   } catch (e) {
     if (e instanceof s.RunFailed) return { status: e.status, error: e.error.message };
-    if (e instanceof s.RunNotFound) return { notFound: e.message, collected: e.collected };
+    if (e instanceof s.RunNotFound) return { notFound: e.message };
     throw e;
   }
 });
@@ -98,16 +98,14 @@ test(
 );
 
 test(
-  "a collected chain raises RunNotFound collected",
+  "a removed chain raises RunNotFound",
   withEnv(async (env) => {
     await using _worker = env.worker(all, service);
     const target = await env.start(quick, undefined, { id: "q" });
     assert.equal(await target.result(), 1);
     await env.advance(s.days(31));
     const run = await env.start(watcher, { chain: "q" });
-    const result = (await run.result()) as { notFound: string; collected: boolean };
-    assert.equal(result.collected, true);
-    assert.ok(result.notFound.startsWith("no chain q"), result.notFound);
+    assert.deepEqual(await run.result(), { notFound: "no chain q" });
   }),
 );
 
@@ -116,7 +114,7 @@ test(
   withEnv(async (env) => {
     await using _worker = env.worker(all, service);
     const run = await env.start(watcher, { chain: "nobody" });
-    assert.deepEqual(await run.result(), { notFound: "no chain nobody", collected: false });
+    assert.deepEqual(await run.result(), { notFound: "no chain nobody" });
   }),
 );
 
@@ -203,7 +201,7 @@ test(
       await env.settle();
       await target.send("go", "kept");
       await env.settle();
-      // The watched chain is collected: a result read again would raise RunNotFound.
+      // The watched chain is removed: a result read again would raise RunNotFound.
       await env.advance(s.days(31));
       await assert.rejects(target.status(), s.RunNotFound);
     }

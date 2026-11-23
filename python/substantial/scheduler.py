@@ -15,10 +15,11 @@ from substantial._proto import layout, run
 from substantial.clock import Clock
 from substantial.errors import (
     NEW_VERSION,
+    Blocking,
     Cancelled,
     CoreError,
-    Failed,
     Failure,
+    HistoryTooLarge,
     InvalidArgument,
     NonDeterminism,
     ProtocolError,
@@ -33,6 +34,8 @@ Decode = Callable[[layout.Value | None], Any]
 StepBody = Callable[[], Awaitable[Any]]
 # An undo, given the value of the step it undoes, as the body of its step.
 UndoBody = Callable[[Any], StepBody]
+# An undo, its step's options, and its step's heartbeat timeout.
+Undo = tuple[UndoBody, run.StepOptions, int | None]
 Handler = Callable[[run.Message], None]
 
 # Calls carrying the code's own names or values: `INVALID` for them is the code's argument.
@@ -47,6 +50,7 @@ _NAMED = {
     "cancel",
     "publish",
     "iterate",
+    "patched",
 }
 
 
@@ -67,14 +71,18 @@ class PendingStep:
     name: str
     key: str
     max_attempts: int
+    # Its heartbeat timeout, `None` when unset.
+    heartbeat_ms: int | None = None
 
 
 @dataclass(frozen=True)
 class StepSpec:
-    """What a step call runs: its attempts, and its undo with the step's options."""
+    """What a step call runs: its attempts, their heartbeat timeout, and its undo with the step's
+    options and heartbeat timeout."""
 
     body: StepBody
-    undo: tuple[UndoBody, run.StepOptions] | None = None
+    undo: Undo | None = None
+    heartbeat_ms: int | None = None
 
 
 @dataclass
@@ -101,16 +109,19 @@ class Shared:
         input_json: bytes,
         loop: asyncio.AbstractEventLoop,
         step_timeout_ms: int,
+        heartbeat_timeout_ms: int | None,
     ):
         self.machine = machine
         # The timeout of a step without its own: its workflow's, else its worker's.
         self.step_timeout_ms = step_timeout_ms
+        # The heartbeat timeout of a step without its own: its workflow's, else none.
+        self.heartbeat_timeout_ms = heartbeat_timeout_ms
         self.clock = clock
         self.run = data.run
         self.start = data.start
         # A retry keeps the step keys of the first run of its line, so that a half-done effect
         # keeps its idempotency key.
-        # § b1cj6wtk9.a@6j7wx
+        # § b1cj6wtk9.a@c42sh
         self.line = data.start.line if data.start.HasField("line") else data.run
         # § end b1cj6wtk9.a
         self.input = input_json
@@ -118,7 +129,7 @@ class Shared:
         self.slots: dict[int, tuple[asyncio.Future, Decode]] = {}
         self.steps: dict[int, PendingStep] = {}
         # The undos of every step call of the replay, by call.
-        self.undos: dict[int, tuple[UndoBody, run.StepOptions]] = {}
+        self.undos: dict[int, Undo] = {}
         self.handlers: dict[str, list[Handler]] = {}
         self.receives: dict[str, Receives] = {}
         self.waits: list[tuple[int, Callable[[], object]]] = []
@@ -128,10 +139,14 @@ class Shared:
         self.live = len(data.history) == 0
         # A core error met by a call of the code: the replay cannot go on.
         self.fatal: str | None = None
-        # A call the history does not answer: the core recorded the run's failure, so the code
-        # stops and every later call fails the same way.
+        # A call the history does not answer: the run is blocked, so the code stops and every
+        # later call fails the same way.
         self.diverged: str | None = None
-        # A failure outside the code's reach, a handler's or a predicate's: the run fails with it.
+        # The core ended the run past a limit of its history: the code stops, and the core's end
+        # is the one committed.
+        self.ended_by_core = False
+        # A failure outside the code's reach, a handler's or a predicate's: the run is blocked
+        # with it.
         self.code_failure: Failure | None = None
         self.closed = False
 
@@ -151,11 +166,14 @@ class Shared:
         except NonDeterminism as e:
             self.diverged = f"{e}; {NEW_VERSION}"
             self.waits = []
-            log.warning("run %s: %s", self.run, self.diverged)
             raise NonDeterminism(self.diverged) from None
         except CoreError as e:
             if e.kind == "INVALID" and call.WhichOneof("call") in _NAMED:
                 raise InvalidArgument(e.message) from None
+            if e.kind == "ENDED":
+                self.ended_by_core = True
+                self.waits = []
+                raise HistoryTooLarge("the run passed a limit of its history") from None
             self.fatal = self.fatal or str(e)
             raise
         except ValueTooLarge:
@@ -198,7 +216,7 @@ class Shared:
                 options = call.step.options
                 # A step without a retry policy has one attempt (I-6).
                 attempts = options.retry.max_attempts if options.HasField("retry") else 1
-                pending = PendingStep(spec.body, call.step.name, key, attempts)
+                pending = PendingStep(spec.body, call.step.name, key, attempts, spec.heartbeat_ms)
                 self.steps[called.pending] = pending
                 if spec.undo is not None:
                     self.undos[called.pending] = spec.undo
@@ -224,11 +242,11 @@ class Shared:
     def bind(self, names: list[str], handler: Handler) -> None:
         """Binds `handler` to `names`: the messages consumed so far first, then each new one."""
         past = self.expect(run.Call(bind=run.Call.Bind(names=names)), "messages")
-        # § aeby9bgqd@pwhfw
+        # § aeby9bgqd@w8q51
         try:
             for m in past.messages:
                 handler(m)
-        except Failed as e:
+        except Blocking as e:
             self.fail_code(e.failure)
             raise
         for name in names:
@@ -239,7 +257,7 @@ class Shared:
         for handler in list(self.handlers.get(message.name, [])):
             try:
                 handler(message)
-            except Failed as e:
+            except Blocking as e:
                 self.fail_code(e.failure)
                 return
 

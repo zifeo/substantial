@@ -10,6 +10,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let mut name: Option<LitStr> = None;
     let mut version: Option<Expr> = None;
     let mut step_timeout: Option<Expr> = None;
+    let mut heartbeat_timeout: Option<Expr> = None;
     let mut retention: Option<Expr> = None;
     let mut budget: Option<Expr> = None;
     let parser = syn::meta::parser(|meta| {
@@ -19,14 +20,16 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             version = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("step_timeout") {
             step_timeout = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("heartbeat_timeout") {
+            heartbeat_timeout = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("retention") {
             retention = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("budget") {
             budget = Some(meta.value()?.parse()?);
         } else {
             return Err(meta.error(
-                "expected `name = \"..\"`, `version = ..`, `step_timeout = ..`, `retention = ..` \
-                 or `budget = ..`",
+                "expected `name = \"..\"`, `version = ..`, `step_timeout = ..`, \
+                 `heartbeat_timeout = ..`, `retention = ..` or `budget = ..`",
             ));
         }
         Ok(())
@@ -80,6 +83,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     names::key(&name)?;
     let version = version.map(|v| quote!(.with_version(#v)));
     let step_timeout = step_timeout.map(|t| quote!(.with_step_timeout(#t)));
+    let heartbeat_timeout = heartbeat_timeout.map(|t| quote!(.with_heartbeat_timeout(#t)));
     let retention = retention.map(|r| quote!(.with_retention(#r)));
     let budget = budget.map(|b| quote!(.with_budget(#b)));
 
@@ -106,7 +110,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
             fn workflow(&self) -> ::substantial::Workflow<Self::Output> {
                 #f
-                ::substantial::Workflow::#constructor(#name, #body)#version #step_timeout #retention #budget
+                ::substantial::Workflow::#constructor(#name, #body)#version #step_timeout #heartbeat_timeout #retention #budget
             }
         }
     })

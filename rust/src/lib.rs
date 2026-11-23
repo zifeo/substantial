@@ -44,8 +44,8 @@ mod workflow;
 
 #[cfg(not(target_family = "wasm"))]
 pub use client::{
-    Create, HistoryEvent, Open, ResultWait, RetryRun, Run, RunInfo, RunStatus, ScheduleRun,
-    SendMessage, StartRun, Substantial, WaitingOn, WorkerBuilder,
+    Create, HistoryEvent, Message, Open, ResultWait, RetryRun, Run, RunInfo, RunStatus,
+    ScheduleRun, SendMessage, StartRun, Substantial, WaitingOn, WorkerBuilder,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use cost::{Amount, Budget, Cost, Meters, Prices};
@@ -58,7 +58,7 @@ pub use settings::Preset;
 #[cfg(not(target_family = "wasm"))]
 pub use store::{Credentials, Keys, Password};
 #[cfg(not(target_family = "wasm"))]
-// § one c7aw13gws@emtqy
+// § one c7aw13gws@stnf2
 pub use substantial_macros::{export, step, workflow};
 #[cfg(not(target_family = "wasm"))]
 pub use time::{days, hours, minutes, seconds};
@@ -66,8 +66,9 @@ pub use time::{days, hours, minutes, seconds};
 pub use worker::Worker;
 #[cfg(not(target_family = "wasm"))]
 pub use workflow::{
-    AsWorkflow, ChainResult, Child, Context, Cron, Handlers, IntoWorkflows, Log, Permanent, Poll,
-    Receive, Retry, SendFromWorkflow, StartChild, Step, Var, WaitUntil, Workflow, charge, step_key,
+    AsWorkflow, ChainResult, Child, Context, Cron, Handlers, IntoWorkflows, Iterate, Log,
+    Permanent, Poll, Receive, Retry, Schedule, SendFromWorkflow, StartChild, Step, Var, WaitUntil,
+    Workflow, charge, heartbeat, step_key,
 };
 
 /// What the code `#[workflow]` and `#[step]` generate refers to; not an API.
@@ -85,8 +86,8 @@ pub mod __internal {
     #[cfg(feature = "redis")]
     pub use crate::store::RedisStore;
     pub use crate::store::{
-        Capabilities, Create, FsStore, ListWait, Listing, MemoryStore, RedisLocation, S3Location,
-        S3Store, Store, StoreFailure, StoreFuture, Topology, open,
+        Capabilities, Cas, Clock, Create, DAY_MS, FsStore, ListWait, Listing, MemoryStore, Object,
+        RedisLocation, S3Location, S3Store, Store, StoreFailure, StoreFuture, Topology, open,
     };
 
     pub use crate::proto::layout::v1 as layout;
@@ -108,14 +109,6 @@ pub mod __internal {
     /// `WorkerBuilder::set`, for any setting.
     pub fn set(builder: WorkerBuilder, name: &str, value: impl ToString) -> WorkerBuilder {
         builder.with(name, value, true)
-    }
-
-    /// A `result` wait that follows its chain from the first run again every `refollow`.
-    pub fn refollow<T>(
-        wait: crate::ResultWait<T>,
-        refollow: std::time::Duration,
-    ) -> crate::ResultWait<T> {
-        wait.refollow(refollow)
     }
 
     /// Wakes the worker at once for a full scan of every workflow it serves.

@@ -17,6 +17,9 @@ export interface ChildOptions {
   readonly id?: string;
   /** The child's budget, else its workflow's (I-28). */
   readonly budget?: Budget;
+  /** The child goes on when this run ends; by default the run's end, completed, failed or
+   * cancelled, cancels it. */
+  readonly abandon?: boolean;
 }
 
 /** The canonical JSON bytes (RFC 8785) of an input, as the core compares a start's input byte
@@ -141,11 +144,14 @@ export function start<I, O>(
   input: I | undefined,
   options: ChildOptions,
 ): Promise<Child<O>> {
-  // § bxb0ygj7m@nfjfp
+  // § bxb0ygj7m@z3drd
   if (!(workflow instanceof Workflow)) {
     throw new InvalidArgument(`start takes a workflow, not ${workflow}`);
   }
-  onlyOptions(options, ["id", "budget"], "start");
+  onlyOptions(options, ["id", "budget", "abandon"], "start");
+  const { abandon = false } = options;
+  if (typeof abandon !== "boolean")
+    throw new InvalidArgument(`abandon is a boolean, not ${abandon}`);
   const w = workflow as AnyWorkflow;
   const budget = effectiveBudget(options.budget, w.budget);
   const call = makeCall({
@@ -153,10 +159,11 @@ export function start<I, O>(
     value: {
       workflow: w.name,
       ...(w.version === undefined ? {} : { version: w.version }),
-      // § one aaev3rs1q.b@yvjpn
+      // § one aaev3rs1q.b@3phfj
       input: jsonValue(inputObject(input)),
       ...(options.id === undefined ? {} : { id: checkKey("run id", options.id) }),
       ...(budget === undefined ? {} : { budget }),
+      abandon,
     },
   });
   return Promise.resolve(new Child<O>(shared, shared.expect(call, "run")));

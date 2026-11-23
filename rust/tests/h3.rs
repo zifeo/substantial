@@ -34,22 +34,21 @@ async fn an_immediate_answer_carries_the_etag() {
     let h3 = FakeH3::start().await;
     let s = open(&h3).await;
     assert!(s.capabilities().wait);
-    s.create("q/a", Bytes::from_static(b"a")).await.unwrap();
+    s.create("q/a", Bytes::from_static(b"a"), None)
+        .await
+        .unwrap();
     let plain = s.list("q/", None, 10, None).await.unwrap();
     assert_eq!(plain.etag, None);
-    assert_eq!(
-        header(&last(&h3).headers, "x-substantial-wait-seconds"),
-        None
-    );
+    assert_eq!(header(&last(&h3).headers, "x-herald-wait-seconds"), None);
 
     let started = Instant::now();
     let first = s.list("q/", None, 10, wait(None, 0)).await.unwrap();
     assert_eq!(first.keys, ["q/a"]);
     let etag = first.etag.clone().expect("an etag");
     let headers = last(&h3).headers;
-    assert_eq!(header(&headers, "x-substantial-wait-seconds"), Some("0"));
-    assert_eq!(header(&headers, "x-substantial-wait-etag"), None);
-    assert!(signed_headers(&headers).contains(&"x-substantial-wait-seconds".to_owned()));
+    assert_eq!(header(&headers, "x-herald-wait-seconds"), Some("0"));
+    assert_eq!(header(&headers, "x-herald-wait-etag"), None);
+    assert!(signed_headers(&headers).contains(&"x-herald-wait-seconds".to_owned()));
 
     let again = s.list("q/", None, 10, wait(Some(&etag), 0)).await.unwrap();
     assert_eq!(again, first);
@@ -60,7 +59,9 @@ async fn an_immediate_answer_carries_the_etag() {
 async fn a_held_wait_is_answered_by_a_change() {
     let h3 = FakeH3::start().await;
     let s = open(&h3).await;
-    s.create("q/a", Bytes::from_static(b"a")).await.unwrap();
+    s.create("q/a", Bytes::from_static(b"a"), None)
+        .await
+        .unwrap();
     let etag = s.list("q/", None, 10, wait(None, 0)).await.unwrap().etag;
     let held = {
         let (s, etag) = (s.clone(), etag.clone());
@@ -68,7 +69,9 @@ async fn a_held_wait_is_answered_by_a_change() {
     };
     eventually("a held listing", async || h3.holds() == 1).await;
     let started = Instant::now();
-    s.create("q/b", Bytes::from_static(b"b")).await.unwrap();
+    s.create("q/b", Bytes::from_static(b"b"), None)
+        .await
+        .unwrap();
     let woken = held.await.unwrap().unwrap();
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(woken.keys, ["q/a", "q/b"]);
@@ -76,16 +79,13 @@ async fn a_held_wait_is_answered_by_a_change() {
 
     let listed = last(&h3);
     assert!(listed.woken);
+    assert_eq!(header(&listed.headers, "x-herald-wait-seconds"), Some("10"));
     assert_eq!(
-        header(&listed.headers, "x-substantial-wait-seconds"),
-        Some("10")
-    );
-    assert_eq!(
-        header(&listed.headers, "x-substantial-wait-etag"),
+        header(&listed.headers, "x-herald-wait-etag"),
         etag.as_deref()
     );
     let signed = signed_headers(&listed.headers);
-    for name in ["x-substantial-wait-etag", "x-substantial-wait-seconds"] {
+    for name in ["x-herald-wait-etag", "x-herald-wait-seconds"] {
         assert!(signed.contains(&name.to_owned()), "{name} in {signed:?}");
     }
 }
@@ -94,8 +94,12 @@ async fn a_held_wait_is_answered_by_a_change() {
 async fn a_wait_that_ends_unchanged_keeps_the_etag() {
     let h3 = FakeH3::start().await;
     let s = open(&h3).await;
-    s.create("q/a", Bytes::from_static(b"a")).await.unwrap();
-    s.create("other/x", Bytes::from_static(b"x")).await.unwrap();
+    s.create("q/a", Bytes::from_static(b"a"), None)
+        .await
+        .unwrap();
+    s.create("other/x", Bytes::from_static(b"x"), None)
+        .await
+        .unwrap();
     let before = s.list("q/", None, 10, wait(None, 0)).await.unwrap();
     let held = {
         let s = s.clone();
@@ -108,7 +112,9 @@ async fn a_wait_that_ends_unchanged_keeps_the_etag() {
         })
     };
     eventually("a held listing", async || h3.holds() == 1).await;
-    s.create("other/y", Bytes::from_static(b"y")).await.unwrap();
+    s.create("other/y", Bytes::from_static(b"y"), None)
+        .await
+        .unwrap();
     let (after, elapsed): (Result<Listing, _>, _) = held.await.unwrap();
     assert_eq!(after.unwrap(), before);
     assert!(elapsed >= Duration::from_secs(6), "{elapsed:?}");
@@ -122,7 +128,7 @@ async fn a_missing_etag_is_a_store_failure() {
     h3.omit_etag();
     let failure = s.list("q/", None, 10, wait(None, 0)).await.unwrap_err();
     assert!(
-        failure.message.contains("x-substantial-listing-etag"),
+        failure.message.contains("x-herald-listing-etag"),
         "{failure}"
     );
     assert_eq!(h3.listed().len(), 1, "a missing etag is not retried");
@@ -177,9 +183,10 @@ struct N {
     n: u32,
 }
 
-/// A client waits on each run's `result` key, through a continuation, instead of polling.
+/// A client waits on its chain's head, through a continuation, instead of polling: each commit
+/// rewrites the head, which changes the listing's etag and ends the wait.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_result_is_waited_on_its_key_through_a_continuation() {
+async fn a_result_is_waited_on_its_head_through_a_continuation() {
     let h3 = FakeH3::start().await;
     let countdown = Workflow::new("countdown", |c: Context, input: N| async move {
         c.sleep(Duration::from_secs(1)).await?;
@@ -201,26 +208,26 @@ async fn a_result_is_waited_on_its_key_through_a_continuation() {
     let value = run.result().timeout(Duration::from_secs(10)).await;
     assert_eq!(value.unwrap(), "liftoff");
 
+    let head = format!("results/runs/{}", run.chain());
     let waits: Vec<Listed> = h3
         .listed()
         .into_iter()
-        .filter(|l| l.prefix.ends_with("/result"))
+        .filter(|l| l.prefix.starts_with("results/runs/"))
         .collect();
-    let mut runs: Vec<&str> = waits.iter().map(|l| l.prefix.as_str()).collect();
-    runs.dedup();
-    assert_eq!(
-        runs.len(),
-        2,
-        "the first run, then the one it continued into: {runs:?}"
-    );
     assert!(
-        waits.len() <= 4,
-        "a listing for the etag, then one held, per run: {waits:?}"
+        waits.iter().all(|l| l.prefix == head),
+        "the chain's head alone, whatever its run: {waits:?}"
+    );
+    // A listing for the etag, then one held per commit the wait saw: start to end, 4 commits.
+    assert!(
+        (2..=6).contains(&waits.len()),
+        "{} waits: {waits:?}",
+        waits.len()
     );
     assert!(
         waits
             .iter()
-            .all(|l| header(&l.headers, "x-substantial-wait-seconds").is_some())
+            .all(|l| header(&l.headers, "x-herald-wait-seconds").is_some())
     );
     assert!(waits.iter().any(|l| l.woken), "{waits:?}");
     tokio::time::timeout(Duration::from_secs(30), worker.shutdown())
@@ -284,5 +291,21 @@ async fn a_run_ends_promptly_with_4_workflows_waiting() {
     tokio::time::timeout(Duration::from_secs(30), worker.shutdown())
         .await
         .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_bucket_is_used_whatever_its_versioning() {
+    // The fake answers no versioning request: an adapter reading it would fail to open.
+    let h3 = FakeH3::start().await;
+    let url = h3.url("unversioned");
+    // § x79k6r9e5@qjqfx
+    Substantial::create(url.as_str())
+        .credentials(FakeH3::credentials())
+        .await
+        .unwrap();
+    Substantial::open(url.as_str())
+        .credentials(FakeH3::credentials())
+        .await
         .unwrap();
 }

@@ -74,6 +74,7 @@ fn flaky(tries: Arc<Mutex<u32>>) -> Workflow<u32> {
                 initial: Duration::from_secs(1),
                 max: Duration::from_secs(1),
                 multiplier: 1.0,
+                deadline: None,
             };
             let once = c
                 .step("once", move || {
@@ -119,7 +120,7 @@ async fn every_kind_of_event_with_its_fields() {
     let ops = store_ops(&seen);
     for op in &ops {
         let per = match op.op {
-            "create" | "list" => 5000,
+            "create" | "cas" | "list" => 5000,
             "get" => 400,
             "delete" => 0,
             other => panic!("op {other}"),
@@ -132,13 +133,14 @@ async fn every_kind_of_event_with_its_fields() {
         assert!(op.attempts >= 1 && op.seconds >= 0.0, "{op:?}");
         let outcomes: &[&str] = match op.op {
             "create" => &["created", "exists"],
+            "cas" => &["written", "mismatch"],
             "get" => &["found", "missing"],
             "list" => &["listed"],
             _ => &["deleted"],
         };
         assert!(outcomes.contains(&op.outcome), "{op:?}");
     }
-    for kind in ["create", "get", "list", "delete"] {
+    for kind in ["create", "cas", "get", "list", "delete"] {
         assert!(ops.iter().any(|op| op.op == kind), "no {kind} in {ops:?}");
     }
 

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use harness::{Harness, completed, counter, counting_step, failed};
+use harness::{Harness, blocked, completed, counter, counting_step, failed};
 
 use crate::proto::boundary::v1::{CommitKind, replay_end};
 use crate::proto::layout::v1::{self as layout, event::Kind};
@@ -121,6 +121,7 @@ const RETRY: Retry = Retry {
     initial: Duration::from_secs(1),
     max: Duration::from_secs(4),
     multiplier: 2.0,
+    deadline: None,
 };
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -233,7 +234,7 @@ async fn parallel_steps_replay_the_same() {
 }
 
 #[tokio::test]
-async fn other_calls_than_the_history_fail_the_run() {
+async fn other_calls_than_the_history_block_the_run() {
     let mut h = Harness::new(Workflow::without_input("changed", |c| async move {
         counting_step(&c, "renamed", &counter(), 1).await
     }));
@@ -248,7 +249,7 @@ async fn other_calls_than_the_history_fail_the_run() {
         kind: Some(Kind::Step(recorded)),
     });
     h.next_n = 1;
-    let failure = failed(&h.replay(1_000).await).expect("the run failed");
+    let failure = blocked(&h.replay(1_000).await).expect("the run blocked");
     assert_eq!(failure.r#type, "NonDeterminism");
 }
 
@@ -276,14 +277,14 @@ async fn inputs_and_errors_of_the_code() {
     };
     let workflow = Workflow::new("typed", move |_c, input: Input| async move {
         if input.x < 0 {
-            return Err(Error::Failed(negative()));
+            return Err(Error::Fail(negative()));
         }
         Ok(input.x + 1)
     });
     let cases = [
         (r#"{"x": 41}"#, None),
-        (r#"{"x": -1}"#, Some("Negative")),
-        (r#"{"y": 1}"#, Some("Json")),
+        (r#"{"x": -1}"#, Some(("failed", "Negative"))),
+        (r#"{"y": 1}"#, Some(("blocked", "Json"))),
     ];
     for (input, failure) in cases {
         let mut h = Harness::new(workflow.clone());
@@ -291,7 +292,8 @@ async fn inputs_and_errors_of_the_code() {
         let replayed = h.replay(1_000).await;
         match failure {
             None => assert_eq!(completed(&replayed), Some(serde_json::json!(42))),
-            Some(kind) => assert_eq!(failed(&replayed).unwrap().r#type, kind),
+            Some(("failed", kind)) => assert_eq!(failed(&replayed).unwrap().r#type, kind),
+            Some((_, kind)) => assert_eq!(blocked(&replayed).unwrap().r#type, kind),
         }
     }
 }

@@ -32,15 +32,23 @@ Every worker down, a deploy or an outage wakes the run after fires passed: "Miss
 
 - (b) Once the run published a revision, `sub.schedule` with that revision and config does nothing, and one with a lower revision, or with the same revision and another config, raises `ConfigError`.
 
-- (c) A `schedule` message that does not hold exactly the config fields fails the run with `InvalidArgument`.
+- (c) ~~A `schedule` message that does not hold exactly the config fields fails the run with `InvalidArgument`.~~
 
 - (d) The run publishes `schedule` when a config applies, at each fire and when its next fire changes, with the config, the last fire, the most recent ones, the skipped ones and the next, the same fields in every host.
 
 - (e) Of several configs the run received at once, the one of the highest revision applies.
 
-- (f) A config that differs from another of its revision, the one the run applied last or one received with it, fails the run with `ConfigError`, while a config of an earlier revision is ignored whatever it holds.
+- (f) ~~A config that differs from another of its revision, the one the run applied last or one received with it, fails the run with `ConfigError`, while a config of an earlier revision is ignored whatever it holds.~~
 
-The id dedups the same config sent by every pod, while a second config of one revision, which two deploys disagreeing on the revision send before the run applied either, reaches the run and fails it instead of being dropped unseen. After the run published a revision, `sub.schedule` refuses such a config itself ((b)). The run keeps only the config it applied last, so it compares nothing with an earlier revision's config, which is stale whatever it holds and which `sub.schedule` refuses once a higher revision is published.
+- (g) A `schedule` message that does not hold exactly the config fields blocks the run with `InvalidArgument`.
+
+- (h) A config that differs from another of its revision, the one the run applied last or one received with it, blocks the run with `ConfigError`, while a config of an earlier revision is ignored whatever it holds.
+
+The id dedups the same config sent by every pod, while a second config of one revision, which two deploys disagreeing on the revision send before the run applied either, reaches the run and blocks it instead of being dropped unseen, until the deploys agree. After the run published a revision, `sub.schedule` refuses such a config itself ((b)). The run keeps only the config it applied last, so it compares nothing with an earlier revision's config, which is stale whatever it holds and which `sub.schedule` refuses once a higher revision is published.
+
+Every pod of a deploy calls `sub.schedule` at its start, and a deploy of a new version would find the old version's schedule running. The schedule moves to the new version at its loop's next boundary instead, which needs that loop to opt into upgrades ([zsyv7772c](chains.md#zsyv7772c)) and a worker that serves both versions at that boundary, as a rolling deploy has.
+
+**§ <a id="sfzkmddwj">sfzkmddwj</a> `sub.schedule` given a newer version of its workflow than the running schedule's sends its config to the running schedule, and says that the schedule moves to that version at its next boundary that upgrades.**
 
 ## Fire times
 

@@ -303,6 +303,25 @@ impl Clock {
         let _ = run;
     }
 
+    /// Whether a replay stops at the end of its history, as the replay tester's do.
+    pub(crate) fn checks_only(&self) -> bool {
+        #[cfg(feature = "testing")]
+        if let Clock::Virtual(i) = self {
+            return i.checks_only();
+        }
+        false
+    }
+
+    /// The replay of `run` reached the end of its history, or diverged before it.
+    pub(crate) fn checked(&self, run: &str, diverged: Option<String>) {
+        #[cfg(feature = "testing")]
+        if let Clock::Virtual(i) = self {
+            i.checked(run, diverged);
+            return;
+        }
+        let _ = (run, diverged);
+    }
+
     /// The code was given the failure of `chain`, a child it started; the testing environment
     /// counts it read.
     pub(crate) fn failure_read(&self, chain: &str) {
@@ -313,23 +332,85 @@ impl Clock {
         let _ = chain;
     }
 
-    /// One attempt of the step `name`; `None` when its timeout passed first.
+    /// One attempt of the step `name`; `Late` when its timeout or its heartbeat timeout passed
+    /// first.
     pub(crate) async fn attempt(
         &self,
         name: &str,
         key: &str,
         body: BoxFuture<'static, Outcome>,
         timeout: Option<Duration>,
-    ) -> Option<Outcome> {
+        heartbeat: Option<Heartbeat>,
+    ) -> Result<Outcome, Late> {
         #[cfg(feature = "testing")]
         if let Clock::Virtual(i) = self {
-            return i.attempt(name, key, body, timeout).await;
+            return i.attempt(name, key, body, timeout, heartbeat).await;
         }
         let _ = (name, key);
+        if let Some(heartbeat) = heartbeat {
+            return self.watched(body, timeout, heartbeat).await;
+        }
         match timeout {
-            // § one aym52h8ch@vxf28, v4n6ja42e.a@ea30s
-            Some(t) => tokio::time::timeout(t, body).await.ok(),
-            None => Some(body.await),
+            // § one aym52h8ch@3bt7h, v4n6ja42e.a@kbjdt
+            Some(t) => tokio::time::timeout(t, body)
+                .await
+                .map_err(|_| Late::Timeout),
+            None => Ok(body.await),
         }
     }
+
+    /// An attempt that also fails once its heartbeat timeout passed since its last heartbeat.
+    async fn watched(
+        &self,
+        mut body: BoxFuture<'static, Outcome>,
+        timeout: Option<Duration>,
+        heartbeat: Heartbeat,
+    ) -> Result<Outcome, Late> {
+        // § vvp37rp40@a7msa
+        let deadline = timeout.map(|t| self.elapsed() + ms(t));
+        loop {
+            let at = heartbeat.silent_at().min(deadline.unwrap_or(i64::MAX));
+            let left = Duration::from_millis(u64::try_from(at - self.elapsed()).unwrap_or(0));
+            if let Ok(outcome) = tokio::time::timeout(left, &mut body).await {
+                return Ok(outcome);
+            }
+            if let Some(late) = heartbeat.late(self.elapsed(), deadline) {
+                return Err(late);
+            }
+        }
+    }
+}
+
+/// Why an attempt ended before its body returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Late {
+    /// Past its timeout.
+    Timeout,
+    /// Past its heartbeat timeout since its last heartbeat, or since it started.
+    Silent,
+}
+
+/// An attempt's heartbeat timeout, and the clock's `elapsed` at its last heartbeat.
+pub(crate) struct Heartbeat {
+    pub(crate) timeout: Duration,
+    pub(crate) beat: Arc<AtomicI64>,
+}
+
+impl Heartbeat {
+    /// When the attempt is silent for too long, unless it beats again before.
+    pub(crate) fn silent_at(&self) -> i64 {
+        self.beat.load(Ordering::SeqCst) + ms(self.timeout)
+    }
+
+    /// Whether an attempt of `deadline` is late at `now`, its timeout first.
+    pub(crate) fn late(&self, now: i64, deadline: Option<i64>) -> Option<Late> {
+        if deadline.is_some_and(|d| now >= d) {
+            return Some(Late::Timeout);
+        }
+        (now >= self.silent_at()).then_some(Late::Silent)
+    }
+}
+
+fn ms(d: Duration) -> i64 {
+    i64::try_from(d.as_millis()).unwrap_or(i64::MAX)
 }

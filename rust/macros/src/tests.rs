@@ -109,7 +109,7 @@ fn a_step_is_an_async_fn_of_values_or_shared_references() {
                 }
             ),
         ),
-        "expected `name`, `retry`, `timeout` or `undo`",
+        "expected `name`, `retry`, `timeout`, `heartbeat_timeout` or `undo`",
     );
 }
 

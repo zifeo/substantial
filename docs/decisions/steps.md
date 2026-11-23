@@ -4,7 +4,7 @@ A step is a function whose value is recorded (I-6). Everything that touches the 
 
 ## Identity and key
 
-The core identifies a step by its name and its occurrence, the count of earlier calls of that name in the run ([twravbm6m](core/history.md#twravbm6m)). So a step's name is permanent: "renaming a step function breaks the runs in flight, so pin the old name with `name=` before a refactor" (I-2), and "two step functions with the same name in different modules collide: give one a `name=`" (I-6).
+The core identifies a step by its name and its occurrence, the count of earlier calls of that name in the run ([rbwstdetg](core/history.md#rbwstdetg)). So a step's name is permanent: "renaming a step function breaks the runs in flight, so pin the old name with `name=` before a refactor" (I-2), and "two step functions with the same name in different modules collide: give one a `name=`" (I-6).
 
 **§ <a id="wv67rmrjm">wv67rmrjm</a> A step's occurrence is taken when the code calls the step.**
 
@@ -32,15 +32,29 @@ A step without `retry` runs one attempt, and its first error fails the step (I-2
 
 That every field of `Retry` is required, and what each means, is in the reference (I-6).
 
+A step with many attempts, each with a timeout, may retry for hours past what its caller waits for. A deadline bounds the retries as a whole, schedule to close.
+
+**§ <a id="s0a5x1qed">s0a5x1qed</a> No attempt of a step with a retry deadline starts once that long passed since its first attempt started, and an attempt that runs then is cut at the deadline.**
+
+- (a) A deadline is a positive duration, and any other raises `InvalidArgument`.
+
 A step's value over the size cap fails the step at once, as "another attempt would return it again" (`rust/src/worker/replay.rs`), and a value that does not encode as JSON fails it at once too, with cause `Json` ([values](values.md#what-json-cannot-hold)).
 
 ## Timeouts
 
-A worker renews its claim while it lives, not while a step makes progress, "so a hung step would keep the run on that worker" (I-18). So every attempt has a timeout, the worker's `step_timeout` of [the presets](workers.md#presets) unless something sets one. An undo has its step's timeout ([a5c1mfs8d.a](sagas.md#a5c1mfs8d)).
+A worker renews its lease while it lives, not while a step makes progress, "so a hung step would keep the run on that worker" (I-18). So every attempt has a timeout, the worker's `step_timeout` of [the presets](workers.md#presets) unless something sets one. An undo has its step's timeout ([a5c1mfs8d.a](sagas.md#a5c1mfs8d)).
 
 **§ <a id="aym52h8ch">aym52h8ch</a> Every step attempt has a timeout: the step's own, else its workflow's `step_timeout`, else the worker's, and an attempt past it fails with a retryable `StepTimeout`.**
 
 A timed-out attempt runs again only as the next attempt of a step with `retry`: without one, the step fails with `StepFailed`, its cause `StepTimeout` (I-6, I-20).
+
+A step that may run for long, an export or a batch, needs a timeout past its slowest attempt, so a hung attempt holds its run that long. A heartbeat lets a step say it is alive: an attempt that stops beating fails early, while a slow one that beats goes on to its timeout. A step that never beats would fail, so no step has a heartbeat timeout unless its code sets one (I-6). The worker keeps the time of the last heartbeat and fails the attempt itself, as it does past a timeout, so nothing of it is recorded but the attempt's failure.
+
+**§ <a id="vvp37rp40">vvp37rp40</a> An attempt of a step with a heartbeat timeout, its own or else its workflow's, fails with a retryable `StepTimeout` once that long passed without a heartbeat, counted from its start, and a step has none unless set.**
+
+- (a) `s.heartbeat()` called inside a step attempt restarts the attempt's heartbeat timeout, and raises outside a step as `s.step_key()` does.
+
+- (b) An undo has its step's heartbeat timeout.
 
 ## Abandoned attempts
 
@@ -54,7 +68,7 @@ An attempt is abandoned past its timeout, past its worker's `shutdown_grace` ([d
 
 - (c) A TypeScript body that does not pass on `s.stepSignal()` runs to its end, its outcome dropped.
 
-A step attempt whose outcome was not committed, because its worker crashed, paused past its claim or shut down past its grace, runs again on the worker that takes the run, after its effect may already have happened (I-1, [Integration](../integration.md#what-start-and-send-guarantee), "Effects once").
+A step attempt whose outcome was not committed, because its worker crashed, paused past its lease or shut down past its grace, runs again on the worker that takes the run, after its effect may already have happened (I-1, [Integration](../integration.md#what-start-and-send-guarantee), "Effects once").
 
 A cancel is not an abandonment: "a step attempt already running is not interrupted: its outcome is recorded and returned" (I-13, [vmk2ydwta.d](core/lifecycle.md#vmk2ydwta)).
 

@@ -30,36 +30,49 @@ export class Replays {
     this.#clock = clock;
   }
 
-  /** Starts the replay of `runId`, which serves a due entry of `dueAt` if any. */
-  spawn(runId: string, input: run.RunInput, dueAt: layout.Time | undefined): void {
+  /** Starts the replay of `chain`, whose current run is `input.run`, which logs and observers
+   * name; it serves a due entry of `dueAt` if any. */
+  spawn(chain: string, input: run.RunInput, dueAt: layout.Time | undefined): void {
     const start = input.start;
     // § one pjrbw31h4@32nvw
     const workflow = start && this.#workflows.get(start.workflow, start.version);
     if (workflow === undefined) {
-      console.error(`substantial: replay of ${runId}: this worker does not serve its workflow`);
-      this.#events.push({ kind: "ended", run: runId, end: dropped() });
+      console.error(`substantial: replay of ${input.run}: this worker does not serve its workflow`);
+      this.#events.push({ kind: "ended", chain, end: dropped() });
       return;
     }
-    if (this.running.has(runId)) console.error(`substantial: a second replay of ${runId}`);
+    const second = this.running.get(chain);
+    if (second !== undefined) {
+      console.error(`substantial: a second replay of chain ${chain}, of run ${input.run}`);
+      second.stop();
+    }
     const channel = new Channel();
-    this.running.set(runId, channel);
+    this.running.set(chain, channel);
     const emit = (event: ReplayEvent) => this.#events.push(event);
     const clock = this.#clock;
     clock.spawn(
-      () => replay(this.#core, workflow, input, dueAt, clock, emit, channel, this.#host),
-      `${REPLAY}${runId}`,
+      () => replay(this.#core, workflow, chain, input, dueAt, clock, emit, channel, this.#host),
+      `${REPLAY}${input.run}`,
     );
   }
 
   committed(c: agent.AgentCommand_Committed): void {
     const channel = this.running.get(c.run);
-    if (channel === undefined) console.warn(`substantial: committed for ${c.run}, not in replay`);
+    if (channel === undefined)
+      console.warn(`substantial: committed for chain ${c.run}, not in replay`);
     channel?.committed(c);
   }
 
-  stop(runId: string): void {
-    const channel = this.running.get(runId);
-    if (channel === undefined) console.warn(`substantial: stop for ${runId}, not in replay`);
+  claimed(chain: string): void {
+    const channel = this.running.get(chain);
+    if (channel === undefined)
+      console.warn(`substantial: claimed for chain ${chain}, not in replay`);
+    channel?.claimed();
+  }
+
+  stop(chain: string): void {
+    const channel = this.running.get(chain);
+    if (channel === undefined) console.warn(`substantial: stop for chain ${chain}, not in replay`);
     channel?.stop();
   }
 

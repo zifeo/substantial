@@ -19,7 +19,7 @@ import {
 } from "../src/mod.ts";
 import { jsonValue, layout, MAX_VALUE } from "../src/proto.ts";
 import { errorFromFailure } from "../src/scheduler.ts";
-import { LONG, script, token } from "./helpers.ts";
+import { blockedBy, LONG, script, token } from "./helpers.ts";
 
 class CardDeclined extends Permanent {}
 
@@ -122,10 +122,10 @@ test("a failed run holds the cause of the step that failed it", async () => {
     message: "card declined",
     retryable: false,
   });
-  const refused = await (await sub.start(refusing)).result({ timeout: LONG }).catch((e) => e);
-  assert.ok(refused instanceof RunFailed, String(refused));
-  assert.equal(refused.error.type, "CardDeclined");
-  assert.equal(refused.cause, undefined);
+  // The code's own error blocks the run rather than failing it.
+  const refused = await blockedBy(sub, refusing, await sub.start(refusing));
+  assert.equal(refused.type, "CardDeclined");
+  assert.equal(refused.message, "not today");
   assert.deepEqual(await (await sub.start(ordering)).result({ timeout: LONG }), [
     "StepFailed",
     "CardDeclined",

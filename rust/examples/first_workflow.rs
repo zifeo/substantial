@@ -9,7 +9,7 @@
 
 use substantial as s;
 
-#[s::step(retry = s::Retry { max_attempts: 6, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0 })]
+#[s::step(retry = s::Retry { max_attempts: 6, initial: s::seconds(1), max: s::minutes(1), multiplier: 2.0, deadline: None })]
 async fn roulette() -> anyhow::Result<f64> {
     println!("step roulette");
     if rand::random::<f64>() < 1.0 / 6.0 {

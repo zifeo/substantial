@@ -9,11 +9,15 @@ from substantial.errors import ConfigError
 from substantial.stores.attempts import measured
 from substantial.stores.base import (
     Capabilities,
+    Cas,
     Create,
+    Created,
     Listing,
     ListWait,
+    Object,
     Store,
     StoreFailure,
+    Written,
 )
 from substantial.stores.credentials import Credentials, CredentialsArg, Password, refuse
 from substantial.stores.fs import FsStore
@@ -24,17 +28,21 @@ from substantial.stores.s3 import S3Location
 
 __all__ = [
     "Capabilities",
+    "Cas",
     "Create",
+    "Created",
     "Credentials",
     "FsStore",
     "ListWait",
     "Listing",
     "MemoryStore",
+    "Object",
     "Password",
     "RedisLocation",
     "S3Location",
     "Store",
     "StoreFailure",
+    "Written",
     "open_store",
     "perform",
 ]
@@ -53,7 +61,7 @@ def _namespace(url: str, rest: str) -> str:
 
 def open_store(url: str, credentials: CredentialsArg) -> Store:
     """Opens the adapter a URL names (I-16); the scheme alone picks it, nothing is detected."""
-    # § e9ern38bz@3wfkx
+    # § e9ern38bz@4sb7t
     if not isinstance(url, str):
         raise ConfigError(f"a store is a URL, not {url!r}")
     if url.startswith("memory://"):
@@ -93,7 +101,7 @@ def open_store(url: str, credentials: CredentialsArg) -> Store:
     for scheme in ("sqlite:", "postgres://", "mysql://"):
         if url.startswith(scheme):
             raise ConfigError(f"{scheme} stores are not available in this host yet; {_SUPPORTED}")
-    # § one e9ern38bz.a@ntpkv
+    # § one e9ern38bz.a@3rh9b
     raise ConfigError(f"unknown scheme in {url!r}; {_SUPPORTED}")
 
 
@@ -108,12 +116,24 @@ async def _perform(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
     empty = boundary.Empty()
     which = op.WhichOneof("op")
     if which == "create":
-        if await store.create(op.create.key, op.create.bytes) == "created":
-            return boundary.OpResult(created=empty)
-        return boundary.OpResult(exists=empty)
+        c = op.create
+        expiry = c.expiry_days if c.HasField("expiry_days") else None
+        created = await store.create(c.key, c.bytes, expiry=expiry)
+        if created == "exists":
+            return boundary.OpResult(exists=empty)
+        return boundary.OpResult(created=boundary.OpResult.Written(etag=created.etag))
+    if which == "cas":
+        c = op.cas
+        expiry = c.expiry_days if c.HasField("expiry_days") else None
+        written = await store.cas(c.key, c.bytes, c.etag, expiry=expiry)
+        if written == "mismatch":
+            return boundary.OpResult(mismatch=empty)
+        return boundary.OpResult(written=boundary.OpResult.Written(etag=written.etag))
     if which == "get":
-        data = await store.get(op.get)
-        return boundary.OpResult(missing=empty) if data is None else boundary.OpResult(bytes=data)
+        found = await store.get(op.get)
+        if found is None:
+            return boundary.OpResult(missing=empty)
+        return boundary.OpResult(object=boundary.OpResult.Object(bytes=found.data, etag=found.etag))
     if which == "list":
         ls = op.list
         wait = None
@@ -142,7 +162,7 @@ async def perform(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
 
 
 async def _perform_once(store: Store, op: boundary.StoreOp) -> boundary.OpResult:
-    # § pgv9r1j12.b@af9x1
+    # § pgv9r1j12.b@jq4kv
     try:
         return await _perform(store, op)
     except StoreFailure as e:

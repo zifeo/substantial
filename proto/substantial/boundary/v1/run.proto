@@ -16,6 +16,16 @@ message RunSettings {
   // The store's prices: the money of each store request counted for a run, by the agent and by the
   // run machine (a workflow's send's reads). Absent, the requests are counted and no money is.
   Prices prices = 6;
+  // The run's limits, each required and positive: its history's encoded bytes and events, the
+  // inbox messages one replay consumes, and the message ids a continuation carries. Passing one
+  // ends the run failed with HistoryTooLarge.
+  uint64 max_history_bytes = 7;
+  uint64 max_history_events = 8;
+  uint64 max_replay_inbox = 9;
+  uint64 max_seen = 10;
+  // 1 to 100: a commit that takes a run past this share of one of its limits says so
+  // (Commit.near_limits), once.
+  uint32 history_warn_percent = 11;
 }
 
 // One ISO 4217 currency and integer nano-units per 1,000 requests of each kind, each at most
@@ -26,17 +36,20 @@ message Prices {
   uint64 get = 3;
   uint64 list = 4;
   uint64 delete = 5;
+  // Required with the others: a cas is a write as a create is (an S3 PUT).
+  uint64 cas = 6;
 }
 
-// How long a run is kept after its chain's last run ends, then collected: at least the agent's
-// retention_min_ms.
+// How many whole days an ended run is kept, 1 to 36,500, counted from its own end whatever its
+// children do, then removed by its expiry.
 message Retention {
-  reserved 2;
-  reserved "forever";
-  uint64 ms = 1;
+  reserved 1, 2;
+  reserved "ms", "forever";
+  uint32 days = 3;
 }
 
 message InboxMessage {
+  // The message's name in its chain, <ord>-<id>, which its consumption records.
   string key = 1;
   layout.v1.Message body = 2;
 }
@@ -45,11 +58,12 @@ message InboxMessage {
 message RunInput {
   string run = 1;
   layout.v1.Start start = 2;
-  // Every recorded event: the snapshot's, then the segments' after it.
+  // Every recorded event: the resumed ones of a retry or a reset, then the run's segments'.
   repeated layout.v1.Event history = 3;
   uint64 history_bytes = 4;
   uint64 next_n = 5;
-  // The messages start.carried names, in that order, then the inbox sorted by key.
+  // The messages the head holds, those start.carried names first, then the messages served and
+  // listed, the whole sorted by key after the carried ones.
   repeated InboxMessage inbox = 6;
   layout.v1.Time now = 7;
   // 32 bytes, the seed of the run's ChaCha20 generator, which draws random and uuid live only.
@@ -63,6 +77,12 @@ message RunInput {
   // The chain's cost as the agent knows it at the open: the last segment's, or the start's, and the
   // requests of this wakeup so far.
   layout.v1.Cost cost = 13;
+  // The highest version of the run's workflow the worker serves, absent if it serves none: where a
+  // continuation with highest goes.
+  optional uint32 highest_version = 14;
+  // The agent holds no lease of the run: the machine answers Next.claim before the first step
+  // attempt it starts, and a replay that starts none runs without one.
+  bool claim = 15;
 }
 
 message RetryPolicy {
@@ -70,6 +90,9 @@ message RetryPolicy {
   uint64 initial_ms = 2;
   uint64 max_ms = 3;
   double multiplier = 4;
+  // Retry(deadline=), schedule to close: from the start of the step's first attempt, no attempt
+  // starts past it, and each runs at most until it; absent, none.
+  optional uint64 deadline_ms = 5;
 }
 
 message StepOptions {
@@ -88,12 +111,21 @@ message End {
     layout.v1.Value state = 3;
     // The workflow's locals, which no host captures.
     reserved 4;
-    // The version of workflow, given only with it; absent, its runs without a version. Continuing
-    // as itself keeps the run's version.
+    // The version of workflow, given only with it; absent, its runs without a version. Naming the
+    // run's own workflow with a version continues into that version; with neither, the run
+    // continues as itself, its version kept.
     optional uint32 version = 5;
+    // Without workflow: continue as itself into the highest version of its workflow the worker
+    // serves (RunInput.highest_version), its own version if the worker serves none.
+    bool highest = 6;
   }
   oneof end {
     layout.v1.Completed completed = 1;
+    // Only with an error the code let through that is the recorded outcome of a Substantial call:
+    // Fail, StepFailed, BudgetExceeded, RolledBack, UndoFailed, HistoryTooLarge, RunFailed,
+    // WaitTimeout, RunNotFound or RunEnded. Any other error, NonDeterminism and the ValueTooLarge of a
+    // refused call included, and a result that does not encode as JSON, blocks the run instead
+    // (ReplayEnd.blocked).
     layout.v1.Failed failed = 2;
     layout.v1.Cancelled cancelled = 3;
     Continued continued = 4;
@@ -118,6 +150,9 @@ message Call {
     optional string id = 4;
     // The child's budget: the one c.start was given, else the child workflow's; absent, none.
     layout.v1.Budget budget = 5;
+    // c.start(..., abandon=True): the child goes on when this run ends; by default the run's end,
+    // completed, failed or cancelled, cancels it.
+    bool abandon = 6;
   }
   message Send {
     string run = 1;
@@ -135,6 +170,11 @@ message Call {
   message ChainResult {
     string chain = 1;
     optional uint64 timeout_ms = 2;
+  }
+  // With highest, also true when the worker serves a version of the run's workflow higher than the
+  // run's (RunInput.highest_version).
+  message ShouldContinue {
+    bool highest = 1;
   }
   message SagaEnd {
     uint64 saga = 1;
@@ -160,12 +200,14 @@ message Call {
     SagaEnd saga_end = 15;
     Empty rollback = 16;
     layout.v1.Value iterate = 17;
-    Empty should_continue_as_new = 18;
+    ShouldContinue should_continue_as_new = 18;
     End end = 19;
     // The chain's cost so far, recorded as now is.
     Empty cost = 20;
     Cancel cancel = 21;
     ChainResult chain_result = 22;
+    // c.patched(id): answered with a JSON boolean, recorded as a patched event when live.
+    string patched = 23;
   }
 }
 
@@ -231,11 +273,23 @@ enum CommitKind {
   COMMIT_KIND_END = 3;
 }
 
+// A limit of the run (RunSettings) and what the run uses of it.
+message LimitUse {
+  // history_bytes, history_events, replay_inbox or seen.
+  string limit = 1;
+  uint64 used = 2;
+  uint64 max = 3;
+}
+
 message Commit {
   CommitKind kind = 1;
   layout.v1.Segment segment = 2;
-  // Inbox keys this commit consumed or dropped as duplicates, deleted once it is durable.
+  // Message keys this commit consumed or dropped as duplicates: their due entries are deleted once
+  // it is durable.
   repeated string consumed = 3;
+  // The limits this commit takes the run past history_warn_percent of, which no earlier commit of
+  // the run passed: the host warns and tells its observer.
+  repeated LimitUse near_limits = 4;
 }
 
 // Steps are in flight; until is the earliest timer or retry, when the host calls next again anyway.
@@ -273,6 +327,16 @@ message Next {
     // performs it on the namespace's store and answers RunRequest.stored before the next `next`.
     // A store that fails after the adapter's retries drops the replay.
     StoreOp store = 9;
+    // The code diverged from the recorded history (NonDeterminism), or ended with a result, a
+    // continuation's input or state past the value limit (ValueTooLarge): nothing is recorded. The
+    // host stops the code and its attempts, as for a dropped replay, and reports the replay blocked
+    // with this error (ReplayEnd.blocked).
+    layout.v1.Failure blocked = 10;
+    // A step attempt is about to start and the agent holds no claim: the host sends
+    // AgentRequest.claim with the run and waits. At AgentCommand.claimed it answers
+    // RunRequest.claimed, then asks `next` again; at AgentCommand.stop_replay it drops the replay,
+    // which started no attempt, and reports it dropped.
+    Empty claim = 11;
   }
   // As Called.live.
   bool live = 8;
@@ -306,6 +370,8 @@ message RunRequest {
     // The answer to Next.store: bytes or missing for a get, a listing for a list, created or exists
     // for a create; never failed.
     OpResult stored = 6;
+    // The answer to Next.claim once the agent sent AgentCommand.claimed.
+    Empty claimed = 7;
   }
 }
 

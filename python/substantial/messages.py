@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from substantial._proto import run
-from substantial.errors import Failed, Failure, InvalidArgument
+from substantial.errors import Blocking, Failure, InvalidArgument
 from substantial.names import check_name
 from substantial.scheduler import Shared, decode_json
 
@@ -55,7 +55,7 @@ def _parameter(fn: Callable[..., Any]) -> tuple[type, ...] | None:
     ]
     if len(params) != 1:
         raise InvalidArgument(f"a handler takes one argument, the message's value: {fn!r}")
-    # § one aeby9bgqd.b@53hc1
+    # § one aeby9bgqd.b@fyjk7
     if inspect.iscoroutinefunction(fn):
         raise InvalidArgument(f"a handler is a plain function, not async: {fn!r}")
     return _accepted(params[0].annotation, repr(fn))
@@ -69,16 +69,16 @@ def _is(value: Any, accepted: tuple[type, ...]) -> bool:
     return isinstance(value, accepted)
 
 
-def _decode_failure(m: run.Message, why: object) -> Failed:
-    return Failed(Failure("MessageDecode", f"message {m.name!r} {m.id}: {why}"))
+def _decode_failure(m: run.Message, why: object) -> Blocking:
+    return Blocking(Failure("MessageDecode", f"message {m.name!r} {m.id}: {why}"))
 
 
 def _handler(fn: Callable[[Any], object]) -> Callable[[run.Message], None]:
-    """A handler of messages calling `fn` with each value; a failure of either fails the run."""
+    """A handler of messages calling `fn` with each value; a failure of either blocks the run."""
     accepted = _parameter(fn)
 
     def handle(m: run.Message) -> None:
-        # § aeby9bgqd.a@6n531
+        # § aeby9bgqd.d@th7ma
         try:
             value = decode_json(m.value if m.HasField("value") else None)
         except ValueError as e:
@@ -90,12 +90,12 @@ def _handler(fn: Callable[[Any], object]) -> Callable[[run.Message], None]:
             returned = fn(value)
         except Exception as e:
             raise _decode_failure(m, f"{type(e).__name__}: {e}") from None
-        # § aeby9bgqd.c@snhyn
+        # § aeby9bgqd.e@9mq3m
         if inspect.isawaitable(returned):
             if inspect.iscoroutine(returned):
                 returned.close()
             raise _decode_failure(m, "a handler returned an awaitable")
-        # § end aeby9bgqd.c
+        # § end aeby9bgqd.e
 
     return handle
 

@@ -6,27 +6,6 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// The hint a divergence from the history carries; the core records the failure without it.
 pub(crate) const NEW_VERSION: &str = "an incompatible change needs a new version (version=)";
 
-fn rfc3339(t: &chrono::DateTime<chrono::Utc>) -> String {
-    t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-fn not_found_until(until: &Option<chrono::DateTime<chrono::Utc>>) -> String {
-    match until {
-        Some(until) => format!(
-            ": it was collected, and its id is taken until {}",
-            rfc3339(until)
-        ),
-        None => String::new(),
-    }
-}
-
-fn taken_by(until: &Option<chrono::DateTime<chrono::Utc>>) -> String {
-    match until {
-        Some(until) => format!("a run collected, until {}", rfc3339(until)),
-        None => "another workflow, version or input".into(),
-    }
-}
-
 fn version_hint(error: &Failure) -> String {
     if error.kind == "NonDeterminism" {
         format!("; {NEW_VERSION}")
@@ -86,7 +65,7 @@ impl From<Failure> for layout::Failure {
     }
 }
 
-// § rabbgjpb2@n6h6h
+// § rabbgjpb2@sw2zy
 /// The errors of I-20 the host raises so far, and the host's own failures around the core.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -95,11 +74,23 @@ pub enum Error {
     /// that every `Result` stays small.
     #[error("{}", .error.message)]
     StepFailed { error: Failure, cause: Box<Failure> },
-    /// A call resolved with an error other than a step's, or a workflow's own failure:
-    /// [`Error::failed`], or an `anyhow::Error` through `?`.
+    /// A call resolved with an error other than a step's: returned by the workflow, it fails the
+    /// run with it.
     #[error("{0}")]
     Failed(Failure),
-    // § b7wsejcvb@js60p
+    /// A failure the workflow raises on purpose, [`Error::fail`]: the run ends failed with it.
+    #[error("{0}")]
+    Fail(Failure),
+    /// An error of the workflow's own code, such as an `anyhow::Error` through `?`, of type
+    /// `Error`: returned by the workflow, it blocks the run, recording nothing, until a fix of the
+    /// code is deployed.
+    #[error("{0}")]
+    Code(Failure),
+    /// The run passed a limit of its history: the core ended it failed with `HistoryTooLarge`,
+    /// whatever the code does next.
+    #[error("history too large: {0}")]
+    HistoryTooLarge(String),
+    // § b7wsejcvb@pt2j8
     #[error("cancelled: {0}")]
     Cancelled(String),
     /// The undos of a rollback ran; the run ends failed with this reason.
@@ -122,20 +113,11 @@ pub enum Error {
     /// A name or id outside the naming rules (I-17), or an input that is not an object.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
-    /// `collected` when the chain's first run was collected, its id taken `until` then.
-    #[error("no chain {chain}{}", not_found_until(.until))]
-    RunNotFound {
-        chain: String,
-        collected: bool,
-        until: Option<chrono::DateTime<chrono::Utc>>,
-    },
-    /// `collected` when the id is taken by a run collected, `until` then.
-    #[error("id {id} is taken by {}", taken_by(.until))]
-    RunExists {
-        id: String,
-        collected: bool,
-        until: Option<chrono::DateTime<chrono::Utc>>,
-    },
+    /// No such chain: it never existed, or it ended and its retention passed.
+    #[error("no chain {chain}")]
+    RunNotFound { chain: String },
+    #[error("id {id} is taken by another workflow, version or input")]
+    RunExists { id: String },
     /// The run ended failed or cancelled. `cause` is the `StepFailed` cause of the step that
     /// failed it, else `None`; both boxed, so that every `Result` stays small.
     #[error("run {run} {status}: {error}{}", version_hint(.error))]
@@ -209,6 +191,9 @@ impl Error {
                 cause: cause.clone(),
             },
             Error::Failed(f) => Error::Failed(f.clone()),
+            Error::Fail(f) => Error::Fail(f.clone()),
+            Error::Code(m) => Error::Code(m.clone()),
+            Error::HistoryTooLarge(m) => Error::HistoryTooLarge(m.clone()),
             Error::Cancelled(r) => Error::Cancelled(r.clone()),
             Error::RolledBack(r) => Error::RolledBack(r.clone()),
             Error::UndoFailed { step, error } => Error::UndoFailed {
@@ -220,6 +205,7 @@ impl Error {
                 version: c.version,
                 input: c.input.clone(),
                 state: c.state.clone(),
+                highest: c.highest,
             }),
             Error::NonDeterminism(m) => Error::NonDeterminism(m.clone()),
             Error::RunEnded { run, status } => Error::RunEnded {
@@ -227,24 +213,10 @@ impl Error {
                 status: *status,
             },
             Error::InvalidArgument(m) => Error::InvalidArgument(m.clone()),
-            Error::RunNotFound {
-                chain,
-                collected,
-                until,
-            } => Error::RunNotFound {
+            Error::RunNotFound { chain } => Error::RunNotFound {
                 chain: chain.clone(),
-                collected: *collected,
-                until: *until,
             },
-            Error::RunExists {
-                id,
-                collected,
-                until,
-            } => Error::RunExists {
-                id: id.clone(),
-                collected: *collected,
-                until: *until,
-            },
+            Error::RunExists { id } => Error::RunExists { id: id.clone() },
             Error::RunFailed {
                 run,
                 status,
@@ -285,9 +257,10 @@ impl Error {
         }
     }
 
-    /// A failure of the workflow's own: the run ends failed with `kind` as its error type.
-    pub fn failed(kind: impl Into<String>, message: impl Into<String>) -> Self {
-        Error::Failed(Failure {
+    /// A failure the workflow raises on purpose: returned, the run ends failed with `kind` as its
+    /// error type.
+    pub fn fail(kind: impl Into<String>, message: impl Into<String>) -> Self {
+        Error::Fail(Failure {
             kind: kind.into(),
             message: message.into(),
             retryable: false,
@@ -297,13 +270,18 @@ impl Error {
 }
 
 /// An `anyhow::Error` holding an [`Error`] gives it back, so that control flow survives `?`;
-/// any other fails the run as `Error` with its message and causes.
+/// any other is an error of the code, of type `Error` with its message and causes.
 impl From<anyhow::Error> for Error {
     fn from(e: anyhow::Error) -> Self {
-        // § r3sd261h4.c@346pf
+        // § r3sd261h4.c@w067t
         match e.downcast::<Error>() {
             Ok(e) => e,
-            Err(e) => Error::failed("Error", format!("{e:#}")),
+            Err(e) => Error::Code(Failure {
+                kind: "Error".into(),
+                message: format!("{e:#}"),
+                retryable: false,
+                details: None,
+            }),
         }
     }
 }
@@ -330,6 +308,8 @@ pub struct Continuation {
     pub(crate) version: Option<u32>,
     pub(crate) input: Vec<u8>,
     pub(crate) state: Option<Vec<u8>>,
+    /// Without `workflow`: into the highest version of the run's workflow the worker serves.
+    pub(crate) highest: bool,
 }
 
 /// `<what> is <size> bytes, over the limit of <limit> bytes`, as the core refuses a value.
@@ -351,19 +331,7 @@ impl From<layout::Failure> for Error {
             "RunFailed" => run_failed(f),
             "StepFailed" => step_failed(f),
             "RunNotFound" => match details::<RunDetails>(&f) {
-                Ok(d) => match d.until.as_deref().map(chrono::DateTime::parse_from_rfc3339) {
-                    None => Error::RunNotFound {
-                        chain: d.run,
-                        collected: false,
-                        until: None,
-                    },
-                    Some(Ok(until)) => Error::RunNotFound {
-                        chain: d.run,
-                        collected: true,
-                        until: Some(until.to_utc()),
-                    },
-                    Some(Err(e)) => Error::Protocol(format!("RunNotFound details: {e}")),
-                },
+                Ok(d) => Error::RunNotFound { chain: d.run },
                 Err(e) => e,
             },
             "RunEnded" => match details::<EndedDetails>(&f) {
@@ -404,12 +372,11 @@ fn details<T: serde::de::DeserializeOwned>(f: &layout::Failure) -> Result<T> {
     }
 }
 
-/// The details of a workflow's send refused: the chain it sent to, and until when its id is taken
-/// when it was collected.
+/// The details of a workflow's send refused: the chain it sent to.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RunDetails {
     run: String,
-    until: Option<String>,
 }
 
 /// The details of a `BudgetExceeded`, its amounts as decimal strings.

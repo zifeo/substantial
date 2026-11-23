@@ -6,7 +6,7 @@ use std::time::Duration;
 use bytes::Bytes;
 
 use super::attempts::sent;
-use super::{Create, StoreFailure};
+use super::{Cas, Create, Object, StoreFailure};
 use crate::settings::StoreRetry;
 
 /// How one attempt of an operation failed.
@@ -43,7 +43,7 @@ where
 
     /// Waits before the next attempt, or fails once every attempt is spent.
     async fn next(&mut self, error: &str, sleep: bool) -> Result<(), StoreFailure> {
-        // § zemxe46k3@md5fc
+        // § zemxe46k3@j75d4
         if self.attempt >= self.policy.attempts {
             let unit = if self.attempt == 1 {
                 "attempt"
@@ -77,7 +77,7 @@ where
     S: FnMut(Duration) -> SF,
     SF: Future<Output = ()>,
 {
-    // § zemxe46k3@q4wf5
+    // § zemxe46k3@hcjty
     let mut backoff = Backoff::new(policy, sleep);
     loop {
         sent();
@@ -102,11 +102,11 @@ where
     C: FnMut() -> CF,
     CF: Future<Output = Result<Create, Fault>>,
     G: FnMut() -> GF,
-    GF: Future<Output = Result<Option<Bytes>, Fault>>,
+    GF: Future<Output = Result<Option<Object>, Fault>>,
     S: FnMut(Duration) -> SF,
     SF: Future<Output = ()>,
 {
-    // § pnvmmdmz4@z70rt
+    // § pnvmmdmz4@jczdt
     let mut backoff = Backoff::new(policy, sleep);
     let mut ambiguous = false;
     // An earlier attempt left unanswered may have landed after the get, so a later `Exists` is
@@ -116,7 +116,9 @@ where
         if ambiguous {
             sent();
             match get().await {
-                Ok(Some(stored)) if stored == *bytes => return Ok(Create::Created),
+                Ok(Some(stored)) if stored.bytes == *bytes => {
+                    return Ok(Create::Created { etag: stored.etag });
+                }
                 Ok(Some(_)) => return Ok(Create::Exists),
                 Ok(None) => ambiguous = false,
                 Err(Fault::Permanent(e)) => return Err(StoreFailure::new(e)),
@@ -129,10 +131,69 @@ where
         sent();
         match create().await {
             Ok(Create::Exists) if was_ambiguous => {
-                // § pnvmmdmz4.a@hfxgt
+                // § pnvmmdmz4.a@vqgkq
                 ambiguous = true;
                 backoff
                     .next("exists after an ambiguous create", false)
+                    .await?;
+            }
+            Ok(outcome) => return Ok(outcome),
+            Err(Fault::Permanent(e)) => return Err(StoreFailure::new(e)),
+            Err(Fault::Transient(e)) => backoff.next(&e, true).await?,
+            Err(Fault::Ambiguous(e)) => {
+                (ambiguous, was_ambiguous) = (true, true);
+                backoff.next(&e, false).await?;
+            }
+        }
+    }
+}
+
+/// A compare-and-set that never assumes it won or lost: an ambiguous outcome is followed by a
+/// `get`, the same bytes meaning `Written`, the ETag named still current sending it again, and
+/// anything else `Mismatch`.
+pub(crate) async fn cas<C, CF, G, GF, S, SF>(
+    policy: StoreRetry,
+    bytes: &Bytes,
+    etag: &str,
+    mut cas: C,
+    mut get: G,
+    sleep: S,
+) -> Result<Cas, StoreFailure>
+where
+    C: FnMut() -> CF,
+    CF: Future<Output = Result<Cas, Fault>>,
+    G: FnMut() -> GF,
+    GF: Future<Output = Result<Option<Object>, Fault>>,
+    S: FnMut(Duration) -> SF,
+    SF: Future<Output = ()>,
+{
+    // § dqf0ythhp@fxgff
+    let mut backoff = Backoff::new(policy, sleep);
+    let mut ambiguous = false;
+    let mut was_ambiguous = false;
+    loop {
+        if ambiguous {
+            sent();
+            match get().await {
+                Ok(Some(stored)) if stored.bytes == *bytes => {
+                    return Ok(Cas::Written { etag: stored.etag });
+                }
+                Ok(Some(stored)) if stored.etag == etag => ambiguous = false,
+                Ok(_) => return Ok(Cas::Mismatch),
+                Err(Fault::Permanent(e)) => return Err(StoreFailure::new(e)),
+                Err(Fault::Transient(e) | Fault::Ambiguous(e)) => {
+                    backoff.next(&e, true).await?;
+                    continue;
+                }
+            }
+        }
+        sent();
+        match cas().await {
+            Ok(Cas::Mismatch) if was_ambiguous => {
+                // § dqf0ythhp.a@phkxm
+                ambiguous = true;
+                backoff
+                    .next("mismatch after an ambiguous compare-and-set", false)
                     .await?;
             }
             Ok(outcome) => return Ok(outcome),
@@ -204,7 +265,7 @@ mod tests {
 
     async fn resolve(
         creates: Vec<Result<Create, Fault>>,
-        gets: Vec<Result<Option<Bytes>, Fault>>,
+        gets: Vec<Result<Option<Object>, Fault>>,
     ) -> Result<Create, StoreFailure> {
         let (creates, gets) = (script(creates), script(gets));
         let mine = Bytes::from_static(b"mine");
@@ -229,34 +290,87 @@ mod tests {
         use crate::store::attempts::measured;
         let steps = script(vec![Err(Fault::Transient("a".into())), Ok(7)]);
         let op = || async { steps.lock().unwrap().pop_front().unwrap() };
-        // § zemxe46k3.a@hs48v
+        // § zemxe46k3.a@6j9ds
         let (out, sent) = measured(with_retry(POLICY, op, tokio::time::sleep)).await;
         assert_eq!((out, sent), (Ok(7), 2));
         let lost = vec![Err(Fault::Ambiguous("timeout".into()))];
-        let same = vec![Ok(Some(Bytes::from_static(b"mine")))];
+        let same = vec![object(b"mine", "e1")];
         let (out, sent) = measured(resolve(lost, same)).await;
-        assert_eq!((out, sent), (Ok(Create::Created), 2));
+        assert_eq!((out, sent), (Ok(created("e1")), 2));
         let (_, sent) = measured(async {}).await;
         assert_eq!(sent, 1, "an adapter without retries sends one request");
+    }
+
+    async fn resolve_cas(
+        writes: Vec<Result<Cas, Fault>>,
+        gets: Vec<Result<Option<Object>, Fault>>,
+    ) -> Result<Cas, StoreFailure> {
+        let (writes, gets) = (script(writes), script(gets));
+        let mine = Bytes::from_static(b"mine");
+        cas(
+            POLICY,
+            &mine,
+            "e0",
+            || async { writes.lock().unwrap().pop_front().expect("unexpected cas") },
+            || async { gets.lock().unwrap().pop_front().expect("unexpected get") },
+            tokio::time::sleep,
+        )
+        .await
+    }
+
+    fn created(etag: &str) -> Create {
+        Create::Created { etag: etag.into() }
+    }
+
+    fn object(bytes: &'static [u8], etag: &str) -> Result<Option<Object>, Fault> {
+        Ok(Some(Object {
+            bytes: Bytes::from_static(bytes),
+            etag: etag.into(),
+        }))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ambiguous_compare_and_sets_are_resolved_with_a_get() {
+        let lost = || Err(Fault::Ambiguous("timeout".into()));
+        let written = |e: &str| Ok::<_, StoreFailure>(Cas::Written { etag: e.into() });
+        let mine = object(b"mine", "e1");
+        assert_eq!(resolve_cas(vec![lost()], vec![mine]).await, written("e1"));
+        let theirs = object(b"theirs", "e2");
+        assert_eq!(
+            resolve_cas(vec![lost()], vec![theirs]).await,
+            Ok(Cas::Mismatch)
+        );
+        assert_eq!(
+            resolve_cas(vec![lost()], vec![Ok(None)]).await,
+            Ok(Cas::Mismatch)
+        );
+        let unchanged = object(b"before", "e0");
+        let again = vec![lost(), Ok(Cas::Written { etag: "e3".into() })];
+        assert_eq!(resolve_cas(again, vec![unchanged]).await, written("e3"));
+        // The first attempt landed after the read-back, so the second finds its own write.
+        let landed_late = vec![lost(), Ok(Cas::Mismatch)];
+        let gets = vec![object(b"before", "e0"), object(b"mine", "e4")];
+        assert_eq!(resolve_cas(landed_late, gets).await, written("e4"));
+        let flaky = vec![Err(Fault::Transient("get".into())), object(b"mine", "e5")];
+        assert_eq!(resolve_cas(vec![lost()], flaky).await, written("e5"));
+        let plain = vec![Ok(Cas::Mismatch)];
+        assert_eq!(resolve_cas(plain, vec![]).await, Ok(Cas::Mismatch));
     }
 
     #[tokio::test(start_paused = true)]
     async fn ambiguous_creates_are_resolved_with_a_get() {
         let lost = || Err(Fault::Ambiguous("timeout".into()));
-        let same = Ok(Some(Bytes::from_static(b"mine")));
-        let other = Ok(Some(Bytes::from_static(b"theirs")));
-        assert_eq!(resolve(vec![lost()], vec![same]).await, Ok(Create::Created));
+        let same = object(b"mine", "e1");
+        let other = object(b"theirs", "e2");
+        assert_eq!(resolve(vec![lost()], vec![same]).await, Ok(created("e1")));
         assert_eq!(resolve(vec![lost()], vec![other]).await, Ok(Create::Exists));
-        let again = vec![lost(), Ok(Create::Created)];
-        assert_eq!(resolve(again, vec![Ok(None)]).await, Ok(Create::Created));
+        let again = vec![lost(), Ok(created("e3"))];
+        assert_eq!(resolve(again, vec![Ok(None)]).await, Ok(created("e3")));
         let landed_late = vec![lost(), Ok(Create::Exists)];
-        let gets = vec![Ok(None), Ok(Some(Bytes::from_static(b"mine")))];
-        assert_eq!(resolve(landed_late, gets).await, Ok(Create::Created));
-        let flaky_get = vec![
-            Err(Fault::Transient("get".into())),
-            Ok(Some(Bytes::from_static(b"mine"))),
-        ];
-        assert_eq!(resolve(vec![lost()], flaky_get).await, Ok(Create::Created));
+        let gets = vec![Ok(None), object(b"mine", "e4")];
+        assert_eq!(resolve(landed_late, gets).await, Ok(created("e4")));
+        let flaky_get = vec![Err(Fault::Transient("get".into())), object(b"mine", "e5")];
+        assert_eq!(resolve(vec![lost()], flaky_get).await, Ok(created("e5")));
         assert!(
             resolve(
                 vec![lost(), lost()],

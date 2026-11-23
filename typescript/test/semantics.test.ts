@@ -14,7 +14,7 @@ import {
   stepKey,
   workflow,
 } from "../src/mod.ts";
-import { eachAdapter, eventually, LONG, script } from "./helpers.ts";
+import { blockedBy, eachAdapter, eventually, LONG, script } from "./helpers.ts";
 
 eachAdapter("now, sleepUntil and step keys", async (store) => {
   const timed = workflow("timed", async (c: Context) => {
@@ -161,6 +161,22 @@ eachAdapter("published values are read by clients", async (store) => {
   await assert.rejects(run.read("Not A Key"), InvalidArgument);
 });
 
+eachAdapter("a published value is read while its run waits", async (store) => {
+  const waiting = workflow("waiting_publisher", async (c: Context) => {
+    c.publish("p", 1);
+    return await c.receive<number>("go");
+  });
+  const sub = await createOn(store);
+  await using _ = script(sub, [waiting]);
+  const run = await sub.start(waiting);
+  // § fx1tv8nqp.a@qtxdx
+  await eventually("the published value", async () => (await run.read("p")) === 1);
+  assert.equal(await run.status(), "suspended");
+  // § end fx1tv8nqp.a
+  await run.send("go", 2);
+  assert.equal(await run.result({ timeout: LONG }), 2);
+});
+
 function versioned(version?: number) {
   const options = version === undefined ? {} : { version };
   return workflow(
@@ -205,25 +221,25 @@ function changed(first: boolean) {
   });
 }
 
-eachAdapter("an incompatible change fails the run with NonDeterminism", async (store) => {
+eachAdapter("an incompatible change blocks the run with NonDeterminism", async (store) => {
   const sub = await createOn(store);
   const run = await sub.start(changed(true));
   {
     await using _ = script(sub, [changed(true)]);
     await eventually("the wait", async () => (await run.status()) === "suspended");
   }
-  await using _ = script(sub, [changed(false)]);
-  await run.send("go", "now");
-  await assert.rejects(run.result({ timeout: LONG }), (e) => {
-    assert.ok(e instanceof RunFailed, String(e));
-    assert.equal(e.status, "failed");
-    assert.equal(e.error.type, "NonDeterminism");
+  {
+    await using _ = script(sub, [changed(false)]);
+    await run.send("go", "now");
+    const error = await blockedBy(sub, changed(false), run);
+    assert.equal(error.type, "NonDeterminism");
     assert.ok(
-      e.message.endsWith("; an incompatible change needs a new version (version=)"),
-      e.message,
+      error.message.endsWith("; an incompatible change needs a new version (version=)"),
+      error.message,
     );
-    return true;
-  });
+  }
+  await using _ = script(sub, [changed(true)]);
+  assert.equal(await run.result({ timeout: LONG }), 1, "the code fixed, the run resumes");
 });
 
 const work = step("work", async (n: number) => n);

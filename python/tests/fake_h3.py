@@ -1,6 +1,7 @@
 """A fake h3 server on 127.0.0.1: the S3 calls of the store contract on one in-memory bucket, its
-listings held on the wait headers, every request and its headers recorded, and the answers of
-the next requests of a method replaceable."""
+listings held on the wait headers, lifecycle rules that expire the keys tagged with each retention
+the tests use, every request and its headers recorded, and the answers of the next requests of a
+method replaceable."""
 
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ from substantial import Credentials
 
 BUCKET = "h3"
 CREDENTIALS = Credentials("fake", "fake-secret")
+# The retentions the dev bucket's rules expire (`dev/compose.yaml`).
+EXPIRIES = (1, 30)
 
 
 @dataclass
@@ -41,6 +44,11 @@ def error(status: int, code: str, *, applied: bool = False) -> Answer:
     return Answer(status, xml.encode(), applied=applied)
 
 
+def _etag(data: bytes) -> str:
+    """A quoted digest of the bytes, as S3 answers an ETag."""
+    return f'"{hashlib.md5(data).hexdigest()}"'
+
+
 class FakeH3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
@@ -52,6 +60,8 @@ class FakeH3:
         self.inject: dict[str, list[Answer]] = {}
         self.holds = 0
         self.omit_etag = False
+        # The retentions, in days, the bucket's lifecycle rules expire.
+        self.expiries: tuple[int, ...] = EXPIRIES
         self._changed = asyncio.Event()
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.StreamWriter] = set()
@@ -121,16 +131,24 @@ class FakeH3:
         key = path.removeprefix(f"/{BUCKET}").removeprefix("/")
         if method == "GET" and not key and query.get("list-type") == "2":
             return await self._list(headers, query)
+        if method == "GET" and not key and "lifecycle" in query:
+            return self._lifecycle()
         if method == "PUT" and key:
             if headers.get("if-none-match") == "*" and key in self.objects:
                 return error(412, "PreconditionFailed")
+            matching = headers.get("if-match")
+            if matching is not None and key not in self.objects:
+                return error(404, "NoSuchKey")
+            if matching is not None and _etag(self.objects[key]) != matching:
+                return error(412, "PreconditionFailed")
             self.objects[key] = body
             self._change()
-            return Answer(200)
+            return Answer(200, headers={"ETag": _etag(body)})
         if method == "GET" and key:
             if key not in self.objects:
                 return error(404, "NoSuchKey")
-            return Answer(200, self.objects[key])
+            data = self.objects[key]
+            return Answer(200, data, headers={"ETag": _etag(data)})
         if method == "DELETE" and key:
             self.objects.pop(key, None)
             self._change()
@@ -145,15 +163,18 @@ class FakeH3:
         prefix = query.get("prefix", "")
         after = query.get("start-after", "")
         max_keys = int(query.get("max-keys", "1000"))
-        seconds = headers.get("x-substantial-wait-seconds")
-        wait_etag = headers.get("x-substantial-wait-etag")
+        seconds = headers.get("x-herald-wait-seconds")
+        wait_etag = headers.get("x-herald-wait-etag")
         loop = asyncio.get_running_loop()
         deadline = loop.time() + (int(seconds) if seconds is not None else 0)
         held = False
         while True:
             changed = self._changed
             keys, truncated = self._page(prefix, after, max_keys)
-            etag = hashlib.sha256(repr((keys, truncated)).encode()).hexdigest()[:16]
+            # Over the keys and their objects' ETags, as Herald's: a rewrite of a key listed
+            # changes it.
+            etags = [_etag(self.objects[k]) for k in keys]
+            etag = hashlib.sha256(repr((keys, etags, truncated)).encode()).hexdigest()[:16]
             if seconds is None or wait_etag != etag or loop.time() >= deadline:
                 break
             if not held:
@@ -169,5 +190,19 @@ class FakeH3:
             f"<IsTruncated>{'true' if truncated else 'false'}</IsTruncated>{contents}"
             "</ListBucketResult>"
         )
-        extra = {} if seconds is None or self.omit_etag else {"x-substantial-listing-etag": etag}
+        extra = {} if seconds is None or self.omit_etag else {"x-herald-listing-etag": etag}
         return Answer(200, xml.encode(), extra)
+
+    def _lifecycle(self) -> Answer:
+        rules = "".join(
+            f"<Rule><ID>substantial-expire-{d}d</ID><Filter><Tag>"
+            f"<Key>substantial-retention</Key><Value>{d}d</Value></Tag></Filter>"
+            f"<Status>Enabled</Status><Expiration><Days>{d}</Days></Expiration></Rule>"
+            for d in self.expiries
+        )
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+            f"{rules}</LifecycleConfiguration>"
+        )
+        return Answer(200, xml.encode())

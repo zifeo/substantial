@@ -16,6 +16,7 @@ pub(crate) struct Replays {
     workflows: Workflows,
     /// The worker's `step_timeout`, for the workflows that set none.
     step_timeout: Duration,
+    /// By chain, as the agent names a replay.
     running: HashMap<String, (Arc<Inbox<ToReplay>>, Task<()>)>,
     events: Arc<Inbox<Event>>,
 }
@@ -36,13 +37,15 @@ impl Replays {
         }
     }
 
-    pub(crate) fn spawn(&mut self, run: String, input: b::RunInput, due_at: Option<Time>) {
+    /// A replay of `chain`, whose current run is `input.run`, which logs and observers name.
+    pub(crate) fn spawn(&mut self, chain: String, input: b::RunInput, due_at: Option<Time>) {
+        let run = input.run.clone();
         let (name, version) = input
             .start
             .as_ref()
             .map(|s| (s.workflow.as_str(), s.version))
             .unwrap_or_default();
-        // § pjrbw31h4@2hfrm
+        // § pjrbw31h4@65kr3
         let Some(workflow) = self.workflows.get(name, version).cloned() else {
             tracing::error!(
                 run,
@@ -51,12 +54,12 @@ impl Replays {
                 "replay of a workflow this worker does not serve"
             );
             self.events
-                .push(Event::Ended(run, replay_end::End::Dropped(b::Empty {})));
+                .push(Event::Ended(chain, replay_end::End::Dropped(b::Empty {})));
             return;
         };
         // § end pjrbw31h4
         let inbox = Arc::new(Inbox::default());
-        // § aym52h8ch@hnr4y
+        // § aym52h8ch@ykf3t
         let step_timeout = workflow.step_timeout().unwrap_or(self.step_timeout);
         // § end aym52h8ch
         let clock = &self.host.clock;
@@ -65,6 +68,7 @@ impl Replays {
             format_args!("replay of {run}"),
             replay(
                 self.host.clone(),
+                chain.clone(),
                 workflow,
                 step_timeout,
                 input,
@@ -73,16 +77,16 @@ impl Replays {
                 inbox.clone(),
             ),
         );
-        if let Some((inbox, _)) = self.running.insert(run.clone(), (inbox, task)) {
-            tracing::error!(run, "a second replay of a run in replay");
+        if let Some((inbox, _)) = self.running.insert(chain, (inbox, task)) {
+            tracing::error!(run, "a second replay of a chain in replay");
             inbox.push(ToReplay::Stop);
         }
     }
 
-    pub(crate) fn tell(&self, run: &str, message: ToReplay) {
-        match self.running.get(run) {
+    pub(crate) fn tell(&self, chain: &str, message: ToReplay) {
+        match self.running.get(chain) {
             Some((inbox, _)) => inbox.push(message),
-            None => tracing::warn!(run, ?message, "no replay of this run"),
+            None => tracing::warn!(chain, ?message, "no replay of this chain"),
         }
     }
 
@@ -96,8 +100,8 @@ impl Replays {
         self.running.is_empty()
     }
 
-    pub(crate) fn ended(&mut self, run: &str) {
-        self.running.remove(run);
+    pub(crate) fn ended(&mut self, chain: &str) {
+        self.running.remove(chain);
     }
 }
 

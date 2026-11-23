@@ -143,15 +143,15 @@ async def test_sub_schedule_does_nothing_twice_and_refuses_a_stale_or_another_co
         assert fired == [T0.replace(minute=30).isoformat()]
 
 
-async def test_a_malformed_schedule_message_fails_the_run(env: s.testing.Env) -> None:
+async def test_a_malformed_schedule_message_blocks_the_run(env: s.testing.Env) -> None:
     run = await env.schedule(ticker, "tick", HOURLY, revision=1)
     await run.send("schedule", {"revision": 2, "cron": "0 * * * *"})
     async with env.worker([ticker], preset="service"):
         await env.settle()
-    with pytest.raises(s.RunFailed) as failed:
+    with pytest.raises(
+        s.testing.Stuck, match="blocked by InvalidArgument: a schedule message is a config"
+    ):
         await run.result()
-    assert failed.value.error.type == "InvalidArgument", failed.value
-    assert "a schedule message is a config of sub.schedule" in failed.value.error.message
 
 
 def test_message_ids_are_the_same_in_every_host() -> None:
@@ -160,15 +160,15 @@ def test_message_ids_are_the_same_in_every_host() -> None:
     assert message_id(config(2, None, 1)) == "schedule-2-1669c891556cdd13"
 
 
-async def test_two_configs_of_one_revision_fail_the_run(env: s.testing.Env) -> None:
+async def test_two_configs_of_one_revision_block_the_run(env: s.testing.Env) -> None:
     await env.schedule(ticker, "tick", HOURLY, revision=1)
     run = await env.schedule(ticker, "tick", s.Cron("30 * * * *", "UTC"), revision=1)
     async with env.worker([ticker], preset="service"):
         await env.settle()
-    with pytest.raises(s.RunFailed) as failed:
+    with pytest.raises(
+        s.testing.Stuck, match="blocked by ConfigError: schedule revision 1 came with two configs"
+    ):
         await run.result()
-    assert failed.value.error.type == "ConfigError", failed.value
-    assert "revision 1 came with two configs" in failed.value.error.message
 
 
 async def test_none_disables_a_schedule_and_a_new_cron_fires_from_when_it_applies(
@@ -210,7 +210,7 @@ async def test_the_schedule_step_name_is_reserved(env: s.testing.Env) -> None:
 
     async with env.worker([inline], preset="service"):
         run = await env.start(inline)
-        with pytest.raises(s.RunFailed, match="reserved"):
+        with pytest.raises(s.testing.Stuck, match=r"blocked by InvalidArgument: .*reserved"):
             await run.result()
 
 

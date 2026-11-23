@@ -1,6 +1,6 @@
-//! What the Redis adapter does beyond the shared contract; all but URL parsing run only when
-//! `SUBSTANTIAL_REDIS_URL` names a standalone server (see `dev/redis.compose.yaml`), or, for the
-//! last one, `SUBSTANTIAL_REDIS_SENTINEL_URL` a Sentinel.
+//! What the Redis adapter does beyond the shared contract; all but URL parsing on the standalone
+//! server `SUBSTANTIAL_REDIS_URL` names, the last one on the Sentinel of
+//! `SUBSTANTIAL_REDIS_SENTINEL_URL` (see `dev/compose.yaml`).
 
 mod common;
 
@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use common::{LONG, redis_url, retry, script};
+use common::{LONG, failover_lock, redis_url, retry, script};
 use futures::StreamExt;
 use redis::aio::MultiplexedConnection;
 use substantial::__internal::{
-    self as internal, ListWait, RedisLocation, RedisStore, Store, Topology,
+    self as internal, Cas, ListWait, RedisLocation, RedisStore, Store, Topology,
 };
 use substantial::{Context, Credentials, Error, Password, Preset, Substantial, Workflow};
 use tokio::sync::RwLock;
@@ -134,11 +134,11 @@ fn credentials_are_a_password() {
 }
 
 /// A connection to the standalone server, without the adapter.
-async fn admin() -> Option<MultiplexedConnection> {
-    let location = RedisLocation::parse(&redis_url("redis")?).unwrap();
+async fn admin() -> MultiplexedConnection {
+    let location = RedisLocation::parse(&redis_url("redis")).unwrap();
     let (host, port) = &location.nodes[0];
     let client = redis::Client::open(format!("redis://{host}:{port}")).unwrap();
-    Some(client.get_multiplexed_async_connection().await.unwrap())
+    client.get_multiplexed_async_connection().await.unwrap()
 }
 
 /// Sets a server parameter for the length of `f`.
@@ -169,11 +169,9 @@ async fn with_config<T>(
 
 #[tokio::test]
 async fn a_server_without_aof_is_refused() {
-    let Some(mut admin) = admin().await else {
-        return;
-    };
-    let _alone = SERVER.write().await;
-    let url = redis_url("redis").unwrap();
+    let mut admin = admin().await;
+    let _alone = (SERVER.write().await, failover_lock(true));
+    let url = redis_url("redis");
     let m = with_config(&mut admin, "appendonly", "no", async || {
         config_error(Substantial::create(&url).await)
     })
@@ -183,11 +181,9 @@ async fn a_server_without_aof_is_refused() {
 
 #[tokio::test]
 async fn a_server_that_evicts_is_refused() {
-    let Some(mut admin) = admin().await else {
-        return;
-    };
-    let _alone = SERVER.write().await;
-    let url = redis_url("redis").unwrap();
+    let mut admin = admin().await;
+    let _alone = (SERVER.write().await, failover_lock(true));
+    let url = redis_url("redis");
     let m = with_config(&mut admin, "maxmemory-policy", "allkeys-lru", async || {
         config_error(Substantial::create(&url).await)
     })
@@ -197,17 +193,15 @@ async fn a_server_that_evicts_is_refused() {
 
 #[tokio::test]
 async fn a_password_reaches_the_server() {
-    let Some(mut admin) = admin().await else {
-        return;
-    };
-    let _shared = SERVER.read().await;
+    let mut admin = admin().await;
+    let _shared = (SERVER.read().await, failover_lock(false));
     let user = "substantial-test-rust";
     let _: () = redis::cmd("ACL")
         .arg(&["SETUSER", user, "on", ">right", "~*", "&*", "+@all"])
         .query_async(&mut admin)
         .await
         .unwrap();
-    let url = redis_url("redis").unwrap();
+    let url = redis_url("redis");
     let calls = Arc::new(AtomicU32::new(0));
     let counted = calls.clone();
     let provider = Credentials::password_provider(move || {
@@ -302,13 +296,14 @@ fn wait(seconds: u32, etag: &Option<String>) -> Option<ListWait> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_waiting_listing_returns_as_a_key_lands_without_polling() {
-    let Some(url) = redis_url("redis") else {
-        return;
-    };
-    let _shared = SERVER.read().await;
+    let url = redis_url("redis");
+    let _shared = (SERVER.read().await, failover_lock(false));
     let listings = Listings::start(&url).await;
     let store = internal::open(&url, &Credentials::None, retry()).unwrap();
-    store.create("q/a", Bytes::from_static(b"a")).await.unwrap();
+    store
+        .create("q/a", Bytes::from_static(b"a"), None)
+        .await
+        .unwrap();
     let first = store.list("q/", None, 10, wait(0, &None)).await.unwrap();
     assert_eq!(first.keys, ["q/a"]);
     assert!(first.etag.is_some());
@@ -327,7 +322,7 @@ async fn a_waiting_listing_returns_as_a_key_lands_without_polling() {
     });
     tokio::time::sleep(Duration::from_millis(500)).await;
     store
-        .create("other/x", Bytes::from_static(b"x"))
+        .create("other/x", Bytes::from_static(b"x"), None)
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -335,12 +330,60 @@ async fn a_waiting_listing_returns_as_a_key_lands_without_polling() {
         !held.is_finished(),
         "a key under another prefix does not end the wait"
     );
-    store.create("q/b", Bytes::from_static(b"b")).await.unwrap();
+    store
+        .create("q/b", Bytes::from_static(b"b"), None)
+        .await
+        .unwrap();
     // At its deadline the wait answers the page it listed before `q/b` landed: `q/b` in the
     // answer is the key's notification waking it, however long the machine takes to get there.
     let woken = held.await.unwrap().unwrap();
     assert_eq!(woken.keys, ["q/a", "q/b"]);
     assert_ne!(woken.etag, first.etag);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_waiting_listing_wakes_on_a_cas_of_a_key_it_lists() {
+    let _shared = (SERVER.read().await, failover_lock(false));
+    for (topology, _) in common::REDIS_URLS {
+        let store = internal::open(&redis_url(topology), &Credentials::None, retry()).unwrap();
+        let created = store
+            .create("runs/c", Bytes::from_static(b"head 1"), None)
+            .await
+            .unwrap();
+        let substantial::__internal::Create::Created { etag } = created else {
+            panic!("{topology}: {created:?}")
+        };
+        let first = store.list("runs/c", None, 1, wait(0, &None)).await.unwrap();
+        let held = tokio::spawn({
+            let (store, etag) = (store.clone(), first.etag.clone());
+            async move { store.list("runs/c", None, 1, wait(20, &etag)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!held.is_finished(), "{topology}: an unchanged page waits");
+        let started = Instant::now();
+        let written = store
+            .cas("runs/c", Bytes::from_static(b"head 2"), &etag, None)
+            .await
+            .unwrap();
+        assert!(matches!(written, Cas::Written { .. }), "{topology}");
+        let woken = tokio::time::timeout(Duration::from_secs(10), held)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(woken.keys, ["runs/c"], "{topology}");
+        assert_ne!(woken.etag, first.etag, "{topology}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{topology}: woken by the cas, not by the end of its wait"
+        );
+        let again = store.list("runs/c", None, 1, wait(0, &None)).await.unwrap();
+        assert_eq!(again.etag, woken.etag, "{topology}");
+        store.delete("runs/c").await.unwrap();
+        let gone = store.list("runs/c", None, 1, wait(0, &None)).await.unwrap();
+        assert!(gone.keys.is_empty(), "{topology}");
+        assert_ne!(gone.etag, woken.etag, "{topology}");
+    }
 }
 
 /// The ids of the subscribed connections of `user`.
@@ -394,12 +437,10 @@ fn right(name: &str) -> Credentials {
 
 #[tokio::test]
 async fn a_user_denied_waitaof_is_refused_as_such() {
-    let Some(mut admin) = admin().await else {
-        return;
-    };
-    let _shared = SERVER.read().await;
+    let mut admin = admin().await;
+    let _shared = (SERVER.read().await, failover_lock(false));
     let name = user(&mut admin, &["+@all", "-waitaof"]).await;
-    let url = redis_url("redis").unwrap();
+    let url = redis_url("redis");
     let refused = Substantial::create(&url).credentials(right(&name)).await;
     drop_user(&mut admin, &name).await;
     match refused {
@@ -411,12 +452,10 @@ async fn a_user_denied_waitaof_is_refused_as_such() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_subscription_lost_again_resubscribes_at_once() {
-    let Some(mut admin) = admin().await else {
-        return;
-    };
-    let _shared = SERVER.read().await;
+    let mut admin = admin().await;
+    let _shared = (SERVER.read().await, failover_lock(false));
     let name = user(&mut admin, &["+@all"]).await;
-    let url = redis_url("redis").unwrap();
+    let url = redis_url("redis");
     // Not reset by a subscription, a backoff doubling from 100 ms would pause 51 s before the
     // tenth: far beyond a reconnection, seconds at most on a loaded machine.
     let retry = internal::StoreRetry {
@@ -454,10 +493,8 @@ async fn a_subscription_lost_again_resubscribes_at_once() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_start_from_another_client_comes_through_the_wait() {
-    let Some(url) = redis_url("redis") else {
-        return;
-    };
-    let _shared = SERVER.read().await;
+    let url = redis_url("redis");
+    let _shared = (SERVER.read().await, failover_lock(false));
     let answer = Workflow::without_input("answer", |_c| async { Ok(42) });
     let sub = Substantial::create(&url).await.unwrap();
     let worker = sub
@@ -477,10 +514,8 @@ async fn a_start_from_another_client_comes_through_the_wait() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_ends_on_redis_through_a_script_worker() {
-    let Some(url) = redis_url("redis") else {
-        return;
-    };
-    let _shared = SERVER.read().await;
+    let url = redis_url("redis");
+    let _shared = (SERVER.read().await, failover_lock(false));
     #[derive(serde::Deserialize)]
     struct N {
         n: i64,
@@ -501,9 +536,8 @@ async fn a_run_ends_on_redis_through_a_script_worker() {
 
 #[tokio::test]
 async fn a_primary_without_a_replica_online_answers_nothing() {
-    let Some(url) = redis_url("redis-sentinel") else {
-        return;
-    };
+    let _shared = (SERVER.read().await, failover_lock(false));
+    let url = redis_url("redis-sentinel");
     let location = RedisLocation::parse(&url).unwrap();
     let store = RedisStore::open(location, &Credentials::None, retry()).unwrap();
     Store::open(&store).await.unwrap();
@@ -511,7 +545,10 @@ async fn a_primary_without_a_replica_online_answers_nothing() {
     // As just promoted, its replicas still syncing.
     store.assume_no_replica_online();
     let refusals = [
-        store.create("k", Bytes::from_static(b"v")).await.err(),
+        store
+            .create("k", Bytes::from_static(b"v"), None)
+            .await
+            .err(),
         store.get("k").await.err(),
         store.delete("k").await.err(),
     ];
@@ -521,4 +558,78 @@ async fn a_primary_without_a_replica_online_answers_nothing() {
     }
     let counted = internal::open(&url, &Credentials::None, retry()).unwrap();
     assert_eq!(counted.get("k").await, Ok(None), "nothing written");
+}
+
+#[tokio::test]
+async fn an_expiry_is_the_servers_own() {
+    let url = redis_url("redis");
+    let _shared = (SERVER.read().await, failover_lock(false));
+    let ns = RedisLocation::parse(&url).unwrap().namespace;
+    let store = internal::open(&url, &Credentials::None, retry()).unwrap();
+    let mut admin = admin().await;
+    let (object, expiries) = (format!("{{{ns}}}:o:runs/e"), format!("{{{ns}}}:e"));
+    let ttl = async |admin: &mut MultiplexedConnection| -> i64 {
+        redis::cmd("PTTL")
+            .arg(&object)
+            .query_async(admin)
+            .await
+            .unwrap()
+    };
+    let indexed = async |admin: &mut MultiplexedConnection| -> Option<f64> {
+        let mut at = redis::cmd("ZSCORE");
+        at.arg(&expiries).arg("runs/e");
+        at.query_async(admin).await.unwrap()
+    };
+    // § hxvcx7f2a@facgw
+    store
+        .create("runs/e", Bytes::from_static(b"one"), Some(1))
+        .await
+        .unwrap();
+    let day = 86_400_000;
+    let left = ttl(&mut admin).await;
+    assert!(left > day - 60_000 && left <= day, "{left}");
+    assert!(indexed(&mut admin).await.is_some());
+    let read = store.get("runs/e").await.unwrap().unwrap();
+    // § one rz3se15bd@jy70n
+    let digest = {
+        use sha1::Digest;
+        hex::encode(sha1::Sha1::digest(b"one"))
+    };
+    assert_eq!(read.etag, digest);
+    let written = store.cas("runs/e", Bytes::from_static(b"two"), &read.etag, None);
+    assert!(matches!(written.await.unwrap(), Cas::Written { .. }));
+    assert_eq!(
+        ttl(&mut admin).await,
+        -1,
+        "a write without an expiry clears it"
+    );
+    assert_eq!(indexed(&mut admin).await, None);
+    // A key the server expired leaves the index at the next write of an expiry.
+    let _: () = redis::cmd("PEXPIRE")
+        .arg(&object)
+        .arg(1)
+        .query_async(&mut admin)
+        .await
+        .unwrap();
+    let _: () = redis::cmd("ZADD")
+        .arg(&expiries)
+        .arg(0)
+        .arg("runs/e")
+        .query_async(&mut admin)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(
+        store.list("runs/", None, 10, None).await.unwrap().keys,
+        ["runs/e"]
+    );
+    store
+        .create("runs/f", Bytes::from_static(b"f"), Some(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.list("runs/", None, 10, None).await.unwrap().keys,
+        ["runs/f"]
+    );
+    assert_eq!(store.get("runs/e").await.unwrap(), None);
 }

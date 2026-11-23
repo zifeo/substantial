@@ -55,8 +55,9 @@ export interface Context {
   ): Promise<T | undefined>;
   /** `for await (const at of c.schedule())`: each fire time of the schedule `sub.schedule`
    * configures, the workflow's one `iterate`; fires missed while no worker ran come oldest first,
-   * at most `backfill` of them. */
-  schedule(): AsyncIterableIterator<Date>;
+   * at most `backfill` of them. With `upgrade`, it continues into the highest version of its
+   * workflow the worker serves, as `iterate` does. */
+  schedule(options?: LoopOptions): AsyncIterableIterator<Date>;
   /** The time, recorded. */
   now(): Promise<Date>;
   /** A number in [0, 1), recorded. */
@@ -85,6 +86,9 @@ export interface Context {
   send(run: string, name: string, value?: unknown, options?: MessageOptions): Promise<void>;
   /** Makes `value` the last one published under `key` by the chain (`run.read(key)`). */
   publish(key: string, value: unknown): void;
+  /** Whether the run takes the code's branch of `id`: true where the run first reaches it live,
+   * and at each replay what its history recorded there, false for a history recorded before. */
+  patched(id: string): boolean;
   /** Runs `fn`; on an error, the undos of the steps called inside, most recent first, then the
    * error again. */
   saga<T>(fn: () => T | PromiseLike<T>): Promise<T>;
@@ -98,8 +102,9 @@ export interface Context {
    * or was cancelled, `RunNotFound` if there is none, `WaitTimeout` once `timeout` passed first. */
   result<T = unknown>(chain: string, options?: ChainResultOptions<T>): Promise<T>;
   /** `for await (const s of c.iterate(init))`: compresses at each boundary past the threshold,
-   * carrying the state only. */
-  iterate<S extends object>(init: S): AsyncIterableIterator<S>;
+   * carrying the state only. With `upgrade`, it also continues at a boundary once the worker
+   * serves a higher version of the workflow, into the highest one. */
+  iterate<S extends object>(init: S, options?: LoopOptions): AsyncIterableIterator<S>;
   /** Ends the run and starts the next of its chain with `input`, of `workflow` if given; it does
    * not return. */
   continueAsNew<I>(input?: I, options?: ContinueOptions<I>): Promise<never>;
@@ -116,6 +121,20 @@ export interface PollOptions<T> {
   readonly retry?: Retry;
   /** Turns the recorded JSON of a value that is not `null` into the value the code sees. */
   readonly decode?: (value: unknown) => T;
+}
+
+export interface LoopOptions {
+  /** Continues into the highest version of the workflow the worker serves; false when not
+   * given. */
+  readonly upgrade?: boolean;
+}
+
+/** The `upgrade` of a loop's options, checked. */
+function upgradeOf(options: LoopOptions, what: string): boolean {
+  const { upgrade = false } = known(options, ["upgrade"], what);
+  if (typeof upgrade !== "boolean")
+    throw new InvalidArgument(`upgrade is a boolean, not ${upgrade}`);
+  return upgrade;
 }
 
 export interface WaitOptions {
@@ -223,13 +242,13 @@ export class RunContext implements Context {
     if (decode !== undefined && typeof decode !== "function") {
       throw new InvalidArgument("decode is a function");
     }
-    // § one c5kkpjdz5.a@er3yc
+    // § one c5kkpjdz5.a@4y3fc
     const deadline = (await this.now()).getTime() + timeout.ms;
     for (;;) {
       // Not ready is the recorded `null`, which `decode` never sees.
-      // § one c5kkpjdz5.b@71v9z
+      // § one c5kkpjdz5.b@22751
       const value = await this.step(name, fn, retry === undefined ? {} : { retry });
-      // § c5kkpjdz5@3rxfp
+      // § c5kkpjdz5@ff71z
       if (value !== null && value !== undefined) {
         return decode === undefined ? (value as T) : decode(value);
       }
@@ -239,8 +258,8 @@ export class RunContext implements Context {
     }
   }
 
-  schedule(): AsyncIterableIterator<Date> {
-    return schedule(this, this.#shared);
+  schedule(options: LoopOptions = {}): AsyncIterableIterator<Date> {
+    return schedule(this, this.#shared, upgradeOf(options, "schedule"));
   }
 
   now(): Promise<Date> {
@@ -296,7 +315,7 @@ export class RunContext implements Context {
     }
     // § one p6tzbmjaq.a@3hzmx
     if (counts.timed > 0) throw bothPending(name);
-    // § p6tzbmjaq@3skc2
+    // § p6tzbmjaq@yf9yk
     const received = this.#shared.future<T>(makeCall({ case: "receive", value: name }), decoded);
     counts.taken += 1;
     // § end p6tzbmjaq
@@ -335,7 +354,7 @@ export class RunContext implements Context {
       });
       counts.bound = true;
     }
-    // § p6tzbmjaq@ctavy
+    // § p6tzbmjaq@n79fe
     let claimed = false;
     // Claiming in the predicate keeps two receives woken by one message from both taking it.
     const claim = () => {
@@ -387,6 +406,13 @@ export class RunContext implements Context {
     this.#shared.expect(makeCall({ case: "publish", value: published }), "done");
   }
 
+  patched(id: string): boolean {
+    const call = makeCall({ case: "patched", value: text(id, "a patch id") });
+    const patched = decodeValue(this.#shared.expect(call, "value"));
+    if (typeof patched !== "boolean") throw this.#shared.protocol(`patched answered ${patched}`);
+    return patched;
+  }
+
   saga<T>(fn: () => T | PromiseLike<T>): Promise<T> {
     if (typeof fn !== "function") throw new InvalidArgument(`saga takes a function, not ${fn}`);
     return saga(this.#shared, fn);
@@ -404,15 +430,15 @@ export class RunContext implements Context {
     return chainResult(this.#shared, chain, options);
   }
 
-  iterate<S extends object>(init: S): AsyncIterableIterator<S> {
-    return new Iteration(this.#shared, init);
+  iterate<S extends object>(init: S, options: LoopOptions = {}): AsyncIterableIterator<S> {
+    return new Iteration(this.#shared, init, upgradeOf(options, "iterate"));
   }
 
   async continueAsNew<I>(input?: I, options: ContinueOptions<I> = {}): Promise<never> {
     const { workflow } = known(options, ["workflow"], "continueAsNew");
     // § one aaev3rs1q.b@pymxt
     const data = inputObject(input);
-    // § gjnefe4w6@cd17b
+    // § gjnefe4w6@v1twa
     if (workflow === undefined) throw new ContinuedAsNew(undefined, undefined, data);
     if (!(workflow instanceof Workflow)) {
       throw new InvalidArgument(`continueAsNew takes a workflow, not ${workflow}`);
@@ -421,7 +447,7 @@ export class RunContext implements Context {
   }
 
   async cancel(reason: string): Promise<never> {
-    // § g039jvy6k.c@z98jd
+    // § dxgjekysz.c@5kpff
     throw new Cancelled(text(reason, "a reason"));
   }
 }

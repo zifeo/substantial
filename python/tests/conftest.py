@@ -1,14 +1,16 @@
-"""Stores and helpers shared by the tests; S3 only when `SUBSTANTIAL_S3_URL` is set (see
-`dev/rustfs.compose.yaml`), Redis only when the variable of its topology is (see
-`dev/redis*.compose.yaml`)."""
+"""Stores and helpers shared by the tests. The S3 and Redis stores are those of
+`dev/compose.yaml`, at the URLs of `dev/stores.env` unless the environment sets them; a test that
+needs one it cannot reach fails."""
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
 import fcntl
+import functools
 import os
 import secrets
+import socket
 import tempfile
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -17,14 +19,19 @@ from pathlib import Path
 
 import pytest
 
-from substantial import Substantial, Workflow
+from substantial import Failure, Run, RunInfo, RunStatus, Substantial, Workflow
+from substantial._proto import layout
 from substantial.settings import PUBLIC, Settings
 from substantial.stores import Store, open_store
 from substantial.stores.fs import FsStore
 from substantial.stores.memory import MemoryStore
 from substantial.worker import Worker
 
+STORES = Path(__file__).parents[2] / "dev" / "stores.env"
+UP = "docker compose -f dev/compose.yaml up -d --wait"
 S3_URL = "SUBSTANTIAL_S3_URL"
+# The versioned bucket, which RustFS serves short of the store contract: only to check that.
+S3_VERSIONED_URL = "SUBSTANTIAL_S3_VERSIONED_URL"
 LONG = timedelta(seconds=10)
 REDIS_URLS = {
     "redis": "SUBSTANTIAL_REDIS_URL",
@@ -50,44 +57,58 @@ def failover_exclusion(request: pytest.FixtureRequest) -> Iterator[None]:
         yield
 
 
-def s3_url(scheme: str = "s3") -> str | None:
-    """A fresh namespace under the one `SUBSTANTIAL_S3_URL` names, as a URL of `scheme` (`s3` or
-    `h3`, its `+http` kept); `None` when the variable is not set."""
-    url = os.environ.get(S3_URL)
-    if url is None:
-        return None
+def load_stores() -> None:
+    """Sets each variable of `dev/stores.env` the environment does not."""
+    for n, line in enumerate(STORES.read_text().splitlines(), 1):
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition("=")
+        if not sep:
+            raise AssertionError(f"{STORES}:{n} is not NAME=value: {line!r}")
+        os.environ.setdefault(name, value)
+
+
+load_stores()
+
+
+@functools.cache
+def reached(variable: str) -> str:
+    """The URL `variable` names, once each of its hosts accepts a connection."""
+    url = os.environ.get(variable)
+    if not url:
+        pytest.fail(f"{variable} is not set: see dev/stores.env and run `{UP}`", pytrace=False)
+    for address in url.partition("://")[2].partition("/")[0].split(","):
+        host, _, port = address.rpartition(":")
+        if not host or not port.isdigit():
+            pytest.fail(f"{variable} names {address!r}, not a host:port", pytrace=False)
+        try:
+            socket.create_connection((host, int(port)), timeout=2).close()
+        except OSError as e:
+            pytest.fail(
+                f"{variable} names {address}, which does not answer ({e}): run `{UP}`",
+                pytrace=False,
+            )
+    return url
+
+
+def require_s3(scheme: str = "s3", variable: str = S3_URL) -> str:
+    """A fresh namespace under the one `variable` names, as a URL of `scheme` (`s3` or `h3`, its
+    `+http` kept)."""
+    url = reached(variable)
     given, _, rest = url.partition("://")
     plain = {"s3": "", "s3+http": "+http"}.get(given)
     if plain is None:
-        raise AssertionError(f"{S3_URL} is not an s3:// or s3+http:// URL: {url!r}")
+        raise AssertionError(f"{variable} is not an s3:// or s3+http:// URL: {url!r}")
     path, _, query = rest.partition("?")
     if not query:
-        raise AssertionError(f"{S3_URL} has no query: {url!r}")
+        raise AssertionError(f"{variable} has no query: {url!r}")
     return f"{scheme}{plain}://{path}/{secrets.token_hex(8)}?{query}"
 
 
-def require_s3(scheme: str = "s3") -> str:
-    url = s3_url(scheme)
-    if url is None:
-        pytest.skip(f"{S3_URL} is not set")
-    return url
-
-
-def redis_url(topology: str) -> str | None:
-    """A fresh namespace under the one the variable of `topology` names; `None` when it is not
-    set."""
-    url = os.environ.get(REDIS_URLS[topology])
-    if url is None:
-        return None
-    path, _, query = url.partition("?")
-    return f"{path}/{secrets.token_hex(8)}?{query}"
-
-
 def require_redis(topology: str) -> str:
-    url = redis_url(topology)
-    if url is None:
-        pytest.skip(f"{REDIS_URLS[topology]} is not set")
-    return url
+    """A fresh namespace under the one the variable of `topology` names."""
+    path, _, query = reached(REDIS_URLS[topology]).partition("?")
+    return f"{path}/{secrets.token_hex(8)}?{query}"
 
 
 def fresh_store(adapter: str, tmp_path: Path) -> Store:
@@ -99,6 +120,17 @@ def fresh_store(adapter: str, tmp_path: Path) -> Store:
     if adapter in REDIS_URLS:
         return open_store(require_redis(adapter), None)
     return open_store(require_s3(), "env")
+
+
+def kind(outcome: object) -> str:
+    """A create's outcome without the ETag it carries."""
+    return outcome if isinstance(outcome, str) else "created"
+
+
+async def value(store: Store, key: str) -> bytes | None:
+    """The value of `key`, without its ETag."""
+    found = await store.get(key)
+    return None if found is None else found.data
 
 
 @pytest.fixture(params=ADAPTERS)
@@ -130,6 +162,31 @@ async def eventually(what: str, check: Callable[[], Awaitable[bool]], within: fl
         await asyncio.sleep(0.01)
 
 
+async def blocked_with(sub: Substantial, run: Run, within: float = 5) -> Failure:
+    """Waits until `run` reads blocked and `runs` lists it so, and returns the error it lists:
+    the block creates its hint before its queue's marker, so `runs` may list it a moment later."""
+    infos: list[RunInfo] = []
+
+    async def blocked() -> bool:
+        if await run.status() != RunStatus.BLOCKED:
+            return False
+        infos[:] = [i async for i in sub.runs(run.workflow) if i.chain == run.chain]
+        return len(infos) == 1 and infos[0].waiting_on == "blocked"
+
+    await eventually(f"run {run.chain} blocked", blocked, within)
+    assert infos[0].error is not None and infos[0].due_at is not None, infos
+    return infos[0].error
+
+
+def _holds_a_step(key: str, data: bytes) -> bool:
+    """Whether `data` written at `key` is a head whose segments recorded a step."""
+    if not key.startswith("runs/"):
+        return False
+    run = layout.Run.FromString(data)
+    segments = run.head.segments if run.WhichOneof("kind") == "head" else []
+    return any(e.WhichOneof("kind") == "step" for s in segments for e in s.events)
+
+
 class Recording:
     """A store around another that records what it is asked, and can fail or freeze on demand."""
 
@@ -137,8 +194,15 @@ class Recording:
         self.inner = inner
         self.listed: list[str] = []
         self.created: list[tuple[str, str]] = []
+        # Each cas and its outcome, `written` or `mismatch`.
+        self.cased: list[tuple[str, str]] = []
+        # The key and expiry of each create and cas asked, in order.
+        self.writes: list[tuple[str, int | None]] = []
+        # The days of each `check_expiry`, in order.
+        self.checked: list[list[int]] = []
         self.failing = False
-        # When set, the first create of a segment freezes every operation until this is set.
+        # When set, the first write of a head holding a step freezes every operation until this
+        # is set.
         self.freeze_on_segment: asyncio.Event | None = None
         self._frozen: asyncio.Event | None = None
         # When set, a delete of this key waits until its event is set.
@@ -156,16 +220,28 @@ class Recording:
         if self.failing:
             raise StoreFailure("injected")
 
-    async def create(self, key: str, data: bytes) -> str:
-        if "/log/" in key and self.freeze_on_segment is not None:
-            self._frozen = self.freeze_on_segment
-            self.freeze_on_segment = None
+    async def create(self, key: str, data: bytes, *, expiry: int | None) -> str:
+        self.writes.append((key, expiry))
         await self._gate()
-        outcome = await self.inner.create(key, data)
+        outcome = await self.inner.create(key, data, expiry=expiry)
         self.created.append((key, outcome))
         return outcome
 
-    async def get(self, key: str) -> bytes | None:
+    async def cas(self, key: str, data: bytes, etag: str, *, expiry: int | None):
+        if self.freeze_on_segment is not None and _holds_a_step(key, data):
+            self._frozen = self.freeze_on_segment
+            self.freeze_on_segment = None
+        self.writes.append((key, expiry))
+        await self._gate()
+        outcome = await self.inner.cas(key, data, etag, expiry=expiry)
+        self.cased.append((key, "mismatch" if outcome == "mismatch" else "written"))
+        return outcome
+
+    async def check_expiry(self, days) -> None:
+        self.checked.append(list(days))
+        await self.inner.check_expiry(days)
+
+    async def get(self, key: str):
         await self._gate()
         return await self.inner.get(key)
 

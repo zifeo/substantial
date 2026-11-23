@@ -4,10 +4,12 @@
 //! operation, and asserts its count by kind and its round trips. A change of the core or a host
 //! that changes a count fails here: update the doc with it. For a run's wakeups, it also asserts
 //! that the store requests the run's last segment records, its chain's through it, are the ones
-//! counted.
+//! counted: every request its worker sends, but the telling of its watchers after its end's last
+//! write. A cas is counted apart from a create, both of S3's PUT class.
 //!
 //! - `COSTS_MEASURE=1 cargo test --test costs -- --nocapture --test-threads 1` prints every row
-//!   as measured, `| label | PUT | GET | LIST | DELETE | ops | round trips |`, without asserting.
+//!   as measured, `| label | create | cas | GET | LIST | DELETE | ops | round trips |`, without
+//!   asserting.
 //! - `COSTS_TRACE=1` also prints each worker operation with its key, to explain a row.
 
 mod common;
@@ -117,27 +119,57 @@ impl Bench {
         worked(&ops)
     }
 
+    /// The head of the run `run`: its chain's while it is the chain's current run (through the
+    /// pointer of a later run), else its archive.
+    async fn head(&self, run: &str) -> layout::Head {
+        let get = async |key: String| {
+            let bytes = self.inner.get(&key).await.unwrap()?.bytes;
+            match layout::Run::decode(bytes).unwrap().kind {
+                Some(layout::run::Kind::Head(head)) => Some(head),
+                Some(layout::run::Kind::Pointer(p)) => {
+                    let bytes = self
+                        .inner
+                        .get(&format!("runs/{}", p.chain))
+                        .await
+                        .unwrap()?;
+                    match layout::Run::decode(bytes.bytes).unwrap().kind {
+                        Some(layout::run::Kind::Head(head)) => Some(head),
+                        other => panic!("runs/{}: {other:?}", p.chain),
+                    }
+                }
+                None => panic!("{key}: neither head nor pointer"),
+            }
+        };
+        match get(format!("runs/{run}")).await {
+            Some(head) if head.run == run => head,
+            // A chain's first run, once a later run holds its head.
+            _ => get(format!("archives/{run}")).await.expect("an archive"),
+        }
+    }
+
+    /// The head of the chain `chain`, its current run's.
+    async fn current(&self, chain: &str) -> layout::Head {
+        let bytes = self.inner.get(&format!("runs/{chain}")).await.unwrap();
+        match layout::Run::decode(bytes.expect("a head").bytes)
+            .unwrap()
+            .kind
+        {
+            Some(layout::run::Kind::Head(head)) => head,
+            other => panic!("runs/{chain}: {other:?}"),
+        }
+    }
+
     /// The cost the last segment of `run` records: the chain's through it.
     async fn recorded(&self, run: &str) -> layout::Cost {
-        let prefix = format!("runs/{run}/log/");
-        let keys = self
-            .inner
-            .list(&prefix, None, 1000, None)
-            .await
-            .unwrap()
-            .keys;
-        let n = |k: &String| k[prefix.len()..].parse::<u64>().unwrap();
-        let last = keys.iter().max_by_key(|k| n(k)).expect("a segment");
-        let bytes = self.inner.get(last).await.unwrap().unwrap();
-        let segment = layout::Segment::decode(bytes).unwrap();
-        segment.cost.expect("a segment records its cost")
+        let head = self.head(run).await;
+        let last = head.segments.last().expect("a segment");
+        last.cost.clone().expect("a segment records its cost")
     }
 
     /// Asserts that the store requests the last segment of `run` records are the ones the
-    /// wakeups of `runs` sent, as counted: those of `run` and of the runs of its chain before it.
-    async fn check_recorded(&self, label: &str, w: &Worked, run: &str, runs: &[&str]) {
-        self.check_requests(label, run, counted(&w.wakeups, runs))
-            .await;
+    /// wakeups of the chains `chains` sent, as counted, but the telling of its watchers.
+    async fn check_recorded(&self, label: &str, w: &Worked, run: &str, chains: &[&str]) {
+        self.check_requests(label, run, recordable(w, chains)).await;
     }
 
     /// Asserts that the last segment of `run` records the store requests `counted`.
@@ -156,11 +188,16 @@ impl Bench {
         for key in &keys {
             let parts: Vec<&str> = key.split('/').collect();
             let kind = match parts[0] {
-                "runs" => parts[2],
-                other => other,
+                "queues" => format!("queues/{}", parts[2]),
+                other => other.to_owned(),
             };
-            let bytes = self.inner.get(key).await.unwrap().map_or(0, |b| b.len());
-            let entry = kinds.entry(kind.to_owned()).or_default();
+            let bytes = self
+                .inner
+                .get(key)
+                .await
+                .unwrap()
+                .map_or(0, |o| o.bytes.len());
+            let entry = kinds.entry(kind).or_default();
             (entry.0, entry.1) = (entry.0 + 1, entry.1 + bytes);
         }
         println!("stored: {kinds:?}");
@@ -178,8 +215,23 @@ async fn quiet(store: &Counting) {
     }
 }
 
+/// A listing of a workflow's due entries: the per-step listing of a chain's messages is not one.
 fn is_scan(op: &Op) -> bool {
-    matches!(op.kind, Kind::List | Kind::Wait) && op.key.starts_with("queues/")
+    matches!(op.kind, Kind::List | Kind::Wait)
+        && op.key.starts_with("queues/")
+        && op.key.ends_with("/due/")
+}
+
+/// The chain a key belongs to: `runs/<chain>`, `archives/<chain>`, `watch/<chain>/...`, or the
+/// chain a due entry names.
+fn chain_of(key: &str) -> String {
+    let parts: Vec<&str> = key.split('/').collect();
+    let chain = match parts.as_slice() {
+        ["runs" | "archives" | "watch", chain, ..] => Some(*chain),
+        ["queues", _, _, entry] => entry.split('~').nth(1),
+        _ => None,
+    };
+    chain.unwrap_or("?").to_owned()
 }
 
 /// A worker's operations: its replays, each the operations between two scans (a worker of
@@ -187,11 +239,14 @@ fn is_scan(op: &Op) -> bool {
 #[derive(Debug)]
 struct Worked {
     wakeups: Vec<(String, Tally)>,
+    /// Each wakeup's operations.
+    ops: Vec<Vec<Op>>,
     scans: usize,
     scan_lists: usize,
 }
 
-fn worked(ops: &[Op]) -> Worked {
+/// A worker's operations by wakeup, each labelled with the chain of its first operation.
+fn groups(ops: &[Op]) -> Vec<(String, Vec<Op>)> {
     let mut wakeups: Vec<(String, Vec<Op>)> = Vec::new();
     let mut in_scan = true;
     for op in ops {
@@ -200,20 +255,20 @@ fn worked(ops: &[Op]) -> Worked {
             continue;
         }
         if in_scan {
-            let run = op
-                .key
-                .strip_prefix("runs/")
-                .and_then(|k| k.split('/').next())
-                .unwrap_or("?")
-                .to_owned();
-            wakeups.push((run, Vec::new()));
+            wakeups.push((chain_of(&op.key), Vec::new()));
         }
         in_scan = false;
         wakeups.last_mut().unwrap().1.push(op.clone());
     }
+    wakeups
+}
+
+fn worked(ops: &[Op]) -> Worked {
     let scans: Vec<Op> = ops.iter().filter(|op| is_scan(op)).cloned().collect();
+    let groups = groups(ops);
     Worked {
-        wakeups: wakeups
+        ops: groups.iter().map(|(_, ops)| ops.clone()).collect(),
+        wakeups: groups
             .into_iter()
             .map(|(run, ops)| (run, Tally::of(&ops)))
             .collect(),
@@ -223,10 +278,11 @@ fn worked(ops: &[Op]) -> Worked {
     }
 }
 
-/// Expected operations: creates (PUT), gets, listings, deletes, round trips.
-fn ops(put: usize, get: usize, list: usize, delete: usize, trips: usize) -> Tally {
+/// Expected operations: creates and cas (both PUT), gets, listings, deletes, round trips.
+fn ops(put: usize, cas: usize, get: usize, list: usize, delete: usize, trips: usize) -> Tally {
     Tally {
         put,
+        cas,
         get,
         list,
         wait: 0,
@@ -239,22 +295,71 @@ fn requests(meters: &layout::Meters) -> layout::Requests {
     meters.requests.unwrap_or_default()
 }
 
-/// The store requests of the wakeups of `runs`, as counted.
-fn counted(wakeups: &[(String, Tally)], runs: &[&str]) -> layout::Requests {
-    let mut counted = layout::Requests::default();
-    for (_, t) in wakeups.iter().filter(|(r, _)| runs.contains(&r.as_str())) {
-        counted.create += t.put as u64;
-        counted.get += t.get as u64;
-        counted.list += (t.list + t.wait) as u64;
-        counted.delete += t.delete as u64;
+fn add(requests: &mut layout::Requests, t: &Tally) {
+    requests.create += t.put as u64;
+    requests.cas += t.cas as u64;
+    requests.get += t.get as u64;
+    requests.list += (t.list + t.wait) as u64;
+    requests.delete += t.delete as u64;
+}
+
+/// What an end does after its last write that its segment does not record: once it listed its
+/// chain's watchers, for each one a GET of its head, the message to it, the delete of its key.
+fn told_watchers(chain: &str, ops: &[Op]) -> Tally {
+    let watchers = format!("watch/{chain}/");
+    let Some(listed) = ops.iter().position(|op| op.key == watchers) else {
+        return Tally::default();
+    };
+    let told: Vec<Op> = (ops[listed + 1..].iter())
+        .filter(|op| op.key.starts_with("watch/") || chain_of(&op.key) != chain)
+        .cloned()
+        .collect();
+    Tally::of(&told)
+}
+
+/// The store requests of the wakeups of the chains `chains` their segments record: those sent,
+/// but the telling of watchers.
+fn recordable(w: &Worked, chains: &[&str]) -> layout::Requests {
+    let (mut sent, mut told) = (layout::Requests::default(), layout::Requests::default());
+    for ((chain, t), ops) in w.wakeups.iter().zip(&w.ops) {
+        if chains.contains(&chain.as_str()) {
+            add(&mut sent, t);
+            add(&mut told, &told_watchers(chain, ops));
+        }
     }
-    counted
+    layout::Requests {
+        create: sent.create - told.create,
+        cas: sent.cas - told.cas,
+        get: sent.get - told.get,
+        list: sent.list - told.list,
+        delete: sent.delete - told.delete,
+    }
+}
+
+/// The store requests of the wakeups of `chain` in `ops` up to the write of `key`, a
+/// continuation's pointer, and the deletes of its rest marker right after: what the continued
+/// run's archive records, its commit's operations included.
+fn through(ops: &[Op], chain: &str, key: &str) -> layout::Requests {
+    let rest = |op: &Op| op.kind == Kind::Delete && op.key.ends_with(&format!("/rest/{chain}"));
+    let mut sent = Vec::new();
+    for (_, ops) in groups(ops).into_iter().filter(|(c, _)| c == chain) {
+        if let Some(at) = ops.iter().position(|op| op.key == key) {
+            sent.extend_from_slice(&ops[..=at]);
+            sent.extend(ops[at + 1..].iter().take_while(|op| rest(op)).cloned());
+            let mut requests = layout::Requests::default();
+            add(&mut requests, &Tally::of(&sent));
+            return requests;
+        }
+        sent.extend(ops);
+    }
+    panic!("no write of {key} in the wakeups of {chain}")
 }
 
 fn row(label: &str, t: &Tally) {
     println!(
-        "| {label} | {} | {} | {} | {} | {} | {} |",
+        "| {label} | {} | {} | {} | {} | {} | {} | {} |",
         t.put,
+        t.cas,
         t.get,
         t.list + t.wait,
         t.delete,
@@ -265,7 +370,7 @@ fn row(label: &str, t: &Tally) {
 
 fn check(label: &str, measured: Tally, expected: Tally) {
     row(label, &measured);
-    // § qashr34zn@c8xfc
+    // § qashr34zn@0242y
     if !measuring() {
         assert_eq!(measured, expected, "{label}");
     }
@@ -277,7 +382,7 @@ fn check_wakeups(label: &str, w: &Worked, expected: &[Tally]) {
     }
     println!("{label}: {} scans, {} listings", w.scans, w.scan_lists);
     let measured: Vec<Tally> = w.wakeups.iter().map(|(_, t)| *t).collect();
-    // § qashr34zn@hpjaz
+    // § qashr34zn@7wgws
     if !measuring() {
         assert_eq!(measured, expected, "{label}");
     }
@@ -308,14 +413,14 @@ async fn namespace_create_and_open() {
     let mark = store.mark();
     internal::create(store.clone()).await.unwrap();
     let t = Tally::of(&store.since(mark));
-    check("create, new namespace", t, ops(3, 0, 0, 0, 3));
+    check("create, new namespace", t, ops(4, 2, 0, 0, 2, 8));
     let mark = store.mark();
     internal::create(store.clone()).await.unwrap();
     let t = Tally::of(&store.since(mark));
-    check("create, existing namespace", t, ops(2, 1, 0, 0, 3));
+    check("create, existing namespace", t, ops(4, 2, 1, 0, 2, 9));
     let mark = store.mark();
     internal::open_store(store.clone()).await.unwrap();
-    check("open", Tally::of(&store.since(mark)), ops(1, 1, 0, 0, 2));
+    check("open", Tally::of(&store.since(mark)), ops(3, 2, 1, 0, 2, 8));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -324,52 +429,51 @@ async fn client_verbs() {
     let wf = steps();
     let (run, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
     let run = run.unwrap();
-    // The start, its due entry, and a GET of the id's tombstone.
-    // § one ct862686r@ytchp
-    check("start", t, ops(2, 1, 0, 0, 3));
+    // The chain's head, then its due entry.
+    // § one jbkv4v0we@pqc46
+    check("start", t, ops(2, 0, 0, 0, 0, 2));
     let (again, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
     again.unwrap();
-    check("start, same id and input again", t, ops(2, 2, 0, 0, 4));
-    // § ct862686r.b@yzmsy
+    // The head exists: read to compare its start, then the due entry again.
+    check("start, same id and input again", t, ops(2, 0, 1, 0, 0, 3));
+    // § jbkv4v0we.b@ft4xq
     let (taken, t) = b.client(b.sub.start(&wf, K { k: 1 }).id("r")).await;
     assert!(matches!(taken, Err(Error::RunExists { .. })), "{taken:?}");
-    check("start, id taken: RunExists", t, ops(1, 1, 0, 0, 2));
-    // § end ct862686r.b
+    check("start, id taken: RunExists", t, ops(1, 0, 1, 0, 0, 2));
+    // § end jbkv4v0we.b
 
     let (status, t) = b.client(run.status()).await;
     assert_eq!(status.unwrap(), RunStatus::Pending);
-    // The chain's first run's result and start, then one listing of the run.
-    check("status, pending", t, ops(0, 2, 1, 0, 3));
-    // § dva6cx6nb.a@r5rvg
+    // The chain's head alone, wherever its run is.
+    check("status, pending", t, ops(0, 0, 1, 0, 0, 1));
+    // § dva6cx6nb.c@ynjht
     let (sent, t) = b.client(run.send("m", 1)).await;
     sent.unwrap();
-    check("send", t, ops(2, 2, 0, 0, 4));
+    check("send", t, ops(1, 0, 1, 0, 0, 2));
     let (cancelled, t) = b.client(run.cancel("no")).await;
     cancelled.unwrap();
-    check("cancel", t, ops(2, 2, 0, 0, 4));
-    // § end dva6cx6nb.a
+    check("cancel", t, ops(1, 0, 1, 0, 0, 2));
+    // § end dva6cx6nb.c
     let (read, t) = b.client(run.read::<u32>("progress")).await;
     assert_eq!(read.unwrap(), None);
-    check("read, nothing published", t, ops(0, 0, 1, 0, 1));
+    check("read, nothing published", t, ops(0, 0, 1, 0, 0, 1));
     let missing = b.sub.run(&wf, "nobody");
-    // § dva6cx6nb@ya6zc
+    // § dva6cx6nb@8fmdz
     let (sent, t) = b.client(missing.send("m", 1)).await;
     assert!(matches!(sent, Err(Error::RunNotFound { .. })), "{sent:?}");
     // § end dva6cx6nb
-    // The first run's result and start, then its tombstone.
-    check("send, no chain: RunNotFound", t, ops(0, 3, 0, 0, 3));
+    check("send, no chain: RunNotFound", t, ops(0, 0, 1, 0, 0, 1));
 
     // Polls at 0, 10, 30, 70, 150, 310, 630, 1,270, 2,550 and 5,110 ms, the interval doubling up
     // to 30 s: 10 in 6 s.
-    // § e9a24k5b9@sh0wb
+    // § hnjtggsx7@tsywj
     let (not_ended, t) = b.client(run.result().timeout(Duration::from_secs(6))).await;
     assert!(
         matches!(not_ended, Err(Error::WaitTimeout)),
         "{not_ended:?}"
     );
     row("result, 6 s of polls, not ended", &t);
-    // The first poll gets the chain's first run's `result` and `start`, each later one the
-    // `result` of the run the poll before answered.
+    // Each poll reads the chain's head, one GET.
     assert!((10..=11).contains(&t.get), "{t:?}");
     assert_eq!((t.list, t.put, t.delete), (0, 0, 0), "{t:?}");
 
@@ -381,18 +485,18 @@ async fn client_verbs() {
     assert_eq!(
         (t.list, t.put, t.delete),
         (0, 0, 0),
-        "every poll reads one key, the first two"
+        "every poll reads the head alone"
     );
-    // § end e9a24k5b9
+    // § end hnjtggsx7
     let (_, t) = b.client(run.result()).await;
-    // § hegd7d4bp@fqcqh
-    check("result, ended", t, ops(0, 1, 0, 0, 1));
+    // § fw4aw2ath@31j54
+    check("result, ended", t, ops(0, 0, 1, 0, 0, 1));
     let (status, t) = b.client(run.status()).await;
     assert_eq!(status.unwrap(), RunStatus::Completed);
-    check("status, ended", t, ops(0, 1, 0, 0, 1));
+    check("status, ended", t, ops(0, 0, 1, 0, 0, 1));
     let (sent, t) = b.client(run.send("m", 1)).await;
     assert!(matches!(sent, Err(Error::RunEnded { .. })), "{sent:?}");
-    check("send, run ended: RunEnded", t, ops(0, 1, 0, 0, 1));
+    check("send, run ended: RunEnded", t, ops(0, 0, 1, 0, 0, 1));
     worker.shutdown().await.unwrap();
 }
 
@@ -409,7 +513,7 @@ async fn status_of_a_suspended_run() {
     quiet(&b.workers).await;
     let (status, t) = b.client(run.status()).await;
     assert_eq!(status.unwrap(), RunStatus::Suspended);
-    check("status, suspended", t, ops(0, 2, 1, 0, 3));
+    check("status, suspended", t, ops(0, 0, 1, 0, 0, 1));
     worker.shutdown().await.unwrap();
 }
 
@@ -433,16 +537,20 @@ async fn steps_and_commit_every() {
         b.check_recorded(&label, &w, run.chain(), &[run.chain()])
             .await;
     }
-    // § wkryj60b0@gyt7q
-    // The last step is in the end's segment; each step before it is a progress commit, made as
-    // the next one starts. The end creates the run's collection entry and lists its watchers.
-    let end = ops(4, 1, 2, 2, 9);
-    check("0 steps, start to end", measured[0], end);
-    check("1 step, start to end", measured[1], end);
-    let progress = ops(1, 0, 1, 0, 2);
+    // § wkryj60b0@5hjtr
+    // The last step is in the end's segment; each step before it is a progress commit, the
+    // head's cas and a listing of the chain's messages, made as the next one starts. A wakeup
+    // reads the head, and one that runs a step takes the lease first, a cas of the head; the
+    // end's cas writes the head with its expiry, then lists its watchers and deletes the served
+    // entry.
+    let (stepless, stepped) = (ops(0, 1, 1, 1, 1, 4), ops(0, 2, 1, 1, 1, 5));
+    check("0 steps, start to end", measured[0], stepless);
+    check("1 step, start to end", measured[1], stepped);
+    let progress = ops(0, 1, 0, 1, 0, 2);
     for k in 2..4 {
         let d = Tally {
             put: measured[k].put - measured[k - 1].put,
+            cas: measured[k].cas - measured[k - 1].cas,
             get: measured[k].get - measured[k - 1].get,
             list: measured[k].list - measured[k - 1].list,
             wait: 0,
@@ -466,7 +574,7 @@ async fn steps_and_commit_every() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    check_wakeups("now, random, uuid, end", &w, &[end]);
+    check_wakeups("now, random, uuid, end", &w, &[stepless]);
     let label = "now, random, uuid, end";
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
@@ -478,7 +586,7 @@ async fn steps_and_commit_every() {
     internal::wake(&grouped);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    check_wakeups("3 steps, commit_every 1h", &w, &[end]);
+    check_wakeups("3 steps, commit_every 1h", &w, &[stepped]);
     let label = "3 steps, commit_every 1h";
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
@@ -522,10 +630,10 @@ async fn store_requests_priced() {
     let label = "a step, a sleep, a step, priced";
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
-    // § ap5tfnrja.b@33q38
+    // § ap5tfnrja.b@tbd65
     let (mut put, mut get, mut list) = (0, 0, 0);
     for (_, t) in &w.wakeups {
-        (put, get, list) = (put + t.put, get + t.get, list + t.list + t.wait);
+        (put, get, list) = (put + t.put + t.cas, get + t.get, list + t.list + t.wait);
     }
     let store = b.recorded(run.chain()).await.store.unwrap_or_default();
     let expected = layout::Amount {
@@ -556,21 +664,64 @@ async fn three_steps_a_sleep_and_the_end() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    // § czph3f9yv.b@3sy2f
-    // § gnhavbn5m@yehkq
-    // The third step lands in the suspension; the worker holds the history for the second wakeup.
-    let expected = [ops(5, 1, 3, 2, 11), ops(4, 0, 2, 2, 8)];
+    // § czph3f9yv.d@z2xe2
+    // § gnhavbn5m@7656e
+    // The third step lands in the suspension, after its timer's due entry; the worker holds the
+    // head for the second wakeup, which needs no GET.
+    let expected = [ops(1, 4, 1, 2, 1, 9), ops(0, 1, 0, 1, 1, 3)];
     check_wakeups("3 steps, sleep, end", &w, &expected);
     assert_eq!(w.scans, 2, "each wakeup found by a scan");
     // § end gnhavbn5m
     let label = "3 steps, sleep, end";
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
-    // § end czph3f9yv.b
+    // § end czph3f9yv.d
     let stored = b.stored().await;
-    assert_eq!(stored["log"].0, 4);
-    assert_eq!(stored["queues"].0, 1, "the collection entry");
-    assert_eq!(stored.values().map(|(n, _)| n).sum::<usize>(), 9);
+    let kinds: Vec<&str> = stored.keys().map(String::as_str).collect();
+    assert_eq!(kinds, ["runs", "substantial.json"], "the head alone");
+    assert_eq!(stored["runs"].0, 1);
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_blocks_then_resumes() {
+    let b = bench().await;
+    let broken = Arc::new(AtomicBool::new(true));
+    let code = broken.clone();
+    let wf = Workflow::without_input("fixed", move |c| {
+        let broken = code.load(Ordering::SeqCst);
+        async move {
+            step_n(&c, 0).await?;
+            if broken {
+                return Err(anyhow::anyhow!("a bug").into());
+            }
+            Ok(1)
+        }
+    });
+    let worker = b.started(b.worker(&wf)).await;
+    let mark = b.workers.mark();
+    let run = b.sub.start(&wf, ()).await.unwrap();
+    internal::wake(&worker);
+    let w = b.since(mark).await;
+    // The replay records nothing, not even its step: the head's cas holds the block, then the due
+    // entry that tries it again and the queue's marker.
+    check_wakeups("a step, then a block", &w, &[ops(2, 2, 1, 0, 1, 5)]);
+    let (status, t) = b.client(run.status()).await;
+    assert_eq!(status.unwrap(), RunStatus::Blocked);
+    // The head, which holds the block.
+    check("status, blocked", t, ops(0, 0, 1, 0, 0, 1));
+    let (listed, t) = b.client(b.sub.runs(&wf).try_collect::<Vec<_>>()).await;
+    assert_eq!(listed.unwrap().len(), 1);
+    // A page of `blocked/` and its run's head, then the pages of `due/` and `rest/`, where the
+    // blocked run is not read again.
+    check("runs, 1 blocked", t, ops(0, 0, 1, 3, 0, 4));
+    broken.store(false, Ordering::SeqCst);
+    let mark = b.workers.mark();
+    // The script preset tries a blocked run again 1 s later, at the worker's timer.
+    assert_eq!(run.result().timeout(LONG).await.unwrap(), 1);
+    let w = b.since(mark).await;
+    // The end as usual, from the head the worker holds, and the delete of the queue's marker.
+    check_wakeups("the fix resumes it", &w, &[ops(0, 2, 0, 1, 2, 4)]);
     worker.shutdown().await.unwrap();
 }
 
@@ -589,18 +740,19 @@ async fn an_order_waits_for_its_payment() {
     let run = b.sub.start(&wf, ()).await.unwrap();
     internal::wake(&worker);
     quiet(&b.workers).await;
-    // § cn55c9k5a@ka4ps
+    // § pt3fegerz@6sah0
     let (status, _) = b.client(run.status()).await;
     assert_eq!(status.unwrap(), RunStatus::Suspended, "an empty replay");
-    // § end cn55c9k5a
+    // § end pt3fegerz
     run.send("payment", 3).await.unwrap();
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     // Nothing to record before the payment: the first wakeup writes an empty segment, so the
     // run reads suspended, and creates its rest marker instead of a due entry; its end deletes it.
-    let expected = [ops(3, 1, 1, 2, 7), ops(5, 1, 3, 4, 13)];
-    // § one e3rcyme0p.b@bpx8x
+    // The message is a due entry holding its body: one GET.
+    let expected = [ops(1, 1, 1, 0, 1, 4), ops(0, 3, 1, 2, 2, 8)];
+    // § one d9vmk6y6y.b@bgtah
     // silcrow:follow
     check_wakeups("receive, 2 steps, end", &w, &expected);
     assert_eq!(w.scans, 2, "each wakeup found by a scan");
@@ -608,8 +760,9 @@ async fn an_order_waits_for_its_payment() {
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
     let stored = b.stored().await;
-    assert_eq!(stored["log"].0, 3);
-    assert_eq!(stored.values().map(|(n, _)| n).sum::<usize>(), 8);
+    let kinds: Vec<&str> = stored.keys().map(String::as_str).collect();
+    assert_eq!(kinds, ["runs", "substantial.json"], "the head alone");
+    assert_eq!(stored["runs"].0, 1);
     worker.shutdown().await.unwrap();
 }
 
@@ -637,7 +790,7 @@ async fn a_wait_with_a_timeout_leaves_its_timer() {
     tokio::time::sleep(SLEEP).await;
     let w = b.since(mark).await;
     // The end deletes the timer's due entry: no wakeup at its time.
-    let expected = [ops(3, 1, 1, 2, 7), ops(4, 1, 2, 4, 11)];
+    let expected = [ops(1, 1, 1, 0, 1, 4), ops(0, 1, 1, 1, 2, 4)];
     let label = "wait_until with timeout, message, end, stale timer";
     check_wakeups(label, &w, &expected);
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
@@ -663,15 +816,23 @@ async fn a_child_and_its_result() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    // The child's start reads its id's tombstone.
+    // The parent's first wait on a message creates its rest marker; its cas, pending, then the
+    // child's head and due entry, and the cas that clears the pending. The child's end tells the
+    // parent by a message entry. The parent's end reads the message and reads no child's head: it
+    // expires after its own retention.
     let expected = [
-        ops(7, 2, 1, 2, 12),
-        ops(6, 2, 2, 2, 12),
-        ops(4, 1, 2, 4, 11),
+        ops(3, 2, 1, 0, 1, 7),
+        ops(1, 2, 1, 1, 1, 6),
+        ops(0, 1, 1, 1, 2, 5),
     ];
     let label = "parent starts a child, child ends, parent ends";
     check_wakeups(label, &w, &expected);
     let (parent, kid) = (run.chain(), w.wakeups[1].0.as_str());
+    let ended = groups(&b.workers.since(mark)).pop().unwrap().1;
+    assert!(
+        ended.iter().all(|op| op.key != format!("runs/{kid}")),
+        "{ended:?}"
+    );
     b.check_recorded(label, &w, parent, &[parent]).await;
     b.check_recorded(label, &w, kid, &[kid]).await;
     // The child's end carried its total, which the parent added to its children.
@@ -711,7 +872,9 @@ async fn a_workflow_sends_and_publishes() {
     t.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     // The sender's replay reads the target's result and start before its commit, its effect none.
-    let expected = [ops(6, 3, 2, 2, 13), ops(4, 1, 2, 4, 11)];
+    // The send reads the target's head before the commit; after it, the message entry, then the
+    // cas that clears the pending.
+    let expected = [ops(1, 2, 2, 1, 1, 7), ops(0, 1, 1, 1, 2, 5)];
     let label = "a run sends and ends, the target ends";
     check_wakeups(label, &w, &expected);
     let all = worked(&b.workers.since(first));
@@ -722,12 +885,12 @@ async fn a_workflow_sends_and_publishes() {
     internal::wake(&worker);
     p.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    check_wakeups("a run publishes and ends", &w, &[ops(5, 1, 2, 2, 10)]);
+    check_wakeups("a run publishes and ends", &w, &[ops(0, 1, 1, 1, 1, 4)]);
     b.check_recorded("a run publishes and ends", &w, "p", &["p"])
         .await;
     let (read, t) = b.client(p.read::<u32>("progress")).await;
     assert_eq!(read.unwrap(), Some(1));
-    check("read, a value", t, ops(0, 1, 1, 0, 2));
+    check("read, a value", t, ops(0, 0, 1, 0, 0, 1));
     worker.shutdown().await.unwrap();
 }
 
@@ -751,29 +914,72 @@ async fn continue_as_new_by_hand() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    let expected = [ops(7, 1, 2, 2, 12), ops(4, 1, 2, 2, 9)];
+    // The next run is replayed in place, in the wakeup that continued, and its end is two-phase:
+    // its cas pending, the pointer's expiry, the head's.
+    let expected = [ops(3, 4, 1, 1, 2, 10)];
     let label = "continue as new, then end";
     check_wakeups(label, &w, &expected);
-    // § czph3f9yv.c@k74gz
+    // A continuation is 4 writes: the next run's wakeup, the head, the archive, the pointer.
+    let next = b.current(run.chain()).await.run;
+    let writes: Vec<(Kind, String)> = (b.workers.since(mark).into_iter())
+        .filter(|op| matches!(op.kind, Kind::Put | Kind::Cas))
+        .take(4)
+        .map(|op| (op.kind, op.key))
+        .collect();
+    let chain = run.chain();
+    assert!(
+        writes[0].1.starts_with("queues/countdown/due/")
+            && writes[0].1.ends_with(&format!("~{chain}~s0000000000")),
+        "{writes:?}"
+    );
+    assert_eq!(
+        writes[1..],
+        [
+            (Kind::Cas, format!("runs/{chain}")),
+            (Kind::Put, format!("archives/{chain}")),
+            (Kind::Put, format!("runs/{next}")),
+        ],
+    );
+    // § czph3f9yv.f@wsrht
     // The next run starts from the first's total.
-    let (first, next) = (run.chain(), w.wakeups[1].0.as_str());
-    b.check_recorded(label, &w, first, &[first]).await;
-    b.check_recorded(label, &w, next, &[first, next]).await;
-    // § end czph3f9yv.c
+    let first = run.chain();
+    let archived = through(&b.workers.since(mark), first, &format!("runs/{next}"));
+    b.check_requests(label, first, archived).await;
+    b.check_recorded(label, &w, &next, &[first]).await;
+    // § end czph3f9yv.f
     let (_, t) = b.client(run.result()).await;
-    check("result, a chain of 2 runs", t, ops(0, 2, 1, 0, 3));
+    check("result, a chain of 2 runs", t, ops(0, 0, 1, 0, 0, 1));
     worker.shutdown().await.unwrap();
 }
+
+const ITERATION_CONTINUES: Tally = Tally {
+    put: 4,
+    cas: 3,
+    get: 0,
+    list: 0,
+    wait: 0,
+    delete: 2,
+    trips: 8,
+};
+const ITERATION_ENDS: Tally = Tally {
+    put: 0,
+    cas: 4,
+    get: 0,
+    list: 1,
+    wait: 0,
+    delete: 1,
+    trips: 6,
+};
 
 #[derive(Serialize, Deserialize)]
 struct Polls {
     i: u32,
 }
 
-/// A poll then a sleep per iteration: one segment each, the history read again at every wakeup
-/// up to the last snapshot, a continuation once it holds `continue_as_new_after` segments.
+/// A poll then a sleep per iteration: one segment each, the head read at the first wakeup and held
+/// by the worker after it, a continuation once it holds `continue_as_new_after` segments.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_polling_loop_snapshots_and_compresses() {
+async fn a_polling_loop_compresses() {
     let b = bench().await;
     let cron = Workflow::without_input("cron", |c| async move {
         let last = c
@@ -788,44 +994,43 @@ async fn a_polling_loop_snapshots_and_compresses() {
             .await?;
         Ok(last.i)
     });
-    let builder = b
-        .worker(&cron)
-        .hidden("snapshot_every", 4)
-        .set("continue_as_new_after", "8,8MiB");
+    let builder = b.worker(&cron).set("continue_as_new_after", "8,8MiB");
     let worker = b.started(builder).await;
     let mark = b.workers.mark();
     let run = b.sub.start(&cron, ()).await.unwrap();
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    // § aqrdmj10z@ztav4
-    // An iteration: PUT 3, LIST 1, DELETE 2, a snapshot's PUT every `snapshot_every` segments,
-    // and a GET of the run's `start` at its first wakeup: the worker holds the rest.
-    let iteration = |first: usize, snap: usize| ops(3 + snap, first, 1, 2, 6 + first + snap);
-    let expected = [
-        iteration(1, 0),
-        iteration(0, 0),
-        iteration(0, 0),
-        iteration(0, 1),
-        iteration(0, 0),
-        iteration(0, 0),
-        iteration(0, 0),
-        iteration(0, 1),
-        // The ninth: 8 segments, the threshold passed, the run continues.
-        ops(7, 0, 2, 2, 11),
-        // The next run of the chain, from an empty history.
-        iteration(1, 0),
-        // The last iteration ends the chain.
-        ops(4, 0, 2, 2, 8),
-    ];
-    let label = "polling loop, snapshot_every 4, continue after 8";
+    // § hdzwp5tnf@rzjab
+    // An iteration: its lease's cas, its timer's due entry and the suspension's cas, DELETE 1 for
+    // the entry it was woken by, and a GET of the head at its first wakeup: the worker holds it
+    // after.
+    let iteration = |first: usize| ops(1, 2, first, 0, 1, 4 + first);
+    let mut expected = vec![iteration(1)];
+    expected.extend([iteration(0); 7]);
+    expected.extend([
+        // The ninth: 8 segments, the threshold passed, the run continues before its step, so
+        // with no lease: the next run's wakeup, the head, the archive and the pointer; then the
+        // next run's first iteration in place, the cas that clears the continuation, its timer
+        // and its suspension, and the deletes of both wakeups.
+        ITERATION_CONTINUES,
+        // The last iteration ends the chain: its lease, the end's cas pending, the pointer's
+        // expiry, the head's.
+        ITERATION_ENDS,
+    ]);
+    let label = "polling loop, continue after 8";
     check_wakeups(label, &w, &expected);
-    // § end aqrdmj10z
-    let (first, next) = (run.chain(), w.wakeups[9].0.as_str());
-    b.check_recorded(label, &w, first, &[first]).await;
-    b.check_recorded(label, &w, next, &[first, next]).await;
+    // § end hdzwp5tnf
+    let (first, next) = (run.chain(), b.current(run.chain()).await.run);
+    let archived = through(&b.workers.since(mark), first, &format!("runs/{next}"));
+    b.check_requests(label, first, archived).await;
+    b.check_recorded(label, &w, &next, &[first]).await;
     let stored = b.stored().await;
-    assert_eq!((stored["log"].0, stored["snap"].0), (11, 2));
+    let counts: Vec<(&str, usize)> = stored.iter().map(|(k, (n, _))| (k.as_str(), *n)).collect();
+    assert_eq!(
+        counts,
+        [("archives", 1), ("runs", 2), ("substantial.json", 1)]
+    );
     worker.shutdown().await.unwrap();
 }
 
@@ -842,6 +1047,7 @@ async fn a_retry_and_a_rollback() {
                 initial: Duration::from_millis(500),
                 max: Duration::from_millis(500),
                 multiplier: 1.0,
+                deadline: None,
             };
             c.step("s", move || {
                 let t = t.clone();
@@ -869,7 +1075,7 @@ async fn a_retry_and_a_rollback() {
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     // The failed attempt and its backoff land in one suspension.
-    let expected = [ops(3, 1, 1, 2, 7), ops(4, 0, 2, 2, 8)];
+    let expected = [ops(1, 2, 1, 0, 1, 5), ops(0, 2, 0, 1, 1, 4)];
     let label = "a step fails once, retried after its backoff";
     check_wakeups(label, &w, &expected);
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
@@ -880,71 +1086,200 @@ async fn a_retry_and_a_rollback() {
     assert!(run.result().timeout(LONG).await.is_err());
     let w = b.since(mark).await;
     let label = "a step, a rollback undoing it";
-    check_wakeups(label, &w, &[ops(5, 1, 3, 2, 11)]);
+    check_wakeups(label, &w, &[ops(0, 3, 1, 2, 1, 7)]);
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
     worker.shutdown().await.unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cancel_reaches_a_child() {
+#[derive(Serialize, Deserialize)]
+struct Ending {
+    children: u32,
+    end: String,
+}
+
+/// A parent that starts `children` waiting children, then ends as `end` says: `completed` or
+/// `failed` at the message `go`, `cancelled` by a client's cancel; its end cancels the children
+/// still running. The wakeups from its end on, its own and its children's, and its chain.
+async fn an_end_with_children(end: &str, children: u32) -> (Worked, String, Vec<String>) {
     let b = bench().await;
-    let kid = Workflow::without_input("waiter", |c| async move { c.receive::<u32>("never").await });
+    let kid = kid_workflow();
     let k = kid.clone();
-    let parent = Workflow::without_input("canceller", move |c| {
+    let parent = Workflow::new("parent", move |c, input: Ending| {
         let k = k.clone();
         async move {
-            let _child = c.start(&k, ()).await?;
-            c.receive::<u32>("never").await
+            for _ in 0..input.children {
+                c.start(&k, ()).await?;
+            }
+            c.receive::<u32>("go").await?;
+            match input.end.as_str() {
+                "failed" => Err(Error::fail("Refused", "no")),
+                _ => Ok(0u32),
+            }
         }
     });
-    let worker = b.started(b.worker((parent.clone(), kid))).await;
-    let first = b.workers.mark();
-    let run = b.sub.start(&parent, ()).await.unwrap();
+    let worker = b.started(b.worker((parent.clone(), kid.clone()))).await;
+    let input = Ending {
+        children,
+        end: end.to_owned(),
+    };
+    let run = b.sub.start(&parent, input).await.unwrap();
     internal::wake(&worker);
     quiet(&b.workers).await;
+    let first = worked(&b.workers.since(0));
+    let kids: Vec<String> = (first.wakeups.iter())
+        .map(|(chain, _)| chain.clone())
+        // The worker's open of the namespace, before its first scan.
+        .filter(|chain| chain != run.chain() && chain != "?")
+        .collect();
+    assert_eq!(kids.len(), children as usize, "{first:?}");
     let mark = b.workers.mark();
-    run.cancel("stop").await.unwrap();
+    match end {
+        "cancelled" => run.cancel("stop").await.unwrap(),
+        _ => run.send("go", 1).await.unwrap(),
+    }
     internal::wake(&worker);
-    assert!(run.result().timeout(LONG).await.is_err());
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _ = run.result().timeout(LONG).await;
     let w = b.since(mark).await;
-    // The parent ends cancelled and cancels its child; the child's end reaches the parent,
-    // which has ended: that wakeup reads its history, to forward the message if it continued,
-    // and deletes the hints.
-    let expected = [ops(6, 3, 3, 4, 16), ops(6, 2, 3, 4, 15), ops(0, 3, 1, 1, 5)];
-    let label = "cancel a parent with a child";
-    // § one t873v7eg5@z54kh
-    // silcrow:follow
-    check_wakeups(label, &w, &expected);
-    let all = worked(&b.workers.since(first));
-    let (parent, kid) = (run.chain(), all.wakeups[1].0.as_str());
-    // A cancellation's fan-out to children counts for no run: the listing of the run's index of
-    // children, then for each child its `result` and `start`, its message and its due entry.
-    // § t873v7eg5.a@jgq5d
-    let fan_out = |children: u64| layout::Requests {
-        create: 2 * children,
-        get: 2 * children,
-        list: 1,
-        delete: 0,
-    };
-    let less = |a: layout::Requests, b: layout::Requests| layout::Requests {
-        create: a.create - b.create,
+    for chain in &kids {
+        let status = b.sub.run(&kid, chain).status().await.unwrap();
+        assert_eq!(status, RunStatus::Cancelled, "{end}: child {chain}");
+    }
+    let label = format!("a {end} end with {children} children");
+    for (i, (chain, t)) in w.wakeups.iter().enumerate() {
+        let who = if chain == run.chain() {
+            "parent"
+        } else {
+            "child"
+        };
+        row(&format!("{label}, wakeup {} ({who})", i + 1), t);
+    }
+    let all = worked(&b.workers.since(0));
+    // The parent's end is its last segment: the wakeups its children's ends bring come after it.
+    let before = worked(&b.workers.since(0)[..mark]);
+    // § m0vtdttae.e@k1g1r
+    // Its end's fan-out to its children included.
+    let mut through_end = recordable(&before, &[run.chain()]);
+    assert_eq!(w.wakeups[0].0, run.chain(), "{w:?}");
+    add(&mut through_end, &w.wakeups[0].1);
+    b.check_requests(&label, run.chain(), through_end).await;
+    // § end m0vtdttae.e
+    for kid in &kids {
+        b.check_recorded(&label, &all, kid, &[kid]).await;
+    }
+    worker.shutdown().await.unwrap();
+    (w, run.chain().to_owned(), kids)
+}
+
+fn kid_workflow() -> Workflow<u32> {
+    Workflow::without_input("waiter", |c| async move { c.receive::<u32>("never").await })
+}
+
+/// The difference `a - b`, operation by operation.
+fn minus(a: Tally, b: Tally) -> Tally {
+    Tally {
+        put: a.put - b.put,
+        cas: a.cas - b.cas,
         get: a.get - b.get,
         list: a.list - b.list,
+        wait: a.wait - b.wait,
         delete: a.delete - b.delete,
-    };
-    // The parent's last wakeup, after its end, writes no segment.
-    let (after_end, before) = all.wakeups.split_last().unwrap();
-    assert_eq!(after_end.0, parent, "{label}: {all:?}");
-    // § m0vtdttae.b@jfapk
-    let mine = less(counted(before, &[parent]), fan_out(1));
-    b.check_requests(label, parent, mine).await;
-    // § end m0vtdttae.b
-    let theirs = less(counted(&all.wakeups, &[kid]), fan_out(0));
-    b.check_requests(label, kid, theirs).await;
-    // § end t873v7eg5.a
-    worker.shutdown().await.unwrap();
+        trips: a.trips.saturating_sub(b.trips),
+    }
+}
+
+/// An end that cancels its running children, not abandoned: completed, failed or cancelled, its
+/// fan-out reads each child's head and sends it the cancel, and each child's cancelled end tells
+/// the ended parent, which drops the notice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_end_cancels_its_children() {
+    for end in ["cancelled", "completed", "failed"] {
+        // § one fca4h4ker@mwnnd
+        // silcrow:follow
+        let (one, parent, _) = an_end_with_children(end, 1).await;
+        let (three, three_parent, _) = an_end_with_children(end, 3).await;
+        let own = |w: &Worked, parent: &str| -> Vec<Tally> {
+            (w.wakeups.iter())
+                .filter(|(chain, _)| chain.as_str() == parent)
+                .map(|(_, t)| *t)
+                .collect()
+        };
+        // The parent's end wakeup: its own operations, and per child the fan-out.
+        let (end_one, end_three) = (own(&one, &parent)[0], own(&three, &three_parent)[0]);
+        let delta = minus(end_three, end_one);
+        // § fca4h4ker.a@hcbzz
+        let per_child = Tally {
+            put: delta.put / 2,
+            cas: delta.cas / 2,
+            get: delta.get / 2,
+            list: delta.list / 2,
+            wait: 0,
+            delete: delta.delete / 2,
+            trips: 0,
+        };
+        println!("a {end} end, its fan-out per child: {per_child:?}");
+        // The parent's end: the message that ends it read, the end's cas pending with its expiry,
+        // the child's head read and its cancel sent, the cas that clears the pending, its watchers
+        // listed, its rest marker and the served entry deleted.
+        check(
+            &format!("a {end} end, 1 child"),
+            end_one,
+            ops(1, 2, 2, 1, 2, 8),
+        );
+        // Per child: 1 GET of its head, 1 PUT of its cancel.
+        let measured = Tally {
+            trips: 0,
+            ..per_child
+        };
+        check(
+            &format!("a {end} end, per child"),
+            measured,
+            ops(1, 0, 1, 0, 0, 0),
+        );
+        assert_eq!(
+            delta.put % 2 + delta.get % 2 + delta.cas % 2,
+            0,
+            "{delta:?}"
+        );
+        let children: Vec<Tally> = (one.wakeups.iter())
+            .filter(|(chain, _)| chain.as_str() != parent)
+            .map(|(_, t)| *t)
+            .collect();
+        // The child's cancelled end: its cancel read, its end's cas pending, its notice to the
+        // parent, the cas that clears it with the expiry, its rest marker deleted, its watchers
+        // listed, the served entry deleted.
+        check_wakeups(
+            &format!("a {end} end, the child's cancelled end"),
+            &Worked {
+                wakeups: children.iter().map(|t| ("child".to_owned(), *t)).collect(),
+                ops: Vec::new(),
+                scans: 0,
+                scan_lists: 0,
+            },
+            &[ops(1, 2, 1, 1, 2, 7)],
+        );
+        // Each child's notice wakes the ended parent, which reads its head, lists its watchers
+        // again and deletes the notice and its entry, writing nothing.
+        let after = |w: &Worked, parent: &str, label: &str, expected: &[Tally]| {
+            let after: Vec<Tally> = own(w, parent)[1..].to_vec();
+            check_wakeups(
+                label,
+                &Worked {
+                    wakeups: after.iter().map(|t| ("parent".to_owned(), *t)).collect(),
+                    ops: Vec::new(),
+                    scans: 0,
+                    scan_lists: 0,
+                },
+                expected,
+            );
+        };
+        let label = format!("a {end} end, the parent after its child's end");
+        let notice = ops(0, 0, 1, 1, 2, 4);
+        after(&one, &parent, &label, &[notice]);
+        let label = format!("a {end} end, the parent after each of its 3 children's ends");
+        after(&three, &three_parent, &label, &[notice, notice, notice]);
+        // § end fca4h4ker.a
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -962,7 +1297,7 @@ async fn a_parent_cancels_its_child() {
                     status: RunStatus::Cancelled,
                     ..
                 }) => Ok(0u32),
-                other => Err(Error::failed("Unexpected", format!("{other:?}"))),
+                other => Err(Error::fail("Unexpected", format!("{other:?}"))),
             }
         }
     });
@@ -983,12 +1318,12 @@ async fn a_parent_cancels_its_child() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    // Before its commit, the send reads the child's `result`, `start` and `gone`, the child's
-    // start not created yet: GET 3 and PUT 2 over the row of a child started alone.
+    // Before its commit, the send reads the child's head, not created yet: GET 1 over the row of
+    // a child started alone, and after it the message entry, PUT 1.
     let expected = [
-        ops(9, 5, 1, 2, 17),
-        ops(6, 3, 2, 4, 15),
-        ops(4, 1, 2, 4, 11),
+        ops(4, 2, 2, 0, 1, 8),
+        ops(1, 2, 2, 1, 2, 7),
+        ops(0, 1, 1, 1, 2, 5),
     ];
     let label = "parent starts a child and sends it a message, child ends, parent ends";
     check_wakeups(label, &w, &expected);
@@ -1000,19 +1335,66 @@ async fn a_parent_cancels_its_child() {
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
-    // The child's cancelled end lists its children, a fan-out no segment records.
     let expected = [
-        ops(9, 5, 1, 2, 17),
-        ops(6, 3, 3, 4, 16),
-        ops(4, 1, 2, 4, 11),
+        ops(4, 2, 2, 0, 1, 8),
+        ops(1, 2, 2, 1, 2, 7),
+        ops(0, 1, 1, 1, 2, 5),
     ];
     let label = "parent starts a child and cancels it, child ends cancelled, parent ends";
     check_wakeups(label, &w, &expected);
     let (parent, kid) = (run.chain(), w.wakeups[1].0.as_str());
     b.check_recorded(label, &w, parent, &[parent]).await;
-    let mut theirs = counted(&w.wakeups, &[kid]);
-    theirs.list -= 1;
-    b.check_requests(label, kid, theirs).await;
+    b.check_recorded(label, &w, kid, &[kid]).await;
+    worker.shutdown().await.unwrap();
+}
+
+/// A parent that starts a child with `abandon` and ends at once: its end is written with its own
+/// expiry, and the child's late notice costs the ended parent a read and the deletes, no write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parent_before_its_abandoned_child() {
+    let b = bench().await;
+    let stray = Workflow::without_input("stray", |c| async move {
+        step_n(&c, 0).await?;
+        c.sleep(SLEEP).await?;
+        Ok(2u32)
+    });
+    let s = stray.clone();
+    let leaver = Workflow::without_input("leaver", move |c| {
+        let s = s.clone();
+        async move {
+            c.start(&s, ()).id("k2").abandon().await?;
+            Ok(0u32)
+        }
+    });
+    let worker = b.started(b.worker((leaver.clone(), stray.clone()))).await;
+    let mark = b.workers.mark();
+    let run = b.sub.start(&leaver, ()).id("p2").await.unwrap();
+    internal::wake(&worker);
+    run.result().timeout(LONG).await.unwrap();
+    b.sub
+        .run(&stray, "k2")
+        .result()
+        .timeout(LONG)
+        .await
+        .unwrap();
+    let w = b.since(mark).await;
+    // § a1ys7at7p@afnfz
+    assert_eq!(
+        b.workers.expiry("runs/p2"),
+        Some(30),
+        "the parent's own expiry"
+    );
+    // The parent: its head read, its end pending, the child's head and due entry, the cas that
+    // clears the pending with its expiry, its watchers listed. The child: its step and sleep, then
+    // its end telling the parent. The ended parent: its head read, its watchers listed again, the
+    // notice's entry deleted.
+    let expected = [
+        ops(2, 2, 1, 1, 1, 7),
+        ops(1, 2, 1, 0, 1, 5),
+        ops(1, 2, 0, 1, 1, 5),
+        ops(0, 0, 1, 1, 1, 3),
+    ];
+    check_wakeups("a parent before its abandoned child", &w, &expected);
     worker.shutdown().await.unwrap();
 }
 
@@ -1033,17 +1415,17 @@ async fn claims_renew_while_a_step_runs() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let (status, t) = b.client(run.status()).await;
     assert_eq!(status.unwrap(), RunStatus::Running);
-    check("status, running", t, ops(0, 3, 1, 0, 4));
+    check("status, running", t, ops(0, 0, 1, 0, 0, 1));
     run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     let t = w.wakeups[0].1;
     row("a 1.2 s step, claim_ttl 400ms", &t);
-    // § t452yredf@f0q40
-    // A renewal every claim_ttl / 2: one claim PUT, and its DELETE once the run commits.
-    let renewals = t.put - 4;
+    // § j1nq6rqpf@mevg5
+    // A renewal every claim_ttl / 2: one cas of the head's lease.
+    let renewals = t.cas - 2;
     assert!((4..=6).contains(&renewals), "{t:?}");
-    assert_eq!(t, ops(4 + renewals, 1, 2, 2 + renewals, 9 + 2 * renewals));
-    // § end t452yredf
+    assert_eq!(t, ops(0, 2 + renewals, 1, 1, 1, 5 + renewals));
+    // § end j1nq6rqpf
     worker.shutdown().await.unwrap();
 }
 
@@ -1070,7 +1452,7 @@ async fn an_idle_worker_lists_each_workflow_every_max_idle() {
     // A scan every max_idle, the first after the worker's phase.
     // § one qsw5w98x3@b5kg4
     assert!((9..=11).contains(&w.scans), "a scan every max_idle: {w:?}");
-    // § one e3rcyme0p.a@cyhx2
+    // § one d9vmk6y6y.a@w8da4
     assert_eq!(w.scan_lists, 2 * w.scans, "a listing per workflow");
     worker.shutdown().await.unwrap();
 }
@@ -1097,7 +1479,7 @@ async fn on_h3_a_waiting_listing_replaces_polling() {
     row("idle 6 s on h3, wait 1s, max_idle 3s", &idle);
     println!("waiting listings {}, listings {}", idle.wait, idle.list);
     // A waiting listing held `wait` then sent again, and a scan every max_idle.
-    // § qsw5w98x3.c@jf41z
+    // § qsw5w98x3.c@vm41m
     assert!((5..=7).contains(&idle.wait), "{idle:?}");
     assert!((1..=3).contains(&idle.list), "{idle:?}");
     assert_eq!(idle.ops(), idle.wait + idle.list, "{idle:?}");
@@ -1121,232 +1503,133 @@ async fn on_h3_a_waiting_listing_replaces_polling() {
         "woken by the start"
     );
     let w = b.since(mark).await;
-    check_wakeups("1 step on h3", &w, &[ops(4, 1, 2, 2, 9)]);
+    check_wakeups("1 step on h3", &w, &[ops(0, 2, 1, 1, 1, 5)]);
     worker.shutdown().await.unwrap();
 }
 
-/// A worker whose runs are collected 200 ms after they end, their ids taken for `tombstone`.
-fn collecting(b: &Bench, workflows: impl IntoWorkflows, tombstone: &str) -> WorkerBuilder {
-    b.worker(workflows)
-        .hidden("retention_min", "100ms")
-        .set("retention", "200ms")
-        .hidden("tombstone", tombstone)
-        .hidden("recheck", "1h")
-}
-
-/// A run of one segment ended, then collected: its id is taken until the tombstone ends.
+/// A run of one segment ended: its head is written with its retention as its expiry, and nothing
+/// else is left of it, no entry and no later operation; once the store removed it, its id is free.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn collection_and_tombstone_of_a_run() {
+async fn an_ended_run_expires_and_its_id_is_free_again() {
     let b = bench().await;
     let wf = steps();
-    let worker = b.started(collecting(&b, &wf, "1h")).await;
+    let worker = b.started(b.worker(&wf)).await;
     let mark = b.workers.mark();
     let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
-    // A collection entry sets no timer: the next scan serves it.
     tokio::time::sleep(Duration::from_millis(400)).await;
     internal::wake(&worker);
     let w = b.since(mark).await;
-    // The collection reads the run's start, its last segment and its result (the result's age),
-    // creates `gone` then the tombstone's entry, and deletes the rest and the served entry; the
-    // run published nothing, so no listing of its values.
-    let expected = [ops(4, 1, 2, 2, 9), ops(2, 3, 1, 5, 11)];
-    // § ja67c3az7@kdtdr
-    // § one cv078fzet@25d49
+    // § jbkv4v0we.e@3tdtt
+    // § one a1ys7at7p.a@4552h
     // silcrow:follow
-    check_wakeups("a run of one segment, then its collection", &w, &expected);
-    // § ja67c3az7.a@nq6bt
-    let (status, t) = b.client(run.status()).await;
-    assert!(
-        matches!(
-            status,
-            Err(Error::RunNotFound {
-                collected: true,
-                ..
-            })
-        ),
-        "{status:?}"
+    check_wakeups(
+        "a run of one segment, then nothing",
+        &w,
+        &[ops(0, 1, 1, 1, 1, 4)],
     );
-    check("status, collected: RunNotFound", t, ops(0, 3, 0, 0, 3));
-    let (taken, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
-    assert!(
-        matches!(
-            taken,
-            Err(Error::RunExists {
-                collected: true,
-                ..
-            })
-        ),
-        "{taken:?}"
-    );
-    // The start, `gone`, then the start withdrawn.
-    check(
-        "start, during the tombstone: RunExists",
-        t,
-        ops(1, 1, 0, 1, 3),
-    );
-    // § end ja67c3az7.a
+    // § a1ys7at7p@5v1w9
+    assert_eq!(b.workers.expiry("runs/r"), Some(30), "the end's expiry");
     let stored = b.stored().await;
     let kinds: Vec<&str> = stored.keys().map(String::as_str).collect();
-    assert_eq!(kinds, ["gone", "probe", "queues", "substantial.json"]);
-    // § end ja67c3az7
-    worker.shutdown().await.unwrap();
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn start_during_and_after_the_tombstone() {
-    let b = bench().await;
-    let wf = steps();
-    let worker = b.started(collecting(&b, &wf, "1s")).await;
-    let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
-    internal::wake(&worker);
-    run.result().timeout(LONG).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    internal::wake(&worker);
-    quiet(&b.workers).await;
-    let (taken, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
+    assert_eq!(kinds, ["runs", "substantial.json"]);
+    // § qkh68yrf1@x2sn2
+    let (taken, t) = b.client(b.sub.start(&wf, K { k: 1 }).id("r")).await;
+    assert!(matches!(taken, Err(Error::RunExists { .. })), "{taken:?}");
+    check("start, id kept: RunExists", t, ops(1, 0, 1, 0, 0, 2));
+    // As its expiry removes it.
+    b.inner.delete("runs/r").await.unwrap();
+    let (status, t) = b.client(run.status()).await;
     assert!(
-        matches!(
-            taken,
-            Err(Error::RunExists {
-                collected: true,
-                ..
-            })
-        ),
-        "{taken:?}"
+        matches!(status, Err(Error::RunNotFound { .. })),
+        "{status:?}"
     );
-    check(
-        "start, during the tombstone: RunExists",
-        t,
-        ops(1, 1, 0, 1, 3),
-    );
-    let mark = b.workers.mark();
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    internal::wake(&worker);
-    let w = b.since(mark).await;
-    check_wakeups("the tombstone's end", &w, &[ops(0, 1, 1, 2, 4)]);
-    let (again, t) = b.client(b.sub.start(&wf, K { k: 0 }).id("r")).await;
+    check("status, removed: RunNotFound", t, ops(0, 0, 1, 0, 0, 1));
+    let (again, t) = b.client(b.sub.start(&wf, K { k: 1 }).id("r")).await;
     again.unwrap();
-    check("start, after the tombstone", t, ops(2, 1, 0, 0, 3));
+    check("start, after the run's removal", t, ops(2, 0, 0, 0, 0, 2));
+    // § end qkh68yrf1
+    // § end jbkv4v0we.e
     worker.shutdown().await.unwrap();
 }
 
-/// A run whose result is younger than twice `retention_min` when its collection comes due: the
-/// collection is deferred to the instant the result is that old.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_young_result_defers_its_collection() {
-    let b = bench().await;
-    let wf = steps();
-    // A window of 400 ms, with 200 ms on each side of the wakeup below for the time the result
-    // takes to reach the client: 100 ms gave 50, which a slow poll overran.
-    let collect = collecting(&b, &wf, "1h")
-        .hidden("retention_min", "400ms")
-        .set("retention", "400ms");
-    let worker = b.started(collect).await;
-    let mark = b.workers.mark();
-    let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
-    internal::wake(&worker);
-    run.result().timeout(LONG).await.unwrap();
-    // Due 400 ms after the end, served while the result is younger than 800 ms: deferred until it
-    // is that old, and served by the scan after.
-    tokio::time::sleep(Duration::from_millis(600)).await;
-    internal::wake(&worker);
-    quiet(&b.workers).await;
-    internal::wake(&worker);
-    let w = b.since(mark).await;
-    // The end, the deferral reading the run up to the result's age, then the collection.
-    // § yx9pxz6mr@kqhb4
-    let expected = [ops(4, 1, 2, 2, 9), ops(1, 3, 1, 1, 6), ops(2, 3, 1, 5, 11)];
-    check_wakeups("a collection deferred by the result's age", &w, &expected);
-    worker.shutdown().await.unwrap();
-}
-
-/// A due entry of a collected id, as a late sender's leaves: its wakeup reads the id is gone and
+/// A due entry of a removed id, as a late sender's leaves: its wakeup reads the id is gone and
 /// deletes the entry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_wakeup_of_a_collected_id() {
+async fn a_wakeup_of_a_removed_id() {
     let b = bench().await;
     let wf = steps();
-    let worker = b.started(collecting(&b, &wf, "1h")).await;
+    let worker = b.started(b.worker(&wf)).await;
     let run = b.sub.start(&wf, K { k: 0 }).id("r").await.unwrap();
     internal::wake(&worker);
     run.result().timeout(LONG).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    internal::wake(&worker);
     quiet(&b.workers).await;
+    b.inner.delete("runs/r").await.unwrap();
     let now = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
     let late = format!(
         "queues/steps/due/{}~r~s0000000001",
         now.format("%Y%m%dt%H%M%S%3fz")
     );
-    b.inner.create(&late, Default::default()).await.unwrap();
+    b.inner
+        .create(&late, Default::default(), None)
+        .await
+        .unwrap();
     let mark = b.workers.mark();
     internal::wake(&worker);
     let w = b.since(mark).await;
-    // § nmpjmw8mf.a@x19a2
-    check_wakeups("a wakeup of a collected id", &w, &[ops(0, 1, 1, 1, 3)]);
+    // § rbvr70kyv.a@8qp7d
+    check_wakeups("a wakeup of a removed id", &w, &[ops(0, 0, 1, 0, 1, 2)]);
     worker.shutdown().await.unwrap();
 }
 
-/// A chain of 3 runs, each continued after a sleep: the first run retired, the second collected
-/// while the chain lives, the last at the chain's end, which collects the first, then the end of
-/// its tombstone.
+/// A chain of 3 runs, each continued after a sleep: every run stays readable by its id, the first
+/// one's archive under `archives/`, the second's under its id, the last one in the chain's head
+/// with a pointer under its id, each written with the retention as its expiry once the chain ends.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_long_lived_chain_collects_its_continued_runs() {
+async fn a_long_lived_chain_keeps_each_run_readable() {
     let b = bench().await;
     let chain = Workflow::new("chain", |c, input: N| async move {
-        c.sleep(Duration::from_millis(600)).await?;
+        c.sleep(Duration::from_millis(300)).await?;
         if input.n > 0 {
             return Err(c.continue_as_new(N { n: input.n - 1 }).await);
         }
         Ok(0u32)
     });
-    let worker = b.started(collecting(&b, &chain, "1s")).await;
+    let worker = b.started(b.worker(&chain)).await;
     let mark = b.workers.mark();
-    b.sub.start(&chain, N { n: 2 }).id("c").await.unwrap();
+    let run = b.sub.start(&chain, N { n: 2 }).id("c").await.unwrap();
     internal::wake(&worker);
-    // Not `result`: the chain is collected 200 ms after it ends, before a poll could see it.
-    // Collection entries set no timer: a scan every 150 ms stands for the idle scans.
-    for _ in 0..30 {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        internal::wake(&worker);
-    }
+    run.result().timeout(LONG).await.unwrap();
     let w = b.since(mark).await;
     for (i, (run, t)) in w.wakeups.iter().enumerate() {
         row(&format!("a chain of 3 runs, wakeup {} ({run})", i + 1), t);
     }
-    // A run's result is written a few ms after its collection's due time is fixed, so a scan
-    // serving the entry as it comes due defers it those few ms.
-    let wakeups: Vec<Tally> = w
-        .wakeups
-        .iter()
-        .map(|(_, t)| *t)
-        .filter(|t| *t != ops(1, 3, 1, 1, 6))
-        .collect();
-    assert_eq!(wakeups.len(), 11, "{w:?}");
-    // The replays of a worker that read a run more than `retention_min / 2` ago, 50 ms here,
-    // read its result and start again before they write: only the collections are counted.
-    let collections = [3, 6, 8, 9, 10].map(|i| wakeups[i]);
-    // § yx9pxz6mr.b@4ttxb
-    let expected = [
-        // The first run retired: the chain's next run read, its index listed; it published
-        // nothing, so no listing of the chain's values.
-        ops(0, 4, 2, 3, 9),
-        // The second run, its predecessor retired and its successor started.
-        ops(0, 5, 1, 7, 13),
-        // The last run: the chain's first run gone, its collection entry created.
-        ops(2, 6, 3, 7, 18),
-        // The first run's delete phase: the chain continued, so its values are listed.
-        ops(1, 2, 2, 4, 9),
-        // The tombstone's end.
-        ops(0, 1, 1, 2, 4),
+    // § a1ys7at7p.c@tg0ry
+    let head = b.current("c").await;
+    let first = b.head(&head.start.clone().unwrap().previous.unwrap()).await;
+    let runs = [
+        first.start.clone().unwrap().previous.unwrap(),
+        first.run,
+        head.run,
     ];
-    if !measuring() {
-        assert_eq!(collections, expected);
+    assert_eq!(runs[0], "c");
+    for id in &runs {
+        let head = b.head(id).await;
+        assert_eq!(&head.run, id);
     }
     let stored = b.stored().await;
-    let kinds: Vec<&str> = stored.keys().map(String::as_str).collect();
-    assert_eq!(kinds, ["probe", "substantial.json"]);
+    for key in b.inner.list("", None, 1000, None).await.unwrap().keys {
+        if key.starts_with("runs/") || key.starts_with("archives/") {
+            assert_eq!(b.workers.expiry(&key), Some(30), "{key}");
+        }
+    }
+    let counts: Vec<(&str, usize)> = stored.iter().map(|(k, (n, _))| (k.as_str(), *n)).collect();
+    assert_eq!(
+        counts,
+        [("archives", 1), ("runs", 3), ("substantial.json", 1)]
+    );
+    // § end a1ys7at7p.c
     worker.shutdown().await.unwrap();
 }
 
@@ -1368,18 +1651,19 @@ async fn fleet(
 }
 
 /// Three workers know a run's timer: each lists its workflow when the timer comes due, one
-/// replays the run, and the two others find its claim live, skip the run and list again.
+/// replays the run, and the two others find its lease live or the run ended, and leave it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_workers_at_a_timer() {
     let b = bench().await;
-    // Longer than it takes to wake the three workers one by one.
+    // Longer than it takes to wake the three workers one by one. The step after it makes the
+    // wakeup lease the run, which the other workers then meet.
     let wf = Workflow::without_input("napper", |c| async move {
         c.sleep(Duration::from_secs(4)).await?;
-        Ok(1u32)
+        c.step("after", || async { Ok::<_, Error>(1u32) }).await
     });
     let script = |sub: &Substantial| sub.worker(&wf).preset(Preset::Script).set("max_idle", "1h");
     let fleet = fleet(&b, 3, script).await;
-    // § qsw5w98x3.a@xdkz6
+    // § qsw5w98x3.a@0rebm
     let run = b.sub.start(&wf, ()).await.unwrap();
     internal::wake(&fleet[0].1);
     quiet(&fleet[0].0).await;
@@ -1393,6 +1677,17 @@ async fn three_workers_at_a_timer() {
     let mut wakeups = Vec::new();
     for (i, ((store, _), mark)) in fleet.iter().zip(marks).enumerate() {
         quiet(store).await;
+        if std::env::var("COSTS_TRACE").is_ok() {
+            for op in store.since(mark) {
+                println!(
+                    "  worker {}: {:?} {} at {:?}",
+                    i + 1,
+                    op.kind,
+                    op.key,
+                    op.started
+                );
+            }
+        }
         let w = worked(&store.since(mark));
         for (run, t) in &w.wakeups {
             row(
@@ -1408,7 +1703,8 @@ async fn three_workers_at_a_timer() {
         );
         wakeups.push(w);
     }
-    let replayed = |w: &Worked| w.wakeups.iter().any(|(_, t)| t.delete > 0);
+    // The replay is the worker whose cas of the lease won, then its end's.
+    let replayed = |w: &Worked| w.wakeups.iter().any(|(_, t)| t.cas == 2);
     assert_eq!(
         wakeups.iter().filter(|w| replayed(w)).count(),
         1,
@@ -1419,26 +1715,30 @@ async fn three_workers_at_a_timer() {
             let [(_, t)] = w.wakeups.as_slice() else {
                 panic!("one wakeup each: {w:?}")
             };
-            // The worker that suspended the run holds its history; another reads its `start`.
-            // A worker that loses lists the run and reads its live claim, or meets it as its own
-            // create answers it exists; it skips the run and, once it let it go, lists again: the
-            // scan at the timer and that one.
+            // The worker that suspended the run holds its head; another reads it. A worker that
+            // loses reads the head, and its cas of the lease may find the winner's: it reads the
+            // head again. A head it reads ended, it redoes the end's last steps, the listing of
+            // the watchers and the delete of the entry; a head under a live lease, it skips the
+            // run and, once it let it go, lists again: the scan at the timer and that one.
             if replayed(w) {
                 assert!(
-                    [ops(4, 0, 2, 2, 8), ops(4, 1, 2, 2, 9)].contains(t),
+                    [ops(0, 2, 0, 1, 1, 4), ops(0, 2, 1, 1, 1, 5)].contains(t),
                     "{w:?}"
                 );
                 assert_eq!(w.scans, 1, "{w:?}");
             } else {
-                // § t452yredf.a@sqzgp
-                let lost = [
-                    ops(0, 2, 1, 0, 3),
-                    ops(1, 1, 1, 0, 3),
-                    ops(0, 1, 1, 0, 2),
-                    ops(1, 0, 1, 0, 2),
-                ];
-                assert!(lost.contains(t), "{w:?}");
-                assert_eq!(w.scans, 2, "{w:?}");
+                // § j1nq6rqpf.a@vr6dq
+                let ended = [ops(0, 1, 2, 1, 1, 5), ops(0, 0, 1, 1, 1, 3)];
+                let leased = [ops(0, 1, 2, 0, 0, 3), ops(0, 0, 1, 0, 0, 1)];
+                assert!(ended.contains(t) || leased.contains(t), "{w:?}");
+                assert_eq!(w.scans, if leased.contains(t) { 2 } else { 1 }, "{w:?}");
+                // § j1nq6rqpf.d@0tb9c
+                // A cas is its own lease's, which found the run leased since its read: dropped
+                // before its attempt, it deleted nothing unless the run had ended.
+                if t.cas == 1 && t.list == 0 {
+                    assert_eq!(t.delete, 0, "{w:?}");
+                }
+                // § end j1nq6rqpf.d
             }
         }
     }
@@ -1447,58 +1747,38 @@ async fn three_workers_at_a_timer() {
     }
 }
 
-/// Three workers serve a workflow whose run ended: its collection entry sets no worker's timer,
-/// the first scan after it is due collects the run, and the scans of the others find nothing.
+/// Three workers serve a workflow whose run ended: its end left no entry, so no worker's timer is
+/// set by it, and the scans after it find nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn three_workers_and_a_collection() {
+async fn three_workers_after_an_end() {
     let b = bench().await;
     let wf = steps();
     let fleet = fleet(&b, 3, |sub| {
-        sub.worker(&wf)
-            .preset(Preset::Script)
-            .set("max_idle", "1h")
-            .hidden("retention_min", "100ms")
-            .set("retention", "3s")
-            .hidden("tombstone", "1h")
-            .hidden("recheck", "1h")
+        sub.worker(&wf).preset(Preset::Script).set("max_idle", "1h")
     })
     .await;
     let run = b.sub.start(&wf, K { k: 0 }).await.unwrap();
     internal::wake(&fleet[0].1);
     run.result().timeout(LONG).await.unwrap();
-    let ended = Instant::now();
-    // Every worker lists the collection entry, not due yet.
     for (store, worker) in &fleet {
         internal::wake(worker);
         quiet(store).await;
     }
     let marks: Vec<usize> = fleet.iter().map(|(store, _)| store.mark()).collect();
-    assert!(
-        ended.elapsed() < Duration::from_millis(2500),
-        "set up within the retention"
-    );
-    tokio::time::sleep(Duration::from_millis(3500).saturating_sub(ended.elapsed())).await;
-    // § qsw5w98x3.b@7cjqc
+    tokio::time::sleep(SLEEP).await;
+    // § qsw5w98x3.d@4vr58
     for (store, mark) in fleet.iter().map(|(store, _)| store).zip(&marks) {
-        assert!(
-            store.since(*mark).is_empty(),
-            "a timer set by a collection entry"
-        );
+        assert!(store.since(*mark).is_empty(), "a timer set by an end");
     }
     for (i, ((store, worker), mark)) in fleet.iter().zip(marks).enumerate() {
         internal::wake(worker);
         quiet(store).await;
         let w = worked(&store.since(mark));
-        let label = format!("3 workers, a collection, worker {}", i + 1);
-        let expected = if i == 0 {
-            vec![ops(2, 3, 1, 5, 11)]
-        } else {
-            Vec::new()
-        };
-        check_wakeups(&label, &w, &expected);
+        let label = format!("3 workers after an end, worker {}", i + 1);
+        check_wakeups(&label, &w, &[]);
         assert_eq!((w.scans, w.scan_lists), (1, 1), "{label}: its scan");
     }
-    // § end qsw5w98x3.b
+    // § end qsw5w98x3.d
     for (_, worker) in fleet {
         worker.shutdown().await.unwrap();
     }
@@ -1543,8 +1823,8 @@ async fn live_runs_history_and_a_retry() {
     }
     let (listed, t) = b.client(b.sub.runs(&waits).try_collect::<Vec<_>>()).await;
     assert_eq!(listed.unwrap().len(), 2);
-    // A page of `due/`, one of `rest/`, the start of each run.
-    check("runs, 2 pending", t, ops(0, 2, 2, 0, 4));
+    // A page of `blocked/`, one of `due/`, one of `rest/`, the start of each run.
+    check("runs, 2 pending", t, ops(0, 0, 2, 3, 0, 5));
 
     let mark = b.workers.mark();
     let worker = b
@@ -1555,7 +1835,7 @@ async fn live_runs_history_and_a_retry() {
     check_wakeups(
         "receive at once, 2 runs",
         &w,
-        &[ops(3, 1, 1, 2, 7), ops(3, 1, 1, 2, 7)],
+        &[ops(1, 1, 1, 0, 1, 4), ops(1, 1, 1, 0, 1, 4)],
     );
     let (listed, t) = b.client(b.sub.runs(&waits).try_collect::<Vec<_>>()).await;
     assert!(
@@ -1564,30 +1844,30 @@ async fn live_runs_history_and_a_retry() {
             .iter()
             .all(|r| r.waiting_on == substantial::WaitingOn::Message)
     );
-    // Runs found by their marker alone: each one's `result`, missing, then its `start`.
-    check("runs, 2 waiting on messages", t, ops(0, 4, 2, 0, 6));
+    // Runs found by their marker alone: each one's head.
+    check("runs, 2 waiting on messages", t, ops(0, 0, 2, 3, 0, 5));
     let p1 = b.sub.run(&waits, "p1");
     let (history, t) = b.client(p1.history()).await;
     assert_eq!(history.unwrap().len(), 0);
-    // The follow of a live run, its listing, its one segment.
-    check("history, 1 segment", t, ops(0, 3, 1, 0, 4));
+    // The head, which holds the run's segments.
+    check("history, 1 segment", t, ops(0, 0, 1, 0, 0, 1));
 
     let run = b.sub.start(&flaky, ()).id("f").await.unwrap();
     internal::wake(&worker);
     assert!(run.result().timeout(LONG).await.is_err());
     let (status, t) = b.client(run.status()).await;
     assert_eq!(status.unwrap(), RunStatus::Failed);
-    // A failed run's `result`, then the chain's index, listed for a retry.
-    check("status, failed", t, ops(0, 1, 1, 0, 2));
+    // The head, which holds the failed end.
+    check("status, failed", t, ops(0, 0, 1, 0, 0, 1));
     quiet(&b.workers).await;
     refuse.store(false, Ordering::SeqCst);
     let mark = b.workers.mark();
-    // § vb6krfmej@48w7a
+    // § vb6krfmej@v4q5g
     let (retried, t) = b.client(run.retry()).await;
     retried.unwrap();
-    // The follow, the failed run's segments and its last, its `start`, the retry's, the chain's
-    // `gone`, its index and due entries.
-    check("retry", t, ops(3, 4, 2, 0, 9));
+    // The head, its cas pending with the failed run's archive, the archive, the retry's pointer and
+    // due entry, the cas that clears the pending.
+    check("retry", t, ops(3, 2, 1, 0, 0, 6));
     internal::wake(&worker);
     assert_eq!(run.result().timeout(LONG).await.unwrap(), 2);
     // § end vb6krfmej
@@ -1595,21 +1875,31 @@ async fn live_runs_history_and_a_retry() {
     let compensated = b.sub.start(&undone, ()).id("u").await.unwrap();
     internal::wake(&worker);
     assert!(compensated.result().timeout(LONG).await.is_err());
-    // § vb6krfmej.a@arvfj
+    // § vb6krfmej.a@bf6tr
     let (refused, t) = b.client(compensated.retry()).await;
     assert!(
         matches!(refused, Err(Error::InvalidArgument(_))),
         "{refused:?}"
     );
-    // The follow of a failed run, its segments and its last, which holds the saga's undo.
-    check("retry, a failure that ran undos", t, ops(0, 2, 2, 0, 4));
+    // The head, whose last segment holds the saga's undo.
+    check("retry, a failure that ran undos", t, ops(0, 0, 1, 0, 0, 1));
     // § end vb6krfmej.a
-    // It reads the failed run, its `start` and 2 segments, and its end creates its first snapshot.
-    check_wakeups("the retry's first wakeup", &w, &[ops(5, 4, 3, 2, 14)]);
+    // It reads the head, which holds the failed run's events; its lease, its end two-phase: the
+    // end's cas pending, the pointer's expiry, the head's.
+    check_wakeups("the retry's first wakeup", &w, &[ops(0, 4, 1, 1, 1, 7)]);
     let (history, t) = b.client(run.history()).await;
     assert_eq!(history.unwrap().len(), 3);
-    // The failed run's `result`, the index, the retry's `result`; its listing and its snapshot.
-    check("history, a retry", t, ops(0, 3, 2, 0, 5));
+    // The head, which holds the retry's resumed events and its own.
+    check("history, a retry", t, ops(0, 0, 1, 0, 0, 1));
+    let (reset, t) = b.client(run.retry().keep(1)).await;
+    reset.unwrap();
+    // The head, as a retry reads it, its cas pending, the reset run's archive written over its
+    // pointer, a cas, the new run's pointer and due entry, the cas that clears the pending.
+    check(
+        "retry, keep: a reset of a completed run",
+        t,
+        ops(2, 3, 1, 0, 0, 6),
+    );
     worker.shutdown().await.unwrap();
 }
 
@@ -1631,20 +1921,20 @@ fn drained(b: &Bench, label: &str, mark: usize, expected: Tally, scans: usize) -
 async fn a_drain() {
     let b = bench().await;
     let wf = steps();
-    // § d0pe2x8ey@fe7d3
+    // § m2284agp0@f6dbg
     let mark = b.workers.mark();
     b.worker(&wf).drain(SLEEP).await.unwrap();
-    // § one d0pe2x8ey.b@9qrw2
+    // § one m2284agp0.b@hser1
     // silcrow:follow
-    drained(&b, "drain, nothing due", mark, ops(0, 0, 1, 0, 1), 1);
+    drained(&b, "drain, nothing due", mark, ops(0, 0, 0, 1, 0, 1), 1);
 
     let run = b.sub.start(&wf, K { k: 1 }).await.unwrap();
     let mark = b.workers.mark();
     b.worker(&wf).drain(SLEEP).await.unwrap();
     assert_eq!(run.result().await.unwrap(), 1);
     let label = "drain, one run of one step due now";
-    let w = drained(&b, label, mark, ops(4, 1, 3, 2, 10), 1);
-    check_wakeups(label, &w, &[ops(4, 1, 2, 2, 9)]);
+    let w = drained(&b, label, mark, ops(0, 2, 1, 2, 1, 6), 1);
+    check_wakeups(label, &w, &[ops(0, 2, 1, 1, 1, 5)]);
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
 
@@ -1658,8 +1948,8 @@ async fn a_drain() {
     b.worker(&napper).drain(SLEEP * 2).await.unwrap();
     assert_eq!(run.result().await.unwrap(), 1);
     let label = "drain, one run whose sleep ends within it";
-    let w = drained(&b, label, mark, ops(7, 1, 5, 4, 17), 2);
-    check_wakeups(label, &w, &[ops(3, 1, 1, 2, 7), ops(4, 0, 2, 2, 8)]);
+    let w = drained(&b, label, mark, ops(1, 3, 1, 3, 2, 10), 2);
+    check_wakeups(label, &w, &[ops(1, 2, 1, 0, 1, 5), ops(0, 1, 0, 1, 1, 3)]);
     b.check_recorded(label, &w, run.chain(), &[run.chain()])
         .await;
 }
@@ -1693,10 +1983,10 @@ async fn a_poll_not_ready() {
     internal::wake(&worker);
     assert_eq!(run.result().timeout(LONG).await.unwrap(), 3);
     let w = b.since(mark).await;
-    // The first wakeup also gets the run's `start` and makes a progress commit; the third poke is
-    // ready and ends the run.
-    let not_ready = ops(3, 0, 1, 2, 6);
-    let expected = [ops(4, 1, 2, 2, 9), not_ready, ops(4, 0, 2, 2, 8)];
+    // The first wakeup also gets the head and makes a progress commit; the third poke is ready and
+    // ends the run.
+    let not_ready = ops(1, 2, 0, 0, 1, 4);
+    let expected = [ops(1, 3, 1, 1, 1, 7), not_ready, ops(0, 2, 0, 1, 1, 4)];
     check_wakeups("poll, 2 pokes not ready, then ready", &w, &expected);
     check(
         "poll, a wakeup of a poke not ready",
@@ -1769,13 +2059,13 @@ async fn a_schedule_fire() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let w = b.since(mark).await;
-    // The claim, three progress commits (a segment and an inbox listing each), the published
-    // value and its effects record, then the suspension's due entry and segment.
-    // § wymbfvjjr@dywfg
+    // The lease, three progress commits (a cas and a listing of the chain's messages each), the
+    // published value in the head, then the suspension's due entry and cas.
+    // § kkcyc97cz@7n4kn
     check_wakeups(
         "schedule, a fire whose body runs a step",
         &w,
-        &[ops(8, 0, 4, 2, 14)],
+        &[ops(1, 5, 0, 3, 1, 10)],
     );
     worker.shutdown().await.unwrap();
 }
@@ -1825,9 +2115,10 @@ async fn watchers_started(
     internal::wake(worker);
 }
 
-/// A watcher registers on a live chain of one run: it reads the chain's `result` and `start`,
-/// creates its key under the run, reads `result` again, and suspends. The run's end then lists
-/// its watchers and tells the one it finds, as a child's end tells its parent.
+/// A watcher registers on a live chain of one run: it reads the chain's head, creates its key
+/// under the chain, reads the head again, and suspends. The chain's end then lists its watchers
+/// and tells the one it finds: a GET of its head, a message, the delete of its key, which the
+/// end's segment does not record, as they come after its last write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_workflow_awaits_a_live_chain() {
     let b = bench().await;
@@ -1838,7 +2129,7 @@ async fn a_workflow_awaits_a_live_chain() {
     watchers_started(&b, &worker, &watcher, "t", &["w"]).await;
     let w = b.since(mark).await;
     let label = "c.result, a live chain: the registration";
-    check_wakeups(label, &w, &[ops(4, 4, 1, 2, 11)]);
+    check_wakeups(label, &w, &[ops(2, 1, 3, 0, 1, 7)]);
     b.check_recorded(label, &w, "w", &["w"]).await;
     let mark = b.workers.mark();
     b.sub.run(&target, "t").send("go", "done").await.unwrap();
@@ -1847,14 +2138,14 @@ async fn a_workflow_awaits_a_live_chain() {
     assert_eq!(result.unwrap(), "done");
     let w = b.since(mark).await;
     let label = "c.result, the watched end tells one watcher, the watcher ends";
-    check_wakeups(label, &w, &[ops(6, 2, 2, 4, 14), ops(4, 1, 2, 4, 11)]);
+    check_wakeups(label, &w, &[ops(1, 1, 2, 1, 3, 8), ops(0, 1, 1, 1, 2, 5)]);
     let all = worked(&b.workers.since(0));
     b.check_recorded(label, &all, "t", &["t"]).await;
     b.check_recorded(label, &all, "w", &["w"]).await;
     worker.shutdown().await.unwrap();
 }
 
-/// A watcher of a chain that ended reads its `result` and ends at once: no key, no message.
+/// A watcher of a chain that ended reads its head and ends at once: no key, no message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_workflow_awaits_an_ended_chain() {
     let b = bench().await;
@@ -1870,7 +2161,7 @@ async fn a_workflow_awaits_an_ended_chain() {
     assert_eq!(result.unwrap(), "done");
     let w = b.since(mark).await;
     let label = "c.result, an ended chain";
-    check_wakeups(label, &w, &[ops(4, 2, 2, 2, 10)]);
+    check_wakeups(label, &w, &[ops(0, 1, 2, 1, 1, 5)]);
     b.check_recorded(label, &w, "w", &["w"]).await;
     worker.shutdown().await.unwrap();
 }
@@ -1893,8 +2184,12 @@ async fn two_workflows_await_one_chain() {
     }
     let w = b.since(mark).await;
     let label = "c.result, the watched end tells two watchers, each ends";
-    let watcher_end = ops(4, 1, 2, 4, 11);
-    check_wakeups(label, &w, &[ops(8, 3, 2, 4, 17), watcher_end, watcher_end]);
+    let watcher_end = ops(0, 1, 1, 1, 2, 5);
+    check_wakeups(
+        label,
+        &w,
+        &[ops(2, 1, 3, 1, 4, 11), watcher_end, watcher_end],
+    );
     let all = worked(&b.workers.since(0));
     b.check_recorded(label, &all, "t", &["t"]).await;
     worker.shutdown().await.unwrap();
@@ -1915,7 +2210,7 @@ async fn a_watched_chain_continues_as_new() {
     internal::wake(&worker);
     let w = b.since(mark).await;
     let label = "c.result, the watched run continues as new, carrying its watcher";
-    check_wakeups(label, &w, &[ops(8, 2, 2, 4, 16), ops(3, 1, 1, 2, 7)]);
+    check_wakeups(label, &w, &[ops(4, 2, 2, 0, 3, 10)]);
     let mark = b.workers.mark();
     b.sub.run(&target, "t").send("go", "second").await.unwrap();
     internal::wake(&worker);
@@ -1923,10 +2218,11 @@ async fn a_watched_chain_continues_as_new() {
     assert_eq!(result.unwrap(), "second");
     let w = b.since(mark).await;
     let label = "c.result, the next run's end tells the carried watcher, the watcher ends";
-    check_wakeups(label, &w, &[ops(6, 2, 2, 4, 14), ops(4, 1, 2, 4, 11)]);
-    let next = w.wakeups[0].0.clone();
-    let all = worked(&b.workers.since(0));
-    b.check_recorded(label, &all, "t", &["t"]).await;
-    b.check_recorded(label, &all, &next, &["t", &next]).await;
+    check_wakeups(label, &w, &[ops(1, 3, 2, 1, 3, 10), ops(0, 1, 1, 1, 2, 5)]);
+    let next = b.current("t").await.run;
+    let ops = b.workers.since(0);
+    let archived = through(&ops, "t", &format!("runs/{next}"));
+    b.check_requests(label, "t", archived).await;
+    b.check_recorded(label, &worked(&ops), &next, &["t"]).await;
     worker.shutdown().await.unwrap();
 }

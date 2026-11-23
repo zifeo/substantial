@@ -13,7 +13,8 @@ message Served {
   repeated uint32 versions = 2;
   // Required.
   optional bool unversioned = 3;
-  // The workflow's own retention; absent, the worker's (settings.retention).
+  // The workflow's own retention; absent, the worker's (settings.retention). A worker on an S3
+  // store checks that the bucket has an expiration rule for every retention it may write (I-26).
   Retention retention = 4;
 }
 
@@ -25,12 +26,15 @@ message AgentConfig {
   string worker = 3;
   repeated Served workflows = 4;
   uint32 concurrency = 5;
+  // A lease's ttl in a chain's head, and the skew a reader allows another worker's lease.
   uint64 claim_ttl_ms = 6;
   uint64 claim_skew_ms = 7;
   uint64 max_idle_ms = 8;
   uint32 due_page = 9;
   uint32 due_pages = 10;
-  uint64 snapshot_every = 11;
+  // Snapshots, before the head held the whole history.
+  reserved 11;
+  reserved "snapshot_every";
   uint32 op_retries = 12;
   // 32 bytes from the host's CSPRNG, from which each replay's seed is derived; any other length
   // is refused.
@@ -40,18 +44,24 @@ message AgentConfig {
   bool store_waits = 15;
   // A waiting listing's wait, 1 to 20 seconds; required on any store, used only on one that waits.
   uint32 wait_seconds = 16;
-  // How long a collected run's id stays taken (7 days in both presets).
-  uint64 tombstone_ms = 17;
-  // The least retention a worker or a workflow may set (1 hour in both presets).
-  uint64 retention_min_ms = 18;
-  // How long a collection that cannot go on yet waits before it checks again (1 day in both presets).
-  uint64 recheck_ms = 19;
+  // Collection, before expiry replaced it.
+  reserved 17, 18, 19;
+  reserved "tombstone_ms", "retention_min_ms", "recheck_ms";
+  // A blocked run is tried again after blocked_initial_ms, the wait multiplied by blocked_multiplier
+  // at each block in a row at the same segment, at most blocked_max_ms. Required: initial positive
+  // and at most max, multiplier at least 1.
+  uint64 blocked_initial_ms = 20;
+  uint64 blocked_max_ms = 21;
+  double blocked_multiplier = 22;
 }
 
 message ReplayEnd {
   oneof end {
     Idle idle = 1;
     Empty dropped = 2;
+    // The code raised an error that is no end, or diverged (Next.blocked): nothing more is
+    // recorded, and the run is blocked with this error, tried again after a backoff.
+    layout.v1.Failure blocked = 3;
   }
 }
 
@@ -84,18 +94,29 @@ message AgentRequest {
     // Serve the entries due by this time, then stop as after shutdown: no idle scan, no waiting
     // listing, no entry due after it taken or waited for (I-18, drain).
     layout.v1.Time drain = 8;
+    // Next.claim of the replay: the agent writes its lease into the chain's head, then answers
+    // AgentCommand.claimed, or stop_replay if the head changed since it read it.
+    string claim = 9;
   }
 }
 
 message AgentCommand {
+  // A store operation. Several may be in flight together, of one run too: the agent sends at once
+  // only operations whose order no crash depends on, so the host performs each as it comes,
+  // concurrently, in any order, and feeds each answer as it lands; it never waits for one before
+  // sending another.
   message Store {
     uint64 id = 1;
     StoreOp op = 2;
   }
   message Replay {
+    // The chain the replay is of, which every request and command about it names (commit,
+    // replay_ended, claim, committed, stop_replay, claimed, skewed); input.run is the chain's current
+    // run, which a continuation replaced in place gives a new Replay of the same chain.
     string run = 1;
     RunInput input = 2;
-    // The earliest due entry the replay serves, absent when it serves none.
+    // The earliest due entry the replay serves, or the earliest send time of the messages it is
+    // handed; absent when it serves none.
     layout.v1.Time due_at = 3;
   }
   message Committed {
@@ -108,6 +129,16 @@ message AgentCommand {
     // After a progress commit won, the chain's cost as the agent now knows it, for
     // RunRequest.arrived.
     layout.v1.Cost cost = 5;
+  }
+  // The worker's clock is behind the time of the run's last segment by more than claim_skew: the
+  // chain is left alone, its wakeups kept, for a worker whose clock is right.
+  message Skewed {
+    // The chain, as every command about a replay names it.
+    string run = 1;
+    layout.v1.Time segment_at = 2;
+    layout.v1.Time now = 3;
+    // The chain's current run, the one the skew hit.
+    string current = 4;
   }
   // A scan listed the due entries of a workflow: how many of those it listed were due.
   message Scanned {
@@ -122,6 +153,9 @@ message AgentCommand {
     layout.v1.Time wait_until = 5;
     Empty stop = 6;
     Scanned scanned = 7;
+    Skewed skewed = 8;
+    // The lease AgentRequest.claim asked for is held: the replay goes on (RunRequest.claimed).
+    string claimed = 9;
   }
 }
 

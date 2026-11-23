@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{LONG, eventually, namespaces, script};
+use common::{LONG, blocked, eventually, namespaces, script};
 use substantial::__internal as internal;
 use substantial::{Context, Error, Result, Retry, RunStatus, Workflow, seconds};
 
@@ -24,6 +24,7 @@ fn example() -> Workflow<f64> {
             initial: seconds(1),
             max: seconds(60),
             multiplier: 2.0,
+            deadline: None,
         };
         let res: f64 = c
             .step("roulette", || async { Ok::<_, Error>(100.0) })
@@ -110,7 +111,7 @@ async fn a_waiting_run_is_cancelled() {
             run.status().await.unwrap() == RunStatus::Suspended
         })
         .await;
-        // § vmk2ydwta@qtemj
+        // § vmk2ydwta@pk21p
         run.cancel("not needed").await.unwrap();
         match run.result().timeout(LONG).await {
             Err(Error::RunFailed {
@@ -133,7 +134,8 @@ async fn unknown_chains_are_not_found() {
     for ns in namespaces() {
         let sub = internal::create(ns.store).await.unwrap();
         let run = sub.run(waiting(), "nobody");
-        let not_found = |r: &Result<_>| matches!(r, Err(Error::RunNotFound { chain, collected: false, .. }) if chain == "nobody");
+        let not_found =
+            |r: &Result<_>| matches!(r, Err(Error::RunNotFound { chain }) if chain == "nobody");
         assert!(not_found(&run.send("by", 1).await), "{}", ns.name);
         assert!(not_found(&run.cancel("x").await));
         assert!(not_found(&run.status().await.map(drop)));
@@ -234,7 +236,7 @@ async fn starts_are_idempotent_by_id() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_message_no_handler_can_decode_fails_the_run() {
+async fn a_message_no_handler_can_decode_blocks_the_run() {
     let typed = Workflow::without_input("typed", |c| async move {
         let seen = Arc::new(Mutex::new(Vec::<u32>::new()));
         let s = seen.clone();
@@ -249,22 +251,14 @@ async fn a_message_no_handler_can_decode_fails_the_run() {
         let run = sub.start(&typed, ()).await.unwrap();
         run.send("n", 1).await.unwrap();
         run.send("n", "not a number").await.unwrap();
-        match run.result().timeout(LONG).await {
-            Err(Error::RunFailed {
-                status: RunStatus::Failed,
-                error,
-                ..
-            }) => {
-                assert_eq!(error.kind, "MessageDecode", "{}: {error}", ns.name);
-            }
-            other => panic!("{}: {other:?}", ns.name),
-        }
+        let error = blocked(&sub, &typed, run.chain()).await;
+        assert_eq!(error.kind, "MessageDecode", "{}: {error}", ns.name);
         worker.shutdown().await.unwrap();
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_handler_that_panics_fails_the_run() {
+async fn a_handler_that_panics_blocks_the_run() {
     let refusing = Workflow::without_input("refusing", |c| async move {
         c.handle("n", |n: u32| assert!(n < 10, "{n} is too large"))?;
         c.receive::<()>("never").await
@@ -274,21 +268,13 @@ async fn a_handler_that_panics_fails_the_run() {
         let worker = script(&sub, &refusing).start().unwrap();
         let run = sub.start(&refusing, ()).await.unwrap();
         run.send("n", 99).await.unwrap();
-        match run.result().timeout(LONG).await {
-            Err(Error::RunFailed {
-                status: RunStatus::Failed,
-                error,
-                ..
-            }) => {
-                assert_eq!(error.kind, "MessageDecode", "{}: {error}", ns.name);
-                assert!(
-                    error.message.contains("99 is too large"),
-                    "{}: {error}",
-                    ns.name
-                );
-            }
-            other => panic!("{}: {other:?}", ns.name),
-        }
+        let error = blocked(&sub, &refusing, run.chain()).await;
+        assert_eq!(error.kind, "MessageDecode", "{}: {error}", ns.name);
+        assert!(
+            error.message.contains("99 is too large"),
+            "{}: {error}",
+            ns.name
+        );
         worker.shutdown().await.unwrap();
     }
 }
@@ -352,12 +338,8 @@ async fn a_value_json_cannot_hold_is_refused_never_written_as_another() {
                 "{}: {sent:?}",
                 ns.name
             );
-            match run.result().timeout(LONG).await {
-                Err(Error::RunFailed { error, .. }) => {
-                    assert_eq!(error.kind, "Json", "{}: {x:?}: {error}", ns.name);
-                }
-                other => panic!("{}: {x:?}: {other:?}", ns.name),
-            }
+            let error = blocked(&sub, &holding, run.chain()).await;
+            assert_eq!(error.kind, "Json", "{}: {x:?}: {error}", ns.name);
         }
         worker.shutdown().await.unwrap();
     }
@@ -425,7 +407,7 @@ async fn ids_of_a_hundred_bytes_work_end_to_end() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_step_name_outside_the_rules_fails_the_run() {
+async fn a_step_name_outside_the_rules_blocks_the_run() {
     let bad = Workflow::without_input("bad-step", |c| async move {
         c.step("a step", || async { Ok::<_, Error>(1) }).await
     });
@@ -433,20 +415,12 @@ async fn a_step_name_outside_the_rules_fails_the_run() {
     let sub = internal::create(ns.store).await.unwrap();
     let worker = script(&sub, &bad).start().unwrap();
     let run = sub.start(&bad, ()).await.unwrap();
-    match run.result().timeout(LONG).await {
-        Err(Error::RunFailed {
-            status: RunStatus::Failed,
-            error,
-            ..
-        }) => {
-            assert_eq!(error.kind, "InvalidArgument", "{error}");
-            assert!(
-                error.message.contains("must match [A-Za-z0-9._-]{1,128}"),
-                "{error}"
-            );
-        }
-        other => panic!("{other:?}"),
-    }
+    let error = blocked(&sub, &bad, run.chain()).await;
+    assert_eq!(error.kind, "InvalidArgument", "{error}");
+    assert!(
+        error.message.contains("must match [A-Za-z0-9._-]{1,128}"),
+        "{error}"
+    );
     worker.shutdown().await.unwrap();
 }
 
@@ -495,7 +469,7 @@ async fn a_cancel_reaches_a_run_looping_on_steps() {
         let worker = script(&sub, w.clone()).start().unwrap();
         let run = sub.start(&w, ()).await.unwrap();
         eventually("a few steps", async || ticks.load(Ordering::Relaxed) > 2).await;
-        // § vmk2ydwta.a@sy3q2
+        // § vmk2ydwta.a@e839d
         run.cancel("stop looping").await.unwrap();
         match run.result().timeout(LONG).await {
             Err(Error::RunFailed {
@@ -509,7 +483,7 @@ async fn a_cancel_reaches_a_run_looping_on_steps() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_duration_past_the_longest_fails_its_run_and_the_worker_goes_on() {
+async fn a_duration_past_the_longest_blocks_its_run_and_the_worker_goes_on() {
     for ns in namespaces() {
         let sub = internal::create(ns.store).await.unwrap();
         // Past the longest by one, which no input could carry: it is past 2^53 - 1 as well.
@@ -523,20 +497,18 @@ async fn a_duration_past_the_longest_fails_its_run_and_the_worker_goes_on() {
             c.sleep(Duration::MAX).await
         });
         let worker = script(&sub, (wf.clone(), max.clone())).start().unwrap();
-        // § b60bm4szk@b5hxq
+        let max_wf = max.clone();
+        // § b60bm4szk@sdxc7
         let long = sub
             .start(&wf, Sleep { long: true })
             .id("long")
             .await
             .unwrap();
         let max = sub.start(&max, ()).id("max").await.unwrap();
-        for ended in [
-            long.result().timeout(LONG).await.map(drop),
-            max.result().timeout(LONG).await,
+        for error in [
+            blocked(&sub, &wf, long.chain()).await,
+            blocked(&sub, &max_wf, max.chain()).await,
         ] {
-            let Err(Error::RunFailed { error, .. }) = ended else {
-                panic!("{}: a sleep past the longest ended {ended:?}", ns.name);
-            };
             assert_eq!(error.kind, "InvalidArgument", "{}: {error:?}", ns.name);
         }
         // § end b60bm4szk

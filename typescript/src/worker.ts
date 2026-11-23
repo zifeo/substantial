@@ -7,7 +7,7 @@ import { type Prices, pricesProto } from "./cost.ts";
 import { Duration } from "./durations.ts";
 import { ConfigError, CoreError, InvalidArgument, onlyOptions, ProtocolError } from "./errors.ts";
 import { AgentMachine } from "./machines.ts";
-import { type Metering, ObserverRaised, Scan } from "./observe.ts";
+import { type Metering, ObserverRaised, Scan, Skewed } from "./observe.ts";
 import { agent, type boundary, run, time } from "./proto.ts";
 import type { ReplayEvent } from "./replay.ts";
 import { Replays } from "./replays.ts";
@@ -72,7 +72,6 @@ export function agentConfig(
     maxIdleMs: BigInt(s.maxIdle.ms),
     duePage: s.duePage,
     duePages: s.duePages,
-    snapshotEvery: BigInt(s.snapshotEvery),
     opRetries: OP_RETRIES,
     seed: seed ?? randomSeed(),
     settings: {
@@ -82,17 +81,22 @@ export function agentConfig(
       dedupWindowMs: BigInt(s.dedupWindow.ms),
       retention: retentionOf(s.retention),
       ...(prices === undefined ? {} : { prices: pricesProto(prices) }),
+      maxHistoryBytes: BigInt(s.maxHistoryBytes),
+      maxHistoryEvents: BigInt(s.maxHistoryEvents),
+      maxReplayInbox: BigInt(s.maxReplayInbox),
+      maxSeen: BigInt(s.maxSeen),
+      historyWarnPercent: s.historyWarnPercent,
     },
+    blockedInitialMs: BigInt(s.blockedInitial.ms),
+    blockedMaxMs: BigInt(s.blockedMax.ms),
+    blockedMultiplier: s.blockedMultiplier,
     storeWaits,
     waitSeconds: s.wait.ms / 1000,
-    tombstoneMs: BigInt(s.tombstone.ms),
-    retentionMinMs: BigInt(s.retentionMin.ms),
-    recheckMs: BigInt(s.recheck.ms),
   });
 }
 
-function retentionOf(r: Duration): run.Retention {
-  return create(run.RetentionSchema, { ms: BigInt(r.ms) });
+function retentionOf(days: number): run.Retention {
+  return create(run.RetentionSchema, { days });
 }
 
 function hex(bytes: Uint8Array): string {
@@ -334,6 +338,13 @@ export class Worker {
     let grace = 0;
     let graceEnds: number | undefined;
     try {
+      // § cfdckf61n.c@a7g91
+      // Before it serves anything: a run written with a retention no rule expires would never be
+      // removed. A `create` or `open` a crash stops halfway leaves its probe keys, `probe/<id>/`,
+      // which only their expiry of 1 day removes.
+      const retentions = this.#workflows.served().flatMap(({ retention: r }) => r ?? []);
+      await store.checkExpiry([...retentions, this.#settings.retention, 1]);
+      // § end cfdckf61n.c
       for (let command = first; ; command = machine.next(time(clock.now()))) {
         const c = command.command;
         switch (c.case) {
@@ -357,9 +368,28 @@ export class Worker {
           case "committed":
             replays.committed(c.value);
             break;
+          case "claimed":
+            replays.claimed(c.value);
+            break;
           case "scanned":
             this.#metering.tell(new Scan(c.value.workflow, c.value.due));
             break;
+          case "skewed": {
+            const { run: left, current, segmentAt, now } = c.value;
+            if (segmentAt === undefined || now === undefined) {
+              throw new ProtocolError(`skewed ${left} without its times`);
+            }
+            const [at, clockNow] = [new Date(Number(segmentAt.ms)), new Date(Number(now.ms))];
+            console.error(
+              `substantial: run ${current} of chain ${left} left alone: this worker's clock, ` +
+                `${clockNow.toISOString()}, is behind its last segment, ${at.toISOString()}, ` +
+                "by more than claim_skew",
+            );
+            // The agent released the run already: telling is all there is to do.
+            // § yp7fv5sa7.c@c5q39
+            this.#metering.tell(new Skewed(left, current, at, clockNow));
+            break;
+          }
           case "stopReplay":
             replays.stop(c.value);
             break;
@@ -373,7 +403,7 @@ export class Worker {
             const event = events.take();
             if (event === undefined) {
               if (graceEnds !== undefined && pastGrace && clock.elapsed() >= graceEnds) {
-                // § dh7y75pvn.b@jwtvp
+                // § dh7y75pvn.b@4w440
                 replays.stopAll();
                 graceEnds = clock.elapsed() + grace;
               }
@@ -384,11 +414,14 @@ export class Worker {
                 machine.feed(event.id, event.result);
                 break;
               case "commit":
-                machine.commit(event.run, event.commit);
+                machine.commit(event.chain, event.commit);
+                break;
+              case "claim":
+                machine.claim(event.chain);
                 break;
               case "ended":
-                replays.running.delete(event.run);
-                machine.replayEnded(event.run, event.end);
+                replays.running.delete(event.chain);
+                machine.replayEnded(event.chain, event.end);
                 break;
               case "wake":
                 this.#wakePending = false;
@@ -404,7 +437,7 @@ export class Worker {
                 break;
               case "shutdown":
                 if (graceEnds === undefined) {
-                  // § dh7y75pvn@84cmw
+                  // § dh7y75pvn@csdhq
                   grace = event.graceMs ?? this.#settings.shutdownGrace.ms;
                   graceEnds = clock.elapsed() + grace;
                   machine.shutdown();

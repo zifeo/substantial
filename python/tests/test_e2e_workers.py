@@ -174,7 +174,7 @@ async def test_two_workers_racing_for_a_commit(store: Store) -> None:
                 thawed.set()
 
             async def lost() -> bool:
-                return any("/log/" in k and c == "exists" for k, c in slow.created)
+                return any(k.startswith("runs/") and c == "mismatch" for k, c in slow.cased)
 
             await eventually("the frozen commit", lost)
 

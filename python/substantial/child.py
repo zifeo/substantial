@@ -54,7 +54,7 @@ def effective_budget(
     budget: Mapping[str, int] | None, workflow: Workflow[..., Any]
 ) -> layout.Budget | None:
     """The start's own budget, else its workflow's, else none."""
-    # § evdz71nzb.a@jscav
+    # § evdz71nzb.a@yhr1r
     if budget is not None:
         return budget_proto(budget)
     if workflow.budget is not None:
@@ -141,11 +141,12 @@ def start[R](
     input: dict[str, Any] | None,
     id: str | None,
     budget: Mapping[str, int] | None,
+    abandon: bool,
 ) -> asyncio.Future[Child[R]]:
     if not isinstance(workflow, Workflow):
-        # § bxb0ygj7m@b4v9m
+        # § bxb0ygj7m@cn660
         raise InvalidArgument(f"start takes a workflow, not {workflow!r}")
-    # § aaev3rs1q.b@6w1wb
+    # § aaev3rs1q.b@fjn4v
     data = run.Call.Start(
         workflow=workflow.name,
         input=json_value(input_object(input)),
@@ -156,5 +157,8 @@ def start[R](
         data.version = workflow.version
     if id is not None:
         data.id = check_key("run id", id)
+    if not isinstance(abandon, bool):
+        raise InvalidArgument(f"abandon is a bool, not {abandon!r}")
+    data.abandon = abandon
     child: Child[R] = Child(shared, shared.expect(run.Call(start=data), "run"))
     return done(shared, child)

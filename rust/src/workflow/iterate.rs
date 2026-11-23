@@ -1,8 +1,9 @@
 //! Loops and compression (I-12): in Rust, what the loop needs is in its state.
 
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::ops::ControlFlow;
 
+use futures::future::BoxFuture;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -15,19 +16,19 @@ impl Context {
     /// Runs `body` from `init`, or from the state a previous run of the chain carried, until it
     /// breaks with the last state. At each boundary past the threshold, the run continues as new
     /// with the chain's input and the state; the error it returns ends the run, so propagate it.
-    pub async fn iterate<S, F, Fut>(&self, init: S, mut body: F) -> Result<S>
+    /// `.upgrade()` also continues at a boundary once the worker serves a higher version of the
+    /// workflow than the run's, into the highest one.
+    pub fn iterate<S, F, Fut>(&self, init: S, body: F) -> Iterate<'_, S, F>
     where
         S: Serialize + DeserializeOwned,
         F: FnMut(Context, S) -> Fut,
         Fut: Future<Output = Result<ControlFlow<S, S>>>,
     {
-        let mut state = self.iteration(init)?;
-        loop {
-            state = match body(self.clone(), state).await? {
-                ControlFlow::Break(last) => return Ok(last),
-                ControlFlow::Continue(next) => next,
-            };
-            self.boundary(&state)?;
+        Iterate {
+            c: self,
+            init,
+            body,
+            upgrade: false,
         }
     }
 
@@ -40,31 +41,34 @@ impl Context {
         }
     }
 
-    /// A loop's boundary: past the threshold, the error that continues the run as new with the
-    /// chain's input and `state`.
-    pub(super) fn boundary<S: Serialize>(&self, state: &S) -> Result<()> {
-        // § hy3f1z5jj@wd05c
-        if self.past_threshold()? {
-            // § hy3f1z5jj.b@dfh56
+    /// A loop's boundary: past the threshold, or with `upgrade` once the worker serves a higher
+    /// version, the error that continues the run as new with the chain's input and `state`.
+    pub(super) fn boundary<S: Serialize>(&self, state: &S, upgrade: bool) -> Result<()> {
+        // § hy3f1z5jj@jg53p
+        if self.past_threshold(upgrade)? {
+            // § hy3f1z5jj.b@96z2c
             return Err(Error::ContinuedAsNew(Continuation {
                 workflow: None,
                 version: None,
                 input: self.shared.input(),
-                // § hy3f1z5jj.a@wprrk
+                // § hy3f1z5jj.c@sf3c0
                 state: Some(super::to_json(state).map_err(|e| {
                     Error::NotCompressible(format!(
                         "the state of iterate does not serialize to JSON: {e}"
                     ))
                 })?),
-                // § end hy3f1z5jj.a
+                // § end hy3f1z5jj.c
+                highest: upgrade,
             }));
         }
         Ok(())
     }
 
-    /// Whether the history passed the worker's `continue_as_new_after`.
-    fn past_threshold(&self) -> Result<bool> {
-        match self.shared.call(Call::ShouldContinueAsNew(b::Empty {}))? {
+    /// Whether the history passed the worker's `continue_as_new_after`, or with `upgrade` the
+    /// worker serves a higher version of the workflow than the run's.
+    fn past_threshold(&self, upgrade: bool) -> Result<bool> {
+        let call = Call::ShouldContinueAsNew(b::call::ShouldContinue { highest: upgrade });
+        match self.shared.call(call)? {
             Called::Value(v) => decode(Some(v)),
             other => Err(Error::Protocol(format!(
                 "should_continue_as_new answered {other:?}"
@@ -93,13 +97,61 @@ impl Context {
 fn continuation(workflow: Option<String>, version: Option<u32>, input: impl Serialize) -> Error {
     // § aaev3rs1q.b@0as6p
     match input_object(input) {
-        // § one gjnefe4w6@nzjpz
+        // § one gjnefe4w6@a90rc
         Ok(input) => Error::ContinuedAsNew(Continuation {
             workflow,
             version,
             input,
             state: None,
+            highest: false,
         }),
         Err(e) => e,
+    }
+}
+
+/// A loop of `Context::iterate`, run when awaited.
+#[must_use = "a loop does nothing until awaited"]
+pub struct Iterate<'a, S, F> {
+    c: &'a Context,
+    init: S,
+    body: F,
+    upgrade: bool,
+}
+
+impl<S, F> Iterate<'_, S, F> {
+    /// Continues at a boundary into the highest version of the workflow the worker serves, once
+    /// it is higher than the run's.
+    pub fn upgrade(mut self) -> Self {
+        self.upgrade = true;
+        self
+    }
+}
+
+impl<'a, S, F, Fut> IntoFuture for Iterate<'a, S, F>
+where
+    S: Serialize + DeserializeOwned + Send + 'a,
+    F: FnMut(Context, S) -> Fut + Send + 'a,
+    Fut: Future<Output = Result<ControlFlow<S, S>>> + Send + 'a,
+{
+    type Output = Result<S>;
+    type IntoFuture = BoxFuture<'a, Result<S>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let Iterate {
+            c,
+            init,
+            mut body,
+            upgrade,
+        } = self;
+        Box::pin(async move {
+            let mut state = c.iteration(init)?;
+            loop {
+                state = match body(c.clone(), state).await? {
+                    ControlFlow::Break(last) => return Ok(last),
+                    ControlFlow::Continue(next) => next,
+                };
+                c.boundary(&state, upgrade)?;
+            }
+        })
     }
 }

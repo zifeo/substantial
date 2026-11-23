@@ -32,15 +32,15 @@ function handler<T>(fn: (value: T) => unknown, decode?: (value: unknown) => T): 
   }
   return (m) => {
     let returned: unknown;
-    // § aeby9bgqd.a@amkyc
+    // § aeby9bgqd.d@4bnxa
     try {
       const json = decodeValue(m.value);
       returned = fn(decode === undefined ? (json as T) : decode(json));
     } catch (e) {
       throw decodeFailure(m, `${typeName(e)}: ${messageOf(e)}`);
     }
-    // § end aeby9bgqd.a
-    // § one aeby9bgqd.c@10yna
+    // § end aeby9bgqd.d
+    // § one aeby9bgqd.e@e7v1m
     if (isThenable(returned)) throw decodeFailure(m, "a handler returned a promise");
   };
 }

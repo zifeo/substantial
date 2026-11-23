@@ -1,6 +1,6 @@
 {
   "name": "substantial",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Brokerless durable execution: the TypeScript host of the Substantial core",
   "license": "MPL-2.0",
   "repository": {
@@ -23,13 +23,14 @@
     "wasm/substantial.wasm",
     "wasm/SHA256SUMS",
     "redis/create.lua",
+    "redis/cas.lua",
     "redis/delete.lua"
   ],
   "scripts": {
     "build": "tsc -p typescript/tsconfig.build.json",
     "check": "tsc --noEmit && biome check",
     "format": "biome check --write",
-    "gen": "buf generate --template typescript/buf.gen.yaml && node -e \"const fs = require('node:fs'); for (const f of fs.globSync('typescript/src/gen/**/*.ts')) fs.writeFileSync(f, fs.readFileSync(f, 'utf8').trimEnd() + '\\n')\"",
+    "gen": "buf generate --template typescript/buf.gen.yaml && node -e \"const fs = require('node:fs'); for (const f of fs.globSync('typescript/src/gen/**/*.ts')) fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^\\/\\/ § .*\\n/gm, '').trimEnd() + '\\n')\"",
     "prepack": "npm run build",
     "test": "node --test --test-concurrency=4 --test-timeout=120000 \"typescript/test/*.test.ts\" && node --test --test-concurrency=1 --test-timeout=300000 \"typescript/test/serial/*.test.ts\""
   },
